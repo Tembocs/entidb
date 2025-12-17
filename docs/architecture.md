@@ -1,34 +1,30 @@
 # EntiDB Architecture (Rust Core with Dart + Python Bindings)
 
-**Status:** Authoritative, implementation‑grade specification intended to constrain agent behavior.
+**Status:** Authoritative, implementation-grade specification intended to constrain agent behavior.
 
-This document is a redesign of the current EntiDB architecture (Dart monorepo with `entidb`, `entidb_sync_protocol`, `entidb_sync_client`, `entidb_sync_server`) into a **Rust-first core** with **required Dart and Python bindings**, while preserving core principles from the existing repository: entity-first, local-first, CBOR-native, offline-first sync, WAL-based durability, and “EntiDB everywhere.” ([github.com](https://github.com/Tembocs/entidb/raw/main/README.md))
+This document defines EntiDB from a **fresh, clean slate**. It is not a migration guide and must not be implemented by copying legacy structures or assumptions from prior implementations. The purpose is to define **what shall be built** and the **constraints that prevent drift**.
+
+EntiDB is a **custom embedded entity database engine** with:
+
+* A **Rust core** that implements storage, durability, transactions, indexing, change feed, and sync primitives.
+* **Mandatory Dart and Python bindings** that expose identical semantics.
+* **No query language** of any kind: **no SQL**, **no SQL-like APIs**, **no DSL**.
+* **No dependency on any other database engine** for persistence.
+* **Web support** through a storage-backend abstraction where the browser provides only a byte store.
 
 ---
 
-## Table of contents
+## 0. Normative language and interpretation
 
-1. Introduction
-2. Goals and non-goals
-3. Issues we are explicitly avoiding
-4. System overview
-5. Core concepts and invariants
-6. Monorepo organization (detailed)
-7. EntiDB core engine (Rust) — subsystems and responsibilities
-8. Storage backend abstraction (native + web)
-9. Transaction system (ACID) and WAL
-10. Data model: entities, collections, codecs
-11. Indexing and access paths (without query languages)
-12. Querying model: language-native iteration (no SQL, no DSL)
-13. Change feed and oplog: physical vs logical
-14. Synchronization layer
-15. Sync protocol specification (CBOR)
-16. Sync server architecture
-17. Bindings: Dart and Python (must-have)
-18. Integration points (apps, tooling, CLI)
-19. Security model (encryption, auth, integrity)
-20. Implementation sequence (no timeline; ordered build plan)
-21. Appendix A — Five additional specs to lock down
+This document uses **normative requirements**. Unless explicitly stated otherwise:
+
+* **MUST / SHALL** denote mandatory, non-negotiable requirements.
+* **MUST NOT / SHALL NOT** denote prohibited behavior.
+* **MAY** denotes optional behavior.
+
+Any descriptive or narrative language elsewhere in this document is to be interpreted as **normative**. If a component, unit, or behavior is described, it **MUST** be implemented exactly as described.
+
+Any legacy knowledge, prior repositories, or historical implementations **MUST NOT** be used as an implementation reference. This document is the **sole source of architectural truth**.
 
 ---
 
@@ -37,20 +33,6 @@ This document is a redesign of the current EntiDB architecture (Dart monorepo wi
 ### 1.1 What EntiDB is
 
 EntiDB is an **embedded, entity-based document database** that stores domain objects (entities) directly. The developer defines entity types and uses a typed, language-native API for persistence and retrieval.
-
-The current repository defines EntiDB as a unified monorepo containing a core embedded DB plus optional offline-first sync components and a CBOR protocol. ([github.com](https://github.com/Tembocs/entidb/raw/main/README.md))
-
-### 1.2 Architecture shift: Dart-first → Rust-first
-
-We will implement:
-
-* **Rust core engine**: authoritative storage, durability, indexing, transactions, WAL, change feed.
-* **Dart binding**: primary consumer for Flutter/Dart apps.
-* **Python binding**: first-class consumer for tooling, CLIs, server integrations, data workflows.
-
-The goal is to preserve the “single engine everywhere” principle from the Dart architecture while making performance, determinism, and multi-language embedding first-class. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
-
----
 
 ## 2. Goals and non-goals
 
@@ -119,8 +101,6 @@ Optional sync:
 └──────────────────────────────┘         pull then push         └──────────────────────────────┘
 ```
 
-This preserves the existing split between physical WAL and logical sync oplog, and pull-then-push synchronization. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
-
 ---
 
 ## 5. Core concepts and invariants
@@ -148,11 +128,11 @@ A **Collection<T>** is a typed container of entities of type `T`.
 * **WAL**: physical log for atomicity + crash recovery.
 * **Sync Oplog**: derived logical replication stream based on committed operations.
 
-This distinction is explicit in current documentation and remains. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+This distinction is explicit in current documentation and remains.
 
 ### 5.4 “Single engine everywhere”
 
-Server persistence uses the **same EntiDB core** as clients; the sync server is not backed by an external DB. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+Server persistence uses the **same EntiDB core** as clients; the sync server is not backed by an external DB.
 
 ---
 
@@ -206,7 +186,7 @@ entidb/
 
 * `entidb_core` depends only on `entidb_codec` and `entidb_storage` and standard Rust crates.
 * `entidb_storage` must not depend on `entidb_core` (no cycles).
-* `entidb_sync_protocol` is pure types + codecs (no networking, no file I/O), mirroring current repo intent. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+* `entidb_sync_protocol` is pure types + codecs (no networking, no file I/O), mirroring current repo intent.
 * Bindings depend on `entidb_core` via stable C-ABI boundary.
 
 ### 6.3 C-ABI boundary crate
@@ -223,7 +203,7 @@ This isolates FFI concerns from core.
 
 ## 7. EntiDB core engine (Rust) — subsystems and responsibilities
 
-The current Dart architecture describes modules such as collection/query/transaction/index/encryption/migrations/backup/WAL/pager. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+The current Dart architecture describes modules such as collection/query/transaction/index/encryption/migrations/backup/WAL/pager.
 
 We retain the *capabilities* while re-structuring to avoid query DSLs.
 
@@ -331,7 +311,7 @@ A lowest-level, database-agnostic byte storage interface.
 
 ## 9. Transaction system (ACID) and WAL
 
-The existing implementation emphasizes WAL and configurable isolation. ([github.com](https://github.com/Tembocs/entidb/raw/main/packages/entidb/README.md))
+The existing implementation emphasizes WAL and configurable isolation.
 
 ### 9.1 Transaction goals
 
@@ -391,7 +371,7 @@ Bindings implement their side’s mapping; core stores bytes.
 
 ## 11. Indexing and access paths (without query languages)
 
-The current docs mention BTree, Hash, and Full-Text indexes. ([github.com](https://github.com/Tembocs/entidb/raw/main/packages/entidb/README.md))
+The current docs mention BTree, Hash, and Full-Text indexes.
 
 We keep these, but indexes are not “queried via DSL.” They are internal access paths.
 
@@ -496,18 +476,16 @@ To avoid accidental full scans:
 
 ## 14. Synchronization layer
 
-This preserves the existing design:
-
 * pull-then-push
 * explicit configuration
 * server authority
-* conflict policies ([github.com](https://github.com/Tembocs/entidb/raw/main/README.md))
+* conflict policies
 
 ### 14.1 Sync engine responsibilities
 
 **Unit:** `SyncEngine`
 
-* Maintains state machine: `idle → connecting → pulling → pushing → synced → idle` with error retry. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+* Maintains state machine: `idle → connecting → pulling → pushing → synced → idle` with error retry.
 * Persists:
 
   * device id
@@ -539,11 +517,11 @@ Protocol properties are retained:
 * Transport: HTTPS
 * Encoding: canonical CBOR
 * Direction: outbound client initiated
-* Identity: dbId, deviceId, opId, serverCursor ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+* Identity: dbId, deviceId, opId, serverCursor
 
 ### 15.1 Operation payload
 
-A `SyncOperation` carries entity payload as raw EntiDB CBOR bytes. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+A `SyncOperation` carries entity payload as raw EntiDB CBOR bytes.
 
 ---
 
@@ -556,7 +534,7 @@ A `SyncOperation` carries entity payload as raw EntiDB CBOR bytes. ([github.com]
 * Pull endpoint: return ops since cursor.
 * Push endpoint: accept ops, detect conflicts, commit transactionally.
 
-**Invariant:** Server persists data using EntiDB core, not an external database. ([github.com](https://github.com/Tembocs/entidb/raw/main/doc/architecture.md))
+**Invariant:** Server persists data using EntiDB core, not an external database.
 
 ---
 
@@ -608,7 +586,7 @@ A `SyncOperation` carries entity payload as raw EntiDB CBOR bytes. ([github.com]
 
 ## 19. Security model (encryption, auth, integrity)
 
-The current repo includes optional encryption (AES-GCM) and auth concerns for server. ([github.com](https://github.com/Tembocs/entidb/raw/main/packages/entidb/README.md))
+The current repo includes optional encryption (AES-GCM) and auth concerns for server.
 
 ### 19.1 Encryption at rest
 

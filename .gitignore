@@ -1,0 +1,131 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# Rust build artifacts
+/crates/*/target/
+*.rlib
+*.so
+*.dylib
+*.dll
+
+# WAL and database files (test artifacts)
+*.wal
+*.db
+*.entidb
+
+# Dart / Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+bindings/dart/*/build/
+bindings/dart/*/.dart_tool/
+bindings/dart/*/.packages
+*.dart.js
+*.js_
+*.js.deps
+*.js.map
+*.info.json
+pubspec.lock
+
+# Flutter/Dart native builds
+*.snapshot
+*.so
+*.dylib
+*.dll
+*.framework/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+bindings/python/*/build/
+bindings/python/*/dist/
+bindings/python/*/*.egg-info/
+
+# PyO3 / Maturin artifacts
+target/wheels/
+
+# WASM
+web/entidb_wasm/pkg/
+*.wasm
+*.wasm.map
+
+# IDEs
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+*.sublime-project
+.DS_Store
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Test artifacts
+/test_db/
+/test_data/
+*.test.db
+*.test.entidb
+
+# Coverage
+tarpaulin-report.html
+cobertura.xml
+*.profraw
+*.profdata
+
+# Documentation build
+/docs/build/
+/docs/_build/
+site/
+
+# CLI artifacts
+/tmp/
+*.log
+
+# Benchmarks
+/benches/results/
+*.criterion/
