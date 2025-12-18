@@ -1,0 +1,63 @@
+[package]
+name = "entidb_wasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "EntiDB WebAssembly bindings with OPFS and IndexedDB storage backends"
+repository = "https://github.com/Tembocs/entidb"
+authors = ["Tembocs"]
+
+# This crate is not part of the main workspace due to WASM-specific dependencies
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+# Enable console_error_panic_hook for better error messages in browser
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+[dependencies]
+# Internal crates
+entidb_storage = { path = "../../crates/entidb_storage" }
+entidb_codec = { path = "../../crates/entidb_codec" }
+entidb_core = { path = "../../crates/entidb_core" }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+# JS interop
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Navigator",
+    "StorageManager",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+]}
+
+# Error handling
+thiserror = "1.0"
+
+# Async channel for IndexedDB callbacks
+futures-channel = "0.3"
+
+# Panic hook for better error messages
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# Serialization for JS interop
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+
+# UUID with JS feature for WASM random number generation
+uuid = { version = "1.6", features = ["v4", "js"] }
+
+# getrandom with js feature for WASM
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

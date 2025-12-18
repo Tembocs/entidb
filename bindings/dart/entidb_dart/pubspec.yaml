@@ -1,0 +1,15 @@
+name: entidb_dart
+description: Dart bindings for EntiDB - an embedded entity database engine.
+version: 0.1.0
+repository: https://github.com/Tembocs/entidb
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  ffi: ^2.1.0
+  path: ^1.8.3
+
+dev_dependencies:
+  test: ^1.24.0
+  lints: ^3.0.0

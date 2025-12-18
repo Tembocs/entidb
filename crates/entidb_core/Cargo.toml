@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+encryption = ["dep:aes-gcm", "dep:rand", "dep:zeroize"]
+
 [dependencies]
 entidb_storage.workspace = true
 entidb_codec.workspace = true
@@ -16,9 +20,17 @@ parking_lot.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 
+# Optional encryption dependencies
+aes-gcm = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+aes-gcm.workspace = true
+rand.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

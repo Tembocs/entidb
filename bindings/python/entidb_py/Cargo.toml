@@ -1,0 +1,12 @@
+[package]
+name = "entidb_py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "entidb"
+crate-type = ["cdylib"]
+
+[dependencies]
+entidb_core = { path = "../../../crates/entidb_core" }
+pyo3 = { version = "0.20", features = ["extension-module"] }

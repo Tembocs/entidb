@@ -17,6 +17,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+entidb_sync_server.workspace = true
 
 [lints]
 workspace = true

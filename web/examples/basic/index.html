@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EntiDB Web Example</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            margin-bottom: 1rem;
+        }
+        
+        .subtitle {
+            color: #888;
+            margin-bottom: 2rem;
+        }
+        
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .card h2 {
+            color: #81d4fa;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        input[type="text"] {
+            flex: 1;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #eee;
+            font-size: 1rem;
+        }
+        
+        input[type="text"]::placeholder {
+            color: #666;
+        }
+        
+        button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            background: #4fc3f7;
+            color: #1a1a2e;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #81d4fa;
+        }
+        
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        
+        .danger {
+            background: #e57373;
+        }
+        
+        .danger:hover {
+            background: #ef5350;
+        }
+        
+        .entity-list {
+            list-style: none;
+            margin-top: 1rem;
+        }
+        
+        .entity-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: #0f3460;
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .entity-item .id {
+            font-family: monospace;
+            color: #4fc3f7;
+            font-size: 0.85rem;
+        }
+        
+        .entity-item .data {
+            color: #fff;
+        }
+        
+        .log {
+            font-family: monospace;
+            font-size: 0.85rem;
+            background: #0f3460;
+            border-radius: 4px;
+            padding: 1rem;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .log-entry {
+            margin-bottom: 0.25rem;
+        }
+        
+        .log-entry.info {
+            color: #81d4fa;
+        }
+        
+        .log-entry.success {
+            color: #81c784;
+        }
+        
+        .log-entry.error {
+            color: #e57373;
+        }
+        
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+        
+        .stat {
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #4fc3f7;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 0.85rem;
+        }
+        
+        #loading {
+            text-align: center;
+            padding: 2rem;
+        }
+        
+        #app {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🗄️ EntiDB Web Example</h1>
+        <p class="subtitle">An embedded entity database running entirely in your browser via WebAssembly</p>
+        
+        <div id="loading">
+            <p>Loading EntiDB WASM module...</p>
+        </div>
+        
+        <div id="app">
+            <!-- Add Entity -->
+            <div class="card">
+                <h2>Add Entity</h2>
+                <div class="form-row">
+                    <input type="text" id="entityName" placeholder="Entity name (e.g., John Doe)">
+                    <button id="addBtn">Add</button>
+                </div>
+            </div>
+            
+            <!-- Entity List -->
+            <div class="card">
+                <h2>Entities in "users" collection</h2>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value" id="entityCount">0</div>
+                        <div class="stat-label">Total Entities</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="dbVersion">-</div>
+                        <div class="stat-label">EntiDB Version</div>
+                    </div>
+                </div>
+                <ul class="entity-list" id="entityList"></ul>
+                <button id="refreshBtn" style="margin-top: 1rem;">Refresh List</button>
+                <button id="clearBtn" class="danger" style="margin-left: 0.5rem;">Clear All</button>
+            </div>
+            
+            <!-- Log -->
+            <div class="card">
+                <h2>Operation Log</h2>
+                <div class="log" id="log"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="./main.js"></script>
+</body>
+</html>

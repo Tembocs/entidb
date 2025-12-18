@@ -1,0 +1,14 @@
+D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\deps\serde-912af23d2cafdf2c.d: C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\build\serde-6aef0fb084e0b764\out/private.rs
+
+D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\deps\libserde-912af23d2cafdf2c.rlib: C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\build\serde-6aef0fb084e0b764\out/private.rs
+
+D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\deps\libserde-912af23d2cafdf2c.rmeta: C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\build\serde-6aef0fb084e0b764\out/private.rs
+
+C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\Amani\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+D:\rust\entidb\web\entidb_wasm\target\wasm32-unknown-unknown\release\build\serde-6aef0fb084e0b764\out/private.rs:
+
+# env-dep:OUT_DIR=D:\\rust\\entidb\\web\\entidb_wasm\\target\\wasm32-unknown-unknown\\release\\build\\serde-6aef0fb084e0b764\\out
