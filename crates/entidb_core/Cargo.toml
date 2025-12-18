@@ -1,0 +1,24 @@
+[package]
+name = "entidb_core"
+description = "Core database engine for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+entidb_storage.workspace = true
+entidb_codec.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

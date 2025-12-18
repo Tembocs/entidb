@@ -1,0 +1,19 @@
+[package]
+name = "entidb_testkit"
+description = "Test utilities for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+entidb_storage.workspace = true
+entidb_codec.workspace = true
+entidb_core.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

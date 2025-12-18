@@ -1,0 +1,30 @@
+# Cargo configuration for EntiDB workspace
+
+[build]
+# Use all available CPU cores
+jobs = -1
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=native"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=native"]
+
+# Faster linking on Linux (uncomment if lld is available)
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[alias]
+# Useful aliases for development
+xtask = "run --package entidb_cli --"
+
+[env]
+# Enable backtraces in tests
+RUST_BACKTRACE = "1"

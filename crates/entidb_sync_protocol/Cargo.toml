@@ -1,0 +1,20 @@
+[package]
+name = "entidb_sync_protocol"
+description = "Sync protocol types and CBOR codecs for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+entidb_codec.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

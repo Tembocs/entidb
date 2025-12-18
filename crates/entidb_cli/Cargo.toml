@@ -1,0 +1,22 @@
+[package]
+name = "entidb_cli"
+description = "CLI tools for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "entidb"
+path = "src/main.rs"
+
+[dependencies]
+entidb_core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

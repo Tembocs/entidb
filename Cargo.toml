@@ -1,0 +1,86 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/entidb_storage",
+    "crates/entidb_codec",
+    "crates/entidb_core",
+    "crates/entidb_ffi",
+    "crates/entidb_sync_protocol",
+    "crates/entidb_sync_engine",
+    "crates/entidb_sync_server",
+    "crates/entidb_cli",
+    "crates/entidb_testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Tembocs/entidb"
+authors = ["Tembocs"]
+
+[workspace.dependencies]
+# Internal crates
+entidb_storage = { path = "crates/entidb_storage" }
+entidb_codec = { path = "crates/entidb_codec" }
+entidb_core = { path = "crates/entidb_core" }
+entidb_ffi = { path = "crates/entidb_ffi" }
+entidb_sync_protocol = { path = "crates/entidb_sync_protocol" }
+entidb_sync_engine = { path = "crates/entidb_sync_engine" }
+entidb_sync_server = { path = "crates/entidb_sync_server" }
+entidb_testkit = { path = "crates/entidb_testkit" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+ciborium = "0.2"
+
+# Error handling
+thiserror = "1.0"
+
+# Utilities
+bytes = "1.5"
+parking_lot = "0.12"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Async (for sync server)
+tokio = { version = "1.35", features = ["full"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+proptest = "1.4"
+tempfile = "3.9"
+criterion = "0.5"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Allow common patterns
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+cast_possible_truncation = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+# Faster builds in development
+opt-level = 0
+debug = true
+
+[profile.test]
+# Faster test builds
+opt-level = 0
+debug = true

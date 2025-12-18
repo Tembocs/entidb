@@ -1,0 +1,21 @@
+[package]
+name = "entidb_codec"
+description = "Canonical CBOR encoding/decoding for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+ciborium.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

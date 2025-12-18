@@ -1,0 +1,19 @@
+# Clippy configuration for EntiDB
+# See: https://doc.rust-lang.org/clippy/configuration.html
+
+# Match rustfmt max_width
+max-fn-params-bools = 3
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 25
+
+# Documentation requirements
+missing-docs-in-crate-items = true
+
+# Allow common patterns
+allowed-idents-below-min-chars = ["id", "db", "tx", "ok", "io"]
+
+# MSRV for lint suggestions
+msrv = "1.75"

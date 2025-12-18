@@ -1,0 +1,22 @@
+[package]
+name = "entidb_sync_server"
+description = "Reference HTTP sync server for EntiDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+entidb_core.workspace = true
+entidb_sync_protocol.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
