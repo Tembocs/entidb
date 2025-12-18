@@ -61,6 +61,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+/// EntiDB Core version.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 mod backup;
 mod collection;
 mod config;

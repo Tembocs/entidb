@@ -1,27 +1,33 @@
 [package]
-name = "entidb_cli"
-description = "CLI tools for EntiDB"
+name = "entidb_bench"
+description = "Benchmarks for EntiDB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-
-[[bin]]
-name = "entidb"
-path = "src/main.rs"
+publish = false
 
 [dependencies]
 entidb_core.workspace = true
 entidb_storage.workspace = true
 entidb_codec.workspace = true
-clap.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json = "1.0"
+criterion.workspace = true
+rand.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "database"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "storage"
+harness = false
 
 [lints]
 workspace = true
