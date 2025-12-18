@@ -1,0 +1,12 @@
+name: dart_todo
+description: EntiDB Dart todo example application.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  entidb_dart:
+    path: ../../bindings/dart/entidb_dart
+  ffi: ^2.1.0

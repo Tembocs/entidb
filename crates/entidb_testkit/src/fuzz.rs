@@ -1,0 +1,327 @@
+//! Fuzz testing harnesses for EntiDB.
+//!
+//! This module provides fuzz targets that can be used with cargo-fuzz
+//! or other fuzzing frameworks.
+
+use entidb_codec::{from_cbor, to_canonical_cbor, Value};
+use entidb_core::{CollectionId, Database, EntityId};
+
+/// Fuzz target for CBOR decoding.
+///
+/// Tests that arbitrary byte sequences either:
+/// - Decode successfully to a valid Value, or
+/// - Return a proper error (no panics)
+pub fn fuzz_cbor_decode(data: &[u8]) {
+    // Try to decode - should never panic
+    let _ = from_cbor::<Value>(data);
+}
+
+/// Fuzz target for CBOR roundtrip.
+///
+/// Tests that encoding and decoding preserves values.
+pub fn fuzz_cbor_roundtrip(data: &[u8]) {
+    // Try to decode
+    if let Ok(value) = from_cbor::<Value>(data) {
+        // If it decodes, try to re-encode
+        if let Ok(encoded) = to_canonical_cbor(&value) {
+            // Re-decode and compare
+            if let Ok(decoded) = from_cbor::<Value>(&encoded) {
+                // Values should be equal (canonical form)
+                assert_eq!(
+                    format!("{:?}", value),
+                    format!("{:?}", decoded),
+                    "Roundtrip mismatch"
+                );
+            }
+        }
+    }
+}
+
+/// Fuzz target for database operations.
+///
+/// Tests that arbitrary operation sequences don't cause panics.
+pub fn fuzz_database_operations(data: &[u8]) {
+    if data.len() < 4 {
+        return;
+    }
+
+    let db = match Database::open_in_memory() {
+        Ok(db) => db,
+        Err(_) => return,
+    };
+
+    let collection = CollectionId::new(1);
+    let mut offset = 0;
+
+    while offset + 17 <= data.len() {
+        let op = data[offset];
+        let id_bytes: [u8; 16] = data[offset + 1..offset + 17]
+            .try_into()
+            .unwrap_or([0u8; 16]);
+        let id = EntityId::from_bytes(id_bytes);
+
+        offset += 17;
+
+        match op % 4 {
+            0 => {
+                // Put
+                let payload_len = (data.get(offset).copied().unwrap_or(0) as usize) % 256;
+                offset += 1;
+
+                let payload: Vec<u8> = if offset + payload_len <= data.len() {
+                    data[offset..offset + payload_len].to_vec()
+                } else {
+                    vec![0u8; payload_len]
+                };
+                offset += payload_len;
+
+                let _ = db.transaction(|tx| {
+                    tx.put(collection, id, payload)?;
+                    Ok(())
+                });
+            }
+            1 => {
+                // Get
+                let _ = db.get(collection, id);
+            }
+            2 => {
+                // Delete
+                let _ = db.transaction(|tx| {
+                    tx.delete(collection, id)?;
+                    Ok(())
+                });
+            }
+            3 => {
+                // List
+                let _ = db.list(collection);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Fuzz target for entity ID handling.
+///
+/// Tests that entity IDs handle arbitrary input safely.
+pub fn fuzz_entity_id(data: &[u8]) {
+    if data.len() >= 16 {
+        let bytes: [u8; 16] = data[..16].try_into().unwrap();
+        let id = EntityId::from_bytes(bytes);
+
+        // Round-trip
+        let bytes2 = id.as_bytes();
+        assert_eq!(&bytes, bytes2);
+
+        // Display shouldn't panic
+        let _ = format!("{}", id);
+        let _ = format!("{:?}", id);
+    }
+}
+
+/// Fuzz target for WAL record parsing.
+///
+/// Tests that WAL record parsing handles arbitrary input safely.
+pub fn fuzz_wal_record(data: &[u8]) {
+    use entidb_core::WalRecord;
+
+    // Try to decode - should never panic
+    let _ = WalRecord::decode(data);
+}
+
+/// Fuzz target for segment record parsing.
+pub fn fuzz_segment_record(data: &[u8]) {
+    use entidb_core::SegmentRecord;
+
+    // Try to decode - should never panic
+    let _ = SegmentRecord::decode(data);
+}
+
+/// Structured fuzzing input for database operations.
+#[derive(Debug, Clone)]
+pub enum FuzzOp {
+    /// Put an entity
+    Put {
+        collection: u8,
+        entity: [u8; 16],
+        data: Vec<u8>,
+    },
+    /// Get an entity
+    Get { collection: u8, entity: [u8; 16] },
+    /// Delete an entity
+    Delete { collection: u8, entity: [u8; 16] },
+    /// List entities
+    List { collection: u8 },
+    /// Checkpoint
+    Checkpoint,
+}
+
+impl FuzzOp {
+    /// Parse operations from fuzzer input.
+    pub fn parse_sequence(data: &[u8]) -> Vec<FuzzOp> {
+        let mut ops = Vec::new();
+        let mut offset = 0;
+
+        while offset < data.len() {
+            let op_type = data[offset];
+            offset += 1;
+
+            let op = match op_type % 5 {
+                0 => {
+                    // Put
+                    if offset + 17 > data.len() {
+                        break;
+                    }
+                    let collection = data[offset];
+                    let entity: [u8; 16] = data[offset + 1..offset + 17]
+                        .try_into()
+                        .unwrap_or([0u8; 16]);
+                    offset += 17;
+
+                    let data_len = data.get(offset).copied().unwrap_or(0) as usize;
+                    offset += 1;
+
+                    let payload = if offset + data_len <= data.len() {
+                        data[offset..offset + data_len].to_vec()
+                    } else {
+                        break;
+                    };
+                    offset += data_len;
+
+                    FuzzOp::Put {
+                        collection,
+                        entity,
+                        data: payload,
+                    }
+                }
+                1 => {
+                    // Get
+                    if offset + 17 > data.len() {
+                        break;
+                    }
+                    let collection = data[offset];
+                    let entity: [u8; 16] = data[offset + 1..offset + 17]
+                        .try_into()
+                        .unwrap_or([0u8; 16]);
+                    offset += 17;
+
+                    FuzzOp::Get { collection, entity }
+                }
+                2 => {
+                    // Delete
+                    if offset + 17 > data.len() {
+                        break;
+                    }
+                    let collection = data[offset];
+                    let entity: [u8; 16] = data[offset + 1..offset + 17]
+                        .try_into()
+                        .unwrap_or([0u8; 16]);
+                    offset += 17;
+
+                    FuzzOp::Delete { collection, entity }
+                }
+                3 => {
+                    // List
+                    if offset >= data.len() {
+                        break;
+                    }
+                    let collection = data[offset];
+                    offset += 1;
+
+                    FuzzOp::List { collection }
+                }
+                4 => FuzzOp::Checkpoint,
+                _ => break,
+            };
+
+            ops.push(op);
+        }
+
+        ops
+    }
+
+    /// Execute operations on a database.
+    pub fn execute_sequence(ops: &[FuzzOp], db: &Database) {
+        for op in ops {
+            match op {
+                FuzzOp::Put {
+                    collection,
+                    entity,
+                    data,
+                } => {
+                    let coll = CollectionId::new(*collection as u32);
+                    let id = EntityId::from_bytes(*entity);
+                    let _ = db.transaction(|tx| {
+                        tx.put(coll, id, data.clone())?;
+                        Ok(())
+                    });
+                }
+                FuzzOp::Get { collection, entity } => {
+                    let coll = CollectionId::new(*collection as u32);
+                    let id = EntityId::from_bytes(*entity);
+                    let _ = db.get(coll, id);
+                }
+                FuzzOp::Delete { collection, entity } => {
+                    let coll = CollectionId::new(*collection as u32);
+                    let id = EntityId::from_bytes(*entity);
+                    let _ = db.transaction(|tx| {
+                        tx.delete(coll, id)?;
+                        Ok(())
+                    });
+                }
+                FuzzOp::List { collection } => {
+                    let coll = CollectionId::new(*collection as u32);
+                    let _ = db.list(coll);
+                }
+                FuzzOp::Checkpoint => {
+                    let _ = db.checkpoint();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fuzz_cbor_decode_empty() {
+        fuzz_cbor_decode(&[]);
+    }
+
+    #[test]
+    fn test_fuzz_cbor_decode_garbage() {
+        fuzz_cbor_decode(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn test_fuzz_cbor_roundtrip_valid() {
+        // Valid CBOR: positive integer 42
+        fuzz_cbor_roundtrip(&[0x18, 0x2a]);
+    }
+
+    #[test]
+    fn test_fuzz_database_operations_empty() {
+        fuzz_database_operations(&[]);
+    }
+
+    #[test]
+    fn test_fuzz_database_operations_random() {
+        fuzz_database_operations(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    }
+
+    #[test]
+    fn test_fuzz_entity_id() {
+        fuzz_entity_id(&[0u8; 16]);
+        fuzz_entity_id(&[0xFF; 16]);
+    }
+
+    #[test]
+    fn test_parse_fuzz_ops() {
+        let data = vec![
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 1, 2, 3, 4, 5,
+        ];
+        let ops = FuzzOp::parse_sequence(&data);
+        assert!(!ops.is_empty());
+    }
+}

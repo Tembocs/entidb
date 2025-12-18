@@ -1,7 +1,15 @@
 name: entidb_dart
-description: Dart bindings for EntiDB - an embedded entity database engine.
+description: Dart bindings for EntiDB - an embedded entity database engine with ACID transactions and CBOR storage.
 version: 0.1.0
 repository: https://github.com/Tembocs/entidb
+homepage: https://github.com/Tembocs/entidb
+documentation: https://github.com/Tembocs/entidb/tree/main/bindings/dart/entidb_dart
+
+topics:
+  - database
+  - embedded-database
+  - nosql
+  - cbor
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords = ["storage", "backend", "database", "file-system"]
+categories = ["database-implementations", "filesystem"]
+readme = "README.md"
 
 [dependencies]
 thiserror.workspace = true

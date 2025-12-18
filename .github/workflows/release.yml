@@ -1,0 +1,259 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (do not publish)'
+        required: false
+        default: 'true'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+jobs:
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_dry_run: ${{ steps.check.outputs.is_dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "entidb_core") | .version')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Check if dry run
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "is_dry_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_dry_run=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Check documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  publish-codec:
+    name: Publish entidb_codec
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish (dry run)
+        if: needs.validate.outputs.is_dry_run == 'true'
+        run: cargo publish -p entidb_codec --dry-run
+
+      - name: Publish
+        if: needs.validate.outputs.is_dry_run == 'false'
+        run: cargo publish -p entidb_codec
+        continue-on-error: true  # May already be published
+
+  publish-storage:
+    name: Publish entidb_storage
+    runs-on: ubuntu-latest
+    needs: [validate, publish-codec]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish (dry run)
+        if: needs.validate.outputs.is_dry_run == 'true'
+        run: cargo publish -p entidb_storage --dry-run
+
+      - name: Publish
+        if: needs.validate.outputs.is_dry_run == 'false'
+        run: cargo publish -p entidb_storage
+        continue-on-error: true
+
+  publish-core:
+    name: Publish entidb_core
+    runs-on: ubuntu-latest
+    needs: [validate, publish-storage]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish (dry run)
+        if: needs.validate.outputs.is_dry_run == 'true'
+        run: cargo publish -p entidb_core --dry-run
+
+      - name: Publish
+        if: needs.validate.outputs.is_dry_run == 'false'
+        run: cargo publish -p entidb_core
+        continue-on-error: true
+
+  publish-ffi:
+    name: Publish entidb_ffi
+    runs-on: ubuntu-latest
+    needs: [validate, publish-core]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish (dry run)
+        if: needs.validate.outputs.is_dry_run == 'true'
+        run: cargo publish -p entidb_ffi --dry-run
+
+      - name: Publish
+        if: needs.validate.outputs.is_dry_run == 'false'
+        run: cargo publish -p entidb_ffi
+        continue-on-error: true
+
+  publish-cli:
+    name: Publish entidb_cli
+    runs-on: ubuntu-latest
+    needs: [validate, publish-core]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish (dry run)
+        if: needs.validate.outputs.is_dry_run == 'true'
+        run: cargo publish -p entidb_cli --dry-run
+
+      - name: Publish
+        if: needs.validate.outputs.is_dry_run == 'false'
+        run: cargo publish -p entidb_cli
+        continue-on-error: true
+
+  build-binaries:
+    name: Build CLI Binaries
+    runs-on: ${{ matrix.os }}
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: entidb-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: entidb-linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: entidb-windows-x64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: entidb-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: entidb-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p entidb_cli
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz entidb
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.artifact }}.zip entidb.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate, build-binaries, publish-cli]
+    if: needs.validate.outputs.is_dry_run == 'false'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: EntiDB v${{ needs.validate.outputs.version }}
+          body: |
+            ## EntiDB v${{ needs.validate.outputs.version }}
+            
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+            
+            ### Installation
+            
+            **Cargo:**
+            ```bash
+            cargo install entidb_cli
+            ```
+            
+            **Prebuilt binaries:**
+            Download the appropriate binary for your platform below.
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          draft: false
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}
