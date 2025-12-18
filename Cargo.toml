@@ -10,6 +10,7 @@ members = [
     "crates/entidb_sync_server",
     "crates/entidb_cli",
     "crates/entidb_testkit",
+    "bindings/python/entidb_py",
 ]
 
 [workspace.package]
@@ -59,6 +60,9 @@ zeroize = { version = "1.7", features = ["derive"] }
 proptest = "1.4"
 tempfile = "3.9"
 criterion = "0.5"
+
+# Python bindings
+pyo3 = { version = "0.23", features = ["extension-module"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

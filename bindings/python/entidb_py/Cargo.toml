@@ -8,5 +8,5 @@ name = "entidb"
 crate-type = ["cdylib"]
 
 [dependencies]
-entidb_core = { path = "../../../crates/entidb_core" }
-pyo3 = { version = "0.20", features = ["extension-module"] }
+entidb_core.workspace = true
+pyo3.workspace = true

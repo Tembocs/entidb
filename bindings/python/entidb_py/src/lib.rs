@@ -319,6 +319,7 @@ impl Database {
         slf
     }
 
+    #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
     fn __exit__(
         &self,
         _exc_type: Option<PyObject>,
