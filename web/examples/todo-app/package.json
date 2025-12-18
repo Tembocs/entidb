@@ -1,0 +1,16 @@
+{
+  "name": "entidb-todo-app",
+  "version": "0.1.0",
+  "description": "EntiDB Todo App Example",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "cd ../../entidb_wasm && wasm-pack build --target web --out-dir ../examples/todo-app/pkg",
+    "dev": "vite",
+    "build": "npm run build:wasm && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "license": "MIT"
+}

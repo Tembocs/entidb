@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EntiDB Web Worker Example</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #f87171;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            background: var(--bg-dark);
+            color: var(--text);
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        h1 {
+            color: var(--accent);
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        
+        .status-bar {
+            display: flex;
+            gap: 1rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg-card);
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+        
+        .status-dot.ready {
+            background: var(--success);
+        }
+        
+        .status-dot.error {
+            background: var(--danger);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 8px;
+            padding: 1.25rem;
+        }
+        
+        .card h2 {
+            font-size: 1rem;
+            color: var(--accent);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--bg-input);
+        }
+        
+        .form-group {
+            margin-bottom: 0.75rem;
+        }
+        
+        label {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+        
+        input, textarea {
+            width: 100%;
+            padding: 0.5rem;
+            background: var(--bg-input);
+            border: 1px solid transparent;
+            border-radius: 4px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.875rem;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        button {
+            padding: 0.5rem 1rem;
+            background: var(--accent);
+            border: none;
+            border-radius: 4px;
+            color: var(--bg-dark);
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: opacity 0.2s;
+        }
+        
+        button:hover {
+            opacity: 0.9;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-row {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        
+        .btn-secondary {
+            background: var(--bg-input);
+            color: var(--text);
+        }
+        
+        .output {
+            background: var(--bg-input);
+            border-radius: 4px;
+            padding: 0.75rem;
+            min-height: 150px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 0.8rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        .log-entry {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        .log-time {
+            color: var(--text-muted);
+        }
+        
+        .log-success {
+            color: var(--success);
+        }
+        
+        .log-error {
+            color: var(--danger);
+        }
+        
+        .log-info {
+            color: var(--accent);
+        }
+        
+        .benchmark-results {
+            margin-top: 0.75rem;
+        }
+        
+        .benchmark-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem;
+            background: var(--bg-input);
+            border-radius: 4px;
+            margin-bottom: 0.25rem;
+        }
+        
+        .benchmark-value {
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        .full-width {
+            grid-column: 1 / -1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ EntiDB Web Worker</h1>
+            <p class="subtitle">Non-blocking database operations in a dedicated worker thread</p>
+        </header>
+        
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-dot" id="workerStatus"></div>
+                <span id="workerStatusText">Initializing...</span>
+            </div>
+            <div class="status-item">
+                <span>Entities:</span>
+                <strong id="entityCount">0</strong>
+            </div>
+            <div class="status-item">
+                <span>Operations:</span>
+                <strong id="opCount">0</strong>
+            </div>
+        </div>
+        
+        <div class="grid">
+            <!-- Put Entity -->
+            <div class="card">
+                <h2>📝 Put Entity</h2>
+                <div class="form-group">
+                    <label>Collection</label>
+                    <input type="text" id="putCollection" value="items" />
+                </div>
+                <div class="form-group">
+                    <label>Entity ID (leave empty to generate)</label>
+                    <input type="text" id="putEntityId" placeholder="Auto-generated" />
+                </div>
+                <div class="form-group">
+                    <label>Data (JSON)</label>
+                    <textarea id="putData">{"name": "Test Item", "value": 42}</textarea>
+                </div>
+                <div class="btn-row">
+                    <button id="putBtn">Put</button>
+                    <button class="btn-secondary" id="putManyBtn">Put 100</button>
+                </div>
+            </div>
+            
+            <!-- Get Entity -->
+            <div class="card">
+                <h2>🔍 Get Entity</h2>
+                <div class="form-group">
+                    <label>Collection</label>
+                    <input type="text" id="getCollection" value="items" />
+                </div>
+                <div class="form-group">
+                    <label>Entity ID</label>
+                    <input type="text" id="getEntityId" placeholder="Paste an entity ID" />
+                </div>
+                <div class="btn-row">
+                    <button id="getBtn">Get</button>
+                    <button class="btn-secondary" id="listBtn">List All</button>
+                </div>
+                <div class="output" id="getOutput" style="margin-top: 0.75rem;"></div>
+            </div>
+            
+            <!-- Benchmark -->
+            <div class="card">
+                <h2>⏱️ Benchmark</h2>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+                    Test worker performance with bulk operations
+                </p>
+                <div class="form-group">
+                    <label>Operations Count</label>
+                    <input type="number" id="benchmarkCount" value="1000" min="100" max="10000" />
+                </div>
+                <div class="btn-row">
+                    <button id="benchmarkBtn">Run Benchmark</button>
+                </div>
+                <div class="benchmark-results" id="benchmarkResults"></div>
+            </div>
+            
+            <!-- Log -->
+            <div class="card">
+                <h2>📋 Operation Log</h2>
+                <div class="output" id="log"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
