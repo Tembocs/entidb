@@ -236,6 +236,175 @@ EntiDB Core v0.1.0
 
 ---
 
+### `entidb backup`
+
+Create, restore, or validate database backups.
+
+#### `entidb backup create`
+
+Create a backup of the database.
+
+```bash
+entidb -p /path/to/db backup create --output /path/to/backup.endb
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output <PATH>` | Output backup file path (required) |
+| `-i, --include-tombstones` | Include tombstones in the backup |
+
+**Example:**
+
+```bash
+entidb -p /data/mydb backup create -o /backups/mydb-20241218.endb
+```
+
+```
+✓ Backup created successfully
+  Path: /backups/mydb-20241218.endb
+  Size: 1258291 bytes
+  Records: 10432
+  Timestamp: 2024-12-18T10:30:00Z
+```
+
+#### `entidb backup restore`
+
+Restore a database from a backup file.
+
+```bash
+entidb -p /path/to/newdb backup restore --input /path/to/backup.endb
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-i, --input <PATH>` | Input backup file path (required) |
+| `-f, --force` | Overwrite existing database |
+
+**Example:**
+
+```bash
+entidb -p /data/restored backup restore -i /backups/mydb-20241218.endb
+```
+
+```
+✓ Database restored successfully
+  Path: /data/restored
+  Records restored: 10432
+  From backup created: 2024-12-18T10:30:00Z
+```
+
+#### `entidb backup validate`
+
+Validate a backup file without restoring.
+
+```bash
+entidb backup validate --input /path/to/backup.endb
+```
+
+```
+✓ Backup is valid
+  File size: 1258291 bytes
+  Record count: 10432
+  Sequence: 5678
+  Created: 2024-12-18T10:30:00Z
+```
+
+#### `entidb backup info`
+
+Show backup metadata.
+
+```bash
+entidb backup info --input /path/to/backup.endb
+```
+
+---
+
+### `entidb migrate`
+
+Manage database schema migrations.
+
+#### `entidb migrate status`
+
+Show current migration status.
+
+```bash
+entidb -p /path/to/db migrate status
+```
+
+```
+Migration Status
+================
+  Current version: 3
+  Applied migrations: 3
+
+Applied Migrations:
+  v1: create_users_collection (applied at 2024-12-01)
+  v2: add_email_index (applied at 2024-12-10)
+  v3: add_settings_collection (applied at 2024-12-15)
+```
+
+#### `entidb migrate list`
+
+List all registered migrations.
+
+```bash
+entidb -p /path/to/db migrate list
+```
+
+```
+Registered Migrations
+====================
+  v1: create_users_collection [✓ applied]
+  v2: add_email_index [✓ applied]
+  v3: add_settings_collection [✓ applied]
+  v4: add_audit_log [○ pending]
+```
+
+#### `entidb migrate run`
+
+Run pending migrations.
+
+```bash
+entidb -p /path/to/db migrate run
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-t, --to-version <N>` | Run only up to this version |
+| `-d, --dry-run` | Show what would be done |
+
+**Dry Run:**
+
+```bash
+entidb -p /path/to/db migrate run --dry-run
+```
+
+```
+Dry run - would apply 1 migration(s):
+  v4: add_audit_log
+```
+
+**Run:**
+
+```bash
+entidb -p /path/to/db migrate run
+```
+
+```
+Running 1 migration(s)...
+
+✓ Successfully applied 1 migration(s)
+  Final version: 4
+```
+
+---
+
 ## Global Options
 
 These options apply to all commands:
