@@ -9,4 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 entidb_core.workspace = true
+entidb_storage.workspace = true
 pyo3.workspace = true

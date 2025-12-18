@@ -23,7 +23,12 @@
 //! async function main() {
 //!     await init();
 //!     
-//!     const db = await Database.openMemory();
+//!     // In-memory database (no persistence)
+//!     const memDb = await Database.openMemory();
+//!     
+//!     // Persistent database (auto-selects OPFS or IndexedDB)
+//!     const db = await Database.open("mydb");
+//!     
 //!     const users = db.collection("users");
 //!     
 //!     const id = EntityId.generate();
@@ -31,6 +36,9 @@
 //!     
 //!     const data = db.get(users, id);
 //!     console.log(data);
+//!     
+//!     // Save changes to persistent storage
+//!     await db.save();
 //!     
 //!     db.close();
 //! }
@@ -51,7 +59,7 @@ mod entity;
 mod error;
 mod utils;
 
-pub use database::*;
+pub use database::{Database, JsStorageType, Transaction};
 pub use entity::*;
 pub use error::*;
 

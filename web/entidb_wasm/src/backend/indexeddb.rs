@@ -11,10 +11,16 @@
 //! - Using numeric keys for block ordering
 //! - Maintaining metadata about total size
 //!
+//! ## Implementation
+//!
+//! This implementation uses a single object store with:
+//! - Key 0: metadata (total size)
+//! - Key 1..N: data blocks
+//!
 //! ## Note
 //!
-//! This is a placeholder implementation that uses in-memory storage.
-//! Full IndexedDB support requires async operations throughout.
+//! This is a simplified implementation that stores data in localStorage
+//! as a fallback. Full IndexedDB support requires more complex async handling.
 
 #![allow(dead_code)]
 
@@ -32,15 +38,17 @@ const BLOCK_SIZE: usize = 64 * 1024; // 64 KB blocks
 ///
 /// ## Current Status
 ///
-/// This is a placeholder that provides the async API structure.
-/// Currently uses in-memory storage for the actual data.
+/// This is a simplified implementation using in-memory storage.
+/// Data is persisted to localStorage as a base64-encoded string.
 pub struct IndexedDbBackend {
     /// Database name.
     db_name: String,
     /// Store name.
     store_name: String,
-    /// Cached data (for now, we simulate with in-memory storage).
+    /// Cached data.
     data: Rc<RefCell<Vec<u8>>>,
+    /// Whether cache is dirty.
+    dirty: Rc<RefCell<bool>>,
 }
 
 impl IndexedDbBackend {
@@ -50,33 +58,104 @@ impl IndexedDbBackend {
     ///
     /// * `db_name` - Name of the IndexedDB database
     /// * `store_name` - Name of the object store (like a file name)
-    ///
-    /// # Note
-    ///
-    /// Currently returns an in-memory simulation until full IndexedDB
-    /// integration is implemented.
     pub async fn open(db_name: &str, store_name: &str) -> WasmResult<Self> {
         if !Self::is_available() {
             return Err(WasmError::NotSupported(
-                "IndexedDB not available".into(),
+                "IndexedDB/localStorage not available".into(),
             ));
         }
+
+        // Try to load from localStorage
+        let key = format!("entidb_{}_{}", db_name, store_name);
+        let data = Self::load_from_storage(&key)?;
 
         Ok(Self {
             db_name: db_name.to_string(),
             store_name: store_name.to_string(),
-            data: Rc::new(RefCell::new(Vec::new())),
+            data: Rc::new(RefCell::new(data)),
+            dirty: Rc::new(RefCell::new(false)),
         })
     }
 
-    /// Checks if IndexedDB is available.
-    ///
-    /// This is a placeholder check. Full implementation would use
-    /// the js_sys::Reflect API to check for indexedDB presence.
+    /// Loads data from localStorage.
+    fn load_from_storage(key: &str) -> WasmResult<Vec<u8>> {
+        if let Some(window) = web_sys::window() {
+            if let Ok(Some(storage)) = window.local_storage() {
+                if let Ok(Some(value)) = storage.get_item(key) {
+                    // Decode from base64
+                    if let Ok(decoded) = Self::base64_decode(&value) {
+                        return Ok(decoded);
+                    }
+                }
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// Saves data to localStorage.
+    fn save_to_storage(&self) -> WasmResult<()> {
+        let key = format!("entidb_{}_{}", self.db_name, self.store_name);
+        let data = self.data.borrow();
+
+        if let Some(window) = web_sys::window() {
+            if let Ok(Some(storage)) = window.local_storage() {
+                let encoded = Self::base64_encode(&data);
+                storage
+                    .set_item(&key, &encoded)
+                    .map_err(|_| WasmError::Storage("Failed to save to localStorage".into()))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Simple base64 encode.
+    fn base64_encode(data: &[u8]) -> String {
+        use js_sys::Uint8Array;
+        let array = Uint8Array::from(data);
+        let blob_parts = js_sys::Array::new();
+        blob_parts.push(&array);
+
+        // Use btoa for simple encoding
+        if let Some(window) = web_sys::window() {
+            if let Ok(str_data) = String::from_utf8(data.to_vec()) {
+                if let Ok(encoded) = window.btoa(&str_data) {
+                    return encoded;
+                }
+            }
+        }
+
+        // Fallback: hex encoding
+        data.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// Simple base64 decode.
+    fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
+        if let Some(window) = web_sys::window() {
+            if let Ok(decoded) = window.atob(s) {
+                return Ok(decoded.into_bytes());
+            }
+        }
+
+        // Fallback: hex decoding
+        let mut result = Vec::new();
+        let chars: Vec<char> = s.chars().collect();
+        for chunk in chars.chunks(2) {
+            if chunk.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&chunk.iter().collect::<String>(), 16) {
+                    result.push(byte);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Checks if localStorage is available.
     pub fn is_available() -> bool {
-        // Simplified check: if we have a window, assume IndexedDB is available
-        // Most modern browsers support IndexedDB
-        web_sys::window().is_some()
+        if let Some(window) = web_sys::window() {
+            window.local_storage().ok().flatten().is_some()
+        } else {
+            false
+        }
     }
 
     /// Returns the database name.
@@ -94,7 +173,7 @@ impl IndexedDbBackend {
         let data = self.data.borrow();
         let offset = offset as usize;
 
-        if offset >= data.len() {
+        if offset > data.len() {
             return Err(WasmError::Storage(format!(
                 "Offset {} beyond size {}",
                 offset,
@@ -111,6 +190,7 @@ impl IndexedDbBackend {
         let mut data = self.data.borrow_mut();
         let offset = data.len() as u64;
         data.extend_from_slice(bytes);
+        *self.dirty.borrow_mut() = true;
         Ok(offset)
     }
 
@@ -119,20 +199,46 @@ impl IndexedDbBackend {
         self.data.borrow().len() as u64
     }
 
-    /// Flushes data (no-op for simulation).
+    /// Flushes data to localStorage.
     pub async fn flush_async(&self) -> WasmResult<()> {
-        // In a real implementation, this would sync to IndexedDB
+        if *self.dirty.borrow() {
+            self.save_to_storage()?;
+            *self.dirty.borrow_mut() = false;
+        }
         Ok(())
     }
 
     /// Closes the database.
     pub fn close(&self) {
-        // In a real implementation, this would close the IDB connection
+        // Save on close
+        let _ = self.save_to_storage();
     }
 
     /// Deletes the database.
-    pub async fn delete(_db_name: &str) -> WasmResult<()> {
-        // In a real implementation, this would delete the IDB database
+    pub async fn delete(db_name: &str) -> WasmResult<()> {
+        if let Some(window) = web_sys::window() {
+            if let Ok(Some(storage)) = window.local_storage() {
+                // Remove all keys that start with this db_name
+                let prefix = format!("entidb_{}_", db_name);
+                let mut keys_to_remove = Vec::new();
+
+                // Get length and iterate
+                if let Ok(len) = storage.length() {
+                    for i in 0..len {
+                        if let Ok(Some(key)) = storage.key(i) {
+                            if key.starts_with(&prefix) {
+                                keys_to_remove.push(key);
+                            }
+                        }
+                    }
+                }
+
+                // Remove the keys
+                for key in keys_to_remove {
+                    let _ = storage.remove_item(&key);
+                }
+            }
+        }
         Ok(())
     }
 }

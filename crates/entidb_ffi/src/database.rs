@@ -3,7 +3,9 @@
 use crate::buffer::EntiDbBuffer;
 use crate::error::{clear_last_error, set_last_error, EntiDbResult};
 use crate::types::{EntiDbCollectionId, EntiDbConfig, EntiDbEntityId, EntiDbHandle};
+use entidb_storage::FileBackend;
 use std::ffi::CStr;
+use std::path::Path;
 
 /// Opens a database.
 ///
@@ -34,10 +36,10 @@ pub unsafe extern "C" fn entidb_open(
 
     let config = &*config;
 
-    // For now, only support in-memory databases
+    // Check if path is provided for file-based database
     if !config.path.is_null() {
         let path_cstr = CStr::from_ptr(config.path);
-        let _path = match path_cstr.to_str() {
+        let path_str = match path_cstr.to_str() {
             Ok(s) => s,
             Err(_) => {
                 set_last_error("invalid UTF-8 in path");
@@ -45,21 +47,83 @@ pub unsafe extern "C" fn entidb_open(
             }
         };
 
-        // TODO: Implement file-based database
-        set_last_error("file-based databases not yet implemented");
-        return EntiDbResult::Error;
-    }
+        let path = Path::new(path_str);
 
-    // Create in-memory database
-    match entidb_core::Database::open_in_memory() {
-        Ok(db) => {
-            let boxed = Box::new(db);
-            *out_handle = Box::into_raw(boxed) as *mut EntiDbHandle;
-            EntiDbResult::Ok
+        // Create directory structure if needed
+        if config.create_if_missing {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        set_last_error(format!("failed to create directory: {e}"));
+                        return EntiDbResult::Error;
+                    }
+                }
+            }
         }
-        Err(e) => {
-            set_last_error(e.to_string());
-            EntiDbResult::Error
+
+        // Open file backends for WAL and segments
+        let wal_path = path.join("wal.log");
+        let segment_path = path.join("segments.dat");
+
+        let wal_backend = if config.create_if_missing {
+            FileBackend::open_with_create_dirs(&wal_path)
+        } else {
+            FileBackend::open(&wal_path)
+        };
+
+        let wal_backend = match wal_backend {
+            Ok(b) => Box::new(b) as Box<dyn entidb_storage::StorageBackend>,
+            Err(e) => {
+                set_last_error(format!("failed to open WAL: {e}"));
+                return EntiDbResult::Error;
+            }
+        };
+
+        let segment_backend = if config.create_if_missing {
+            FileBackend::open_with_create_dirs(&segment_path)
+        } else {
+            FileBackend::open(&segment_path)
+        };
+
+        let segment_backend = match segment_backend {
+            Ok(b) => Box::new(b) as Box<dyn entidb_storage::StorageBackend>,
+            Err(e) => {
+                set_last_error(format!("failed to open segments: {e}"));
+                return EntiDbResult::Error;
+            }
+        };
+
+        // Build core config
+        let mut core_config = entidb_core::Config::default();
+        if config.max_segment_size > 0 {
+            core_config.max_segment_size = config.max_segment_size;
+        }
+        core_config.sync_on_commit = config.sync_on_commit;
+
+        // Open database with file backends
+        match entidb_core::Database::open_with_backends(core_config, wal_backend, segment_backend) {
+            Ok(db) => {
+                let boxed = Box::new(db);
+                *out_handle = Box::into_raw(boxed) as *mut EntiDbHandle;
+                EntiDbResult::Ok
+            }
+            Err(e) => {
+                set_last_error(e.to_string());
+                EntiDbResult::Error
+            }
+        }
+    } else {
+        // Create in-memory database
+        match entidb_core::Database::open_in_memory() {
+            Ok(db) => {
+                let boxed = Box::new(db);
+                *out_handle = Box::into_raw(boxed) as *mut EntiDbHandle;
+                EntiDbResult::Ok
+            }
+            Err(e) => {
+                set_last_error(e.to_string());
+                EntiDbResult::Error
+            }
         }
     }
 }

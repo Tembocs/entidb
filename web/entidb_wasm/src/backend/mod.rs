@@ -10,6 +10,7 @@
 mod indexeddb;
 mod memory;
 mod opfs;
+mod persistent;
 
 #[allow(unused_imports)]
 pub use indexeddb::IndexedDbBackend;
@@ -17,6 +18,7 @@ pub use indexeddb::IndexedDbBackend;
 pub use memory::WasmMemoryBackend;
 #[allow(unused_imports)]
 pub use opfs::OpfsBackend;
+pub use persistent::{PersistentBackend, StorageType};
 
 /// Check if OPFS is available in the current browser.
 #[allow(dead_code)]

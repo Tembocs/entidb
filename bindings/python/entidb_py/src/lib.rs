@@ -2,10 +2,14 @@
 //!
 //! This crate provides Python bindings using PyO3.
 
-use entidb_core::{CollectionId, Database as CoreDatabase, EntityId as CoreEntityId};
+use entidb_core::{
+    CollectionId, Config, Database as CoreDatabase, EntityId as CoreEntityId,
+};
+use entidb_storage::FileBackend;
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Entity ID - a 16-byte unique identifier.
@@ -167,6 +171,77 @@ pub struct Database {
 
 #[pymethods]
 impl Database {
+    /// Opens a file-based database at the given path.
+    ///
+    /// Creates the database directory if it doesn't exist.
+    /// Data is persisted to disk and survives process restarts.
+    ///
+    /// Args:
+    ///     path: Path to the database directory.
+    ///     max_segment_size: Maximum segment file size (default: 64MB).
+    ///     sync_on_commit: Whether to sync to disk on every commit (default: True).
+    ///     create_if_missing: Create database if it doesn't exist (default: True).
+    #[staticmethod]
+    #[pyo3(signature = (path, max_segment_size=67108864, sync_on_commit=true, create_if_missing=true))]
+    fn open(
+        path: &str,
+        max_segment_size: u64,
+        sync_on_commit: bool,
+        create_if_missing: bool,
+    ) -> PyResult<Self> {
+        let db_path = Path::new(path);
+
+        // Create directory structure if needed
+        if create_if_missing {
+            if let Some(parent) = db_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| PyIOError::new_err(format!("Failed to create directory: {e}")))?;
+                }
+            }
+            std::fs::create_dir_all(db_path)
+                .map_err(|e| PyIOError::new_err(format!("Failed to create database directory: {e}")))?;
+        }
+
+        // Open file backends for WAL and segments
+        let wal_path = db_path.join("wal.log");
+        let segment_path = db_path.join("segments.dat");
+
+        let wal_backend = if create_if_missing {
+            FileBackend::open_with_create_dirs(&wal_path)
+        } else {
+            FileBackend::open(&wal_path)
+        };
+
+        let wal_backend = wal_backend
+            .map_err(|e| PyIOError::new_err(format!("Failed to open WAL: {e}")))?;
+
+        let segment_backend = if create_if_missing {
+            FileBackend::open_with_create_dirs(&segment_path)
+        } else {
+            FileBackend::open(&segment_path)
+        };
+
+        let segment_backend = segment_backend
+            .map_err(|e| PyIOError::new_err(format!("Failed to open segments: {e}")))?;
+
+        // Build core config
+        let mut config = Config::default();
+        config.max_segment_size = max_segment_size;
+        config.sync_on_commit = sync_on_commit;
+
+        // Open database with file backends
+        CoreDatabase::open_with_backends(
+            config,
+            Box::new(wal_backend),
+            Box::new(segment_backend),
+        )
+        .map(|db| Self {
+            inner: Arc::new(db),
+        })
+        .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
     /// Opens an in-memory database.
     #[staticmethod]
     fn open_memory() -> PyResult<Self> {

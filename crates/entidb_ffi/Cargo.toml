@@ -13,6 +13,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 entidb_core.workspace = true
+entidb_storage.workspace = true
 thiserror.workspace = true
 
 # FFI requires unsafe code - override workspace lint
