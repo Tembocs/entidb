@@ -371,9 +371,10 @@ When conflicts arise, precedence is (highest to lowest):
 3. [acceptance_criteria.md](docs/acceptance_criteria.md) — verification requirements
 4. [file_format.md](docs/file_format.md) — binary format spec
 5. [transactions.md](docs/transactions.md) — transaction semantics
-6. [access_paths.md](docs/access_paths.md) — index selection
-7. [cbor_cannonical.md](docs/cbor_cannonical.md) — encoding rules
-8. [bindings_contract.md](docs/bindings_contract.md) — FFI contract
+6. [sync_protocol.md](docs/sync_protocol.md) — synchronization protocol
+7. [access_paths.md](docs/access_paths.md) — index selection
+8. [cbor_cannonical.md](docs/cbor_cannonical.md) — encoding rules
+9. [bindings_contract.md](docs/bindings_contract.md) — FFI contract
 
 ---
 
