@@ -74,6 +74,7 @@ impl<'a> CanonicalDecoder<'a> {
         &self.data[self.pos..]
     }
 
+    #[inline]
     fn read_byte(&mut self) -> CodecResult<u8> {
         if self.pos >= self.data.len() {
             return Err(CodecError::UnexpectedEof);
@@ -83,6 +84,7 @@ impl<'a> CanonicalDecoder<'a> {
         Ok(byte)
     }
 
+    #[inline]
     fn read_bytes(&mut self, len: usize) -> CodecResult<&'a [u8]> {
         if self.pos + len > self.data.len() {
             return Err(CodecError::UnexpectedEof);
@@ -92,6 +94,7 @@ impl<'a> CanonicalDecoder<'a> {
         Ok(bytes)
     }
 
+    #[inline]
     fn decode_unsigned(&mut self, additional_info: u8) -> CodecResult<u64> {
         match additional_info {
             0..=23 => Ok(u64::from(additional_info)),

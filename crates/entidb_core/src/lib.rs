@@ -84,7 +84,7 @@ pub use collection::{Collection, EntityCodec};
 pub use config::Config;
 #[cfg(feature = "encryption")]
 pub use crypto::{CryptoManager, EncryptionKey};
-pub use database::Database;
+pub use database::{BackupInfo, Database, RestoreStats};
 pub use entity::{EntityId, EntityStore};
 pub use error::{CoreError, CoreResult};
 pub use index::{BTreeIndex, HashIndex, Index, IndexKey, IndexSpec};
@@ -93,7 +93,9 @@ pub use migration::{
     AppliedMigration, Migration, MigrationContext, MigrationInfo, MigrationManager,
     MigrationOperation, MigrationResult, MigrationRunResult, MigrationState, MigrationVersion,
 };
-pub use segment::{CompactionConfig, CompactionResult, Compactor, Segment, SegmentManager};
+pub use segment::{
+    CompactionConfig, CompactionResult, Compactor, Segment, SegmentManager, SegmentRecord,
+};
 pub use transaction::{Transaction, TransactionManager};
 pub use types::{CollectionId, SequenceNumber, TransactionId};
 pub use wal::{WalManager, WalRecord, WalRecordType};

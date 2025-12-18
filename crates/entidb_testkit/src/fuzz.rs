@@ -13,7 +13,7 @@ use entidb_core::{CollectionId, Database, EntityId};
 /// - Return a proper error (no panics)
 pub fn fuzz_cbor_decode(data: &[u8]) {
     // Try to decode - should never panic
-    let _ = from_cbor::<Value>(data);
+    let _ = from_cbor(data);
 }
 
 /// Fuzz target for CBOR roundtrip.
@@ -21,11 +21,11 @@ pub fn fuzz_cbor_decode(data: &[u8]) {
 /// Tests that encoding and decoding preserves values.
 pub fn fuzz_cbor_roundtrip(data: &[u8]) {
     // Try to decode
-    if let Ok(value) = from_cbor::<Value>(data) {
+    if let Ok(value) = from_cbor(data) {
         // If it decodes, try to re-encode
         if let Ok(encoded) = to_canonical_cbor(&value) {
             // Re-decode and compare
-            if let Ok(decoded) = from_cbor::<Value>(&encoded) {
+            if let Ok(decoded) = from_cbor(&encoded) {
                 // Values should be equal (canonical form)
                 assert_eq!(
                     format!("{:?}", value),
@@ -122,10 +122,19 @@ pub fn fuzz_entity_id(data: &[u8]) {
 ///
 /// Tests that WAL record parsing handles arbitrary input safely.
 pub fn fuzz_wal_record(data: &[u8]) {
-    use entidb_core::WalRecord;
+    use entidb_core::{WalRecord, WalRecordType};
 
-    // Try to decode - should never panic
-    let _ = WalRecord::decode(data);
+    // Try to decode with various record types - should never panic
+    for record_type in [
+        WalRecordType::Begin,
+        WalRecordType::Put,
+        WalRecordType::Delete,
+        WalRecordType::Commit,
+        WalRecordType::Abort,
+        WalRecordType::Checkpoint,
+    ] {
+        let _ = WalRecord::decode_payload(record_type, data);
+    }
 }
 
 /// Fuzz target for segment record parsing.

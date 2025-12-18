@@ -1,0 +1,44 @@
+[
+  {
+    "id": "entity_id_zeros",
+    "description": "Entity ID with all zeros",
+    "input_hex": "00000000000000000000000000000000",
+    "expected_hex": "00000000000000000000000000000000",
+    "expected_error": null
+  },
+  {
+    "id": "entity_id_ones",
+    "description": "Entity ID with all 0xFF bytes",
+    "input_hex": "ffffffffffffffffffffffffffffffff",
+    "expected_hex": "ffffffffffffffffffffffffffffffff",
+    "expected_error": null
+  },
+  {
+    "id": "entity_id_pattern",
+    "description": "Entity ID with incrementing pattern",
+    "input_hex": "0123456789abcdef0123456789abcdef",
+    "expected_hex": "0123456789abcdef0123456789abcdef",
+    "expected_error": null
+  },
+  {
+    "id": "entity_id_uuid_v4",
+    "description": "UUID v4 format entity ID",
+    "input_hex": "550e8400e29b41d4a716446655440000",
+    "expected_hex": "550e8400e29b41d4a716446655440000",
+    "expected_error": null
+  },
+  {
+    "id": "entity_id_short",
+    "description": "Entity ID too short (should fail)",
+    "input_hex": "0102030405060708",
+    "expected_hex": "",
+    "expected_error": "EntityId must be exactly 16 bytes"
+  },
+  {
+    "id": "entity_id_long",
+    "description": "Entity ID too long (should fail)",
+    "input_hex": "000102030405060708090a0b0c0d0e0f1011",
+    "expected_hex": "",
+    "expected_error": "EntityId must be exactly 16 bytes"
+  }
+]

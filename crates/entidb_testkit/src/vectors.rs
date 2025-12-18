@@ -250,7 +250,7 @@ mod tests {
             let expected = hex_decode(&vector.expected_hex);
 
             // Try to decode and re-encode
-            if let Ok(value) = entidb_codec::from_cbor::<entidb_codec::Value>(&input) {
+            if let Ok(value) = entidb_codec::from_cbor(&input) {
                 if let Ok(encoded) = entidb_codec::to_canonical_cbor(&value) {
                     assert_eq!(
                         hex_encode(&encoded),

@@ -14,6 +14,7 @@ pub struct EntityId([u8; 16]);
 
 impl EntityId {
     /// Creates an entity ID from raw bytes.
+    #[inline]
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
@@ -32,6 +33,7 @@ impl EntityId {
     }
 
     /// Returns the raw bytes.
+    #[inline]
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0

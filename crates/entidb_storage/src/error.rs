@@ -31,4 +31,8 @@ pub enum StorageError {
     /// The storage is closed.
     #[error("storage is closed")]
     Closed,
+
+    /// Encryption or decryption failed.
+    #[error("encryption error: {0}")]
+    Encryption(String),
 }

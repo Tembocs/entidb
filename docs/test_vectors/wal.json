@@ -1,0 +1,57 @@
+[
+  {
+    "id": "wal_header",
+    "description": "WAL file header magic and version",
+    "magic": "454e5449",
+    "version": 1,
+    "expected_error": null
+  },
+  {
+    "id": "wal_begin",
+    "description": "WAL BEGIN record for txid=1",
+    "record_type": 1,
+    "txid": 1,
+    "expected_error": null
+  },
+  {
+    "id": "wal_put",
+    "description": "WAL PUT record",
+    "record_type": 2,
+    "txid": 1,
+    "collection_id": 0,
+    "entity_id": "00000000000000000000000000000001",
+    "payload_hex": "a16474657374f5",
+    "expected_error": null
+  },
+  {
+    "id": "wal_delete",
+    "description": "WAL DELETE record",
+    "record_type": 3,
+    "txid": 1,
+    "collection_id": 0,
+    "entity_id": "00000000000000000000000000000001",
+    "expected_error": null
+  },
+  {
+    "id": "wal_commit",
+    "description": "WAL COMMIT record for txid=1, seq=1",
+    "record_type": 4,
+    "txid": 1,
+    "sequence": 1,
+    "expected_error": null
+  },
+  {
+    "id": "wal_abort",
+    "description": "WAL ABORT record for txid=2",
+    "record_type": 5,
+    "txid": 2,
+    "expected_error": null
+  },
+  {
+    "id": "wal_checkpoint",
+    "description": "WAL CHECKPOINT record",
+    "record_type": 6,
+    "sequence": 100,
+    "expected_error": null
+  }
+]

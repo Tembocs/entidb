@@ -1,0 +1,46 @@
+[
+  {
+    "id": "segment_put",
+    "description": "Segment PUT record with CBOR payload",
+    "collection_id": 0,
+    "entity_id": "00000000000000000000000000000001",
+    "flags": 0,
+    "payload_hex": "a16474657374f5",
+    "is_tombstone": false,
+    "is_encrypted": false,
+    "expected_error": null
+  },
+  {
+    "id": "segment_tombstone",
+    "description": "Segment tombstone record (deletion marker)",
+    "collection_id": 0,
+    "entity_id": "00000000000000000000000000000002",
+    "flags": 1,
+    "payload_hex": "",
+    "is_tombstone": true,
+    "is_encrypted": false,
+    "expected_error": null
+  },
+  {
+    "id": "segment_encrypted",
+    "description": "Segment encrypted record",
+    "collection_id": 1,
+    "entity_id": "00000000000000000000000000000003",
+    "flags": 2,
+    "payload_hex": "encrypted_placeholder",
+    "is_tombstone": false,
+    "is_encrypted": true,
+    "expected_error": null
+  },
+  {
+    "id": "segment_large_payload",
+    "description": "Segment record with large payload",
+    "collection_id": 0,
+    "entity_id": "00000000000000000000000000000004",
+    "flags": 0,
+    "payload_size": 65536,
+    "is_tombstone": false,
+    "is_encrypted": false,
+    "expected_error": null
+  }
+]

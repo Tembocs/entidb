@@ -79,16 +79,19 @@ impl CanonicalEncoder {
         &self.buffer
     }
 
+    #[inline]
     fn encode_null(&mut self) {
         // CBOR null is simple value 22 (0xf6)
         self.buffer.push(0xf6);
     }
 
+    #[inline]
     fn encode_bool(&mut self, b: bool) {
         // CBOR false is 0xf4, true is 0xf5
         self.buffer.push(if b { 0xf5 } else { 0xf4 });
     }
 
+    #[inline]
     #[allow(clippy::cast_sign_loss)]
     fn encode_integer(&mut self, n: i64) {
         if n >= 0 {
@@ -102,6 +105,7 @@ impl CanonicalEncoder {
         }
     }
 
+    #[inline]
     #[allow(clippy::cast_possible_truncation)]
     fn encode_unsigned(&mut self, major_type: u8, value: u64) {
         let mt = major_type << 5;
@@ -123,11 +127,13 @@ impl CanonicalEncoder {
         }
     }
 
+    #[inline]
     fn encode_bytes(&mut self, bytes: &[u8]) {
         self.encode_unsigned(2, bytes.len() as u64);
         self.buffer.extend_from_slice(bytes);
     }
 
+    #[inline]
     fn encode_text(&mut self, text: &str) {
         self.encode_unsigned(3, text.len() as u64);
         self.buffer.extend_from_slice(text.as_bytes());

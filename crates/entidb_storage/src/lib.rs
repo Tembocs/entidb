@@ -17,6 +17,7 @@
 //!
 //! - [`InMemoryBackend`] - For testing and ephemeral storage
 //! - [`FileBackend`] - For persistent storage using OS file APIs
+//! - [`EncryptedBackend`] - Wrapper that adds AES-256-GCM encryption
 //!
 //! ## Example
 //!
@@ -33,11 +34,13 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod encrypted;
 mod error;
 mod file;
 mod memory;
 
 pub use backend::StorageBackend;
+pub use encrypted::{EncryptedBackend, EncryptionKey, KEY_SIZE, NONCE_SIZE, TAG_SIZE};
 pub use error::{StorageError, StorageResult};
 pub use file::FileBackend;
 pub use memory::InMemoryBackend;

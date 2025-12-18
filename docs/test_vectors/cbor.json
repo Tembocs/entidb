@@ -1,0 +1,184 @@
+[
+  {
+    "id": "cbor_null",
+    "description": "CBOR null value",
+    "input_hex": "f6",
+    "expected_hex": "f6",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_true",
+    "description": "CBOR true value",
+    "input_hex": "f5",
+    "expected_hex": "f5",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_false",
+    "description": "CBOR false value",
+    "input_hex": "f4",
+    "expected_hex": "f4",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_0",
+    "description": "CBOR integer 0",
+    "input_hex": "00",
+    "expected_hex": "00",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_23",
+    "description": "CBOR integer 23 (largest 1-byte)",
+    "input_hex": "17",
+    "expected_hex": "17",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_24",
+    "description": "CBOR integer 24 (smallest 2-byte)",
+    "input_hex": "1818",
+    "expected_hex": "1818",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_255",
+    "description": "CBOR integer 255",
+    "input_hex": "18ff",
+    "expected_hex": "18ff",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_256",
+    "description": "CBOR integer 256",
+    "input_hex": "190100",
+    "expected_hex": "190100",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_65535",
+    "description": "CBOR integer 65535 (largest 2-byte payload)",
+    "input_hex": "19ffff",
+    "expected_hex": "19ffff",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_65536",
+    "description": "CBOR integer 65536 (smallest 4-byte payload)",
+    "input_hex": "1a00010000",
+    "expected_hex": "1a00010000",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_neg1",
+    "description": "CBOR integer -1",
+    "input_hex": "20",
+    "expected_hex": "20",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_neg100",
+    "description": "CBOR integer -100",
+    "input_hex": "3863",
+    "expected_hex": "3863",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_int_neg1000",
+    "description": "CBOR integer -1000",
+    "input_hex": "3903e7",
+    "expected_hex": "3903e7",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_text_empty",
+    "description": "CBOR empty text string",
+    "input_hex": "60",
+    "expected_hex": "60",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_text_hello",
+    "description": "CBOR text string 'hello'",
+    "input_hex": "6568656c6c6f",
+    "expected_hex": "6568656c6c6f",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_text_unicode",
+    "description": "CBOR text with UTF-8 (日本)",
+    "input_hex": "66e697a5e69cac",
+    "expected_hex": "66e697a5e69cac",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_bytes_empty",
+    "description": "CBOR empty byte string",
+    "input_hex": "40",
+    "expected_hex": "40",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_bytes_data",
+    "description": "CBOR byte string [0x01, 0x02, 0x03]",
+    "input_hex": "43010203",
+    "expected_hex": "43010203",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_array_empty",
+    "description": "CBOR empty array",
+    "input_hex": "80",
+    "expected_hex": "80",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_array_123",
+    "description": "CBOR array [1, 2, 3]",
+    "input_hex": "83010203",
+    "expected_hex": "83010203",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_array_nested",
+    "description": "CBOR nested array [[1], [2, 3]]",
+    "input_hex": "828101820203",
+    "expected_hex": "828101820203",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_map_empty",
+    "description": "CBOR empty map",
+    "input_hex": "a0",
+    "expected_hex": "a0",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_map_simple",
+    "description": "CBOR map {'a': 1, 'b': 2} (canonical order)",
+    "input_hex": "a2616101616202",
+    "expected_hex": "a2616101616202",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_map_int_keys",
+    "description": "CBOR map with integer keys {1: 'a', 2: 'b'}",
+    "input_hex": "a2016161026162",
+    "expected_hex": "a2016161026162",
+    "expected_error": null
+  },
+  {
+    "id": "cbor_reject_float",
+    "description": "CBOR float should be rejected",
+    "input_hex": "fa47c35000",
+    "expected_hex": "",
+    "expected_error": "Floats are not allowed"
+  },
+  {
+    "id": "cbor_reject_indefinite",
+    "description": "CBOR indefinite-length array should be rejected",
+    "input_hex": "9f010203ff",
+    "expected_hex": "",
+    "expected_error": "Indefinite-length items are forbidden"
+  }
+]

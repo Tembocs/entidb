@@ -326,6 +326,153 @@ impl Database {
     pub fn config(&self) -> &Config {
         &self.config
     }
+
+    // ========================================================================
+    // Backup and Restore
+    // ========================================================================
+
+    /// Creates a backup of the database.
+    ///
+    /// Returns the backup data as bytes that can be saved to a file.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let backup_data = db.backup()?;
+    /// std::fs::write("backup.endb", &backup_data)?;
+    /// ```
+    pub fn backup(&self) -> CoreResult<Vec<u8>> {
+        self.ensure_open()?;
+
+        use crate::backup::{BackupConfig, BackupManager};
+
+        let backup_mgr = BackupManager::new(BackupConfig::default());
+        let current_seq = self.committed_seq();
+
+        let result = backup_mgr.create_backup(&self.segments, current_seq)?;
+        Ok(result.data)
+    }
+
+    /// Creates a backup with custom options.
+    ///
+    /// # Arguments
+    ///
+    /// * `include_tombstones` - Whether to include deleted entities in the backup.
+    pub fn backup_with_options(&self, include_tombstones: bool) -> CoreResult<Vec<u8>> {
+        self.ensure_open()?;
+
+        use crate::backup::{BackupConfig, BackupManager};
+
+        let config = BackupConfig {
+            include_tombstones,
+            compress: false,
+        };
+        let backup_mgr = BackupManager::new(config);
+        let current_seq = self.committed_seq();
+
+        let result = backup_mgr.create_backup(&self.segments, current_seq)?;
+        Ok(result.data)
+    }
+
+    /// Restores entities from a backup into this database.
+    ///
+    /// This merges the backup data into the current database.
+    /// Existing entities with the same ID will be overwritten.
+    ///
+    /// # Arguments
+    ///
+    /// * `backup_data` - The backup data bytes.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let backup_data = std::fs::read("backup.endb")?;
+    /// db.restore(&backup_data)?;
+    /// ```
+    pub fn restore(&self, backup_data: &[u8]) -> CoreResult<RestoreStats> {
+        self.ensure_open()?;
+
+        use crate::backup::{BackupConfig, BackupManager};
+
+        let backup_mgr = BackupManager::new(BackupConfig::default());
+        let result = backup_mgr.restore_from_backup(backup_data)?;
+
+        let mut restored = 0u64;
+        let mut tombstones = 0u64;
+
+        // Import all records in a transaction
+        self.transaction(|txn| {
+            for record in &result.records {
+                let entity_id = EntityId::from_bytes(record.entity_id);
+                if record.is_tombstone() {
+                    txn.delete(record.collection_id, entity_id)?;
+                    tombstones += 1;
+                } else {
+                    txn.put(
+                        record.collection_id,
+                        entity_id,
+                        record.payload.clone(),
+                    )?;
+                    restored += 1;
+                }
+            }
+            Ok(())
+        })?;
+
+        Ok(RestoreStats {
+            entities_restored: restored,
+            tombstones_applied: tombstones,
+            backup_timestamp: result.metadata.timestamp,
+            backup_sequence: result.metadata.sequence.as_u64(),
+        })
+    }
+
+    /// Validates a backup without restoring it.
+    ///
+    /// Returns the backup metadata if valid.
+    pub fn validate_backup(&self, backup_data: &[u8]) -> CoreResult<BackupInfo> {
+        use crate::backup::{BackupConfig, BackupManager};
+
+        let backup_mgr = BackupManager::new(BackupConfig::default());
+        let metadata = backup_mgr.read_metadata(backup_data)?;
+        let valid = backup_mgr.validate_backup(backup_data)?;
+
+        Ok(BackupInfo {
+            valid,
+            timestamp: metadata.timestamp,
+            sequence: metadata.sequence.as_u64(),
+            record_count: metadata.record_count,
+            size: metadata.size,
+        })
+    }
+}
+
+/// Statistics from a restore operation.
+#[derive(Debug, Clone)]
+pub struct RestoreStats {
+    /// Number of entities restored.
+    pub entities_restored: u64,
+    /// Number of tombstones (deletions) applied.
+    pub tombstones_applied: u64,
+    /// Timestamp when the backup was created (Unix millis).
+    pub backup_timestamp: u64,
+    /// Sequence number at the time of backup.
+    pub backup_sequence: u64,
+}
+
+/// Information about a backup.
+#[derive(Debug, Clone)]
+pub struct BackupInfo {
+    /// Whether the backup checksum is valid.
+    pub valid: bool,
+    /// Timestamp when the backup was created (Unix millis).
+    pub timestamp: u64,
+    /// Sequence number at the time of backup.
+    pub sequence: u64,
+    /// Number of records in the backup.
+    pub record_count: u32,
+    /// Size of the backup in bytes.
+    pub size: usize,
 }
 
 impl std::fmt::Debug for Database {
