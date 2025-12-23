@@ -14,10 +14,23 @@ void main() {
       late List<dynamic> vectors;
 
       setUpAll(() {
-        final file = File('../../docs/test_vectors/cbor.json');
-        if (!file.existsSync()) {
+        // Try multiple paths to find test vectors
+        final paths = [
+          '../../../docs/test_vectors/cbor.json',
+          '../../docs/test_vectors/cbor.json',
+          'docs/test_vectors/cbor.json',
+        ];
+        File? file;
+        for (final path in paths) {
+          final f = File(path);
+          if (f.existsSync()) {
+            file = f;
+            break;
+          }
+        }
+        if (file == null) {
           throw StateError(
-            'Test vectors not found. Run from bindings/dart/entidb_dart directory.',
+            'Test vectors not found. Tried paths: ${paths.join(", ")}',
           );
         }
         vectors = jsonDecode(file.readAsStringSync()) as List<dynamic>;
@@ -64,10 +77,23 @@ void main() {
       late List<dynamic> vectors;
 
       setUpAll(() {
-        final file = File('../../docs/test_vectors/entity_id.json');
-        if (!file.existsSync()) {
+        // Try multiple paths to find test vectors
+        final paths = [
+          '../../../docs/test_vectors/entity_id.json',
+          '../../docs/test_vectors/entity_id.json',
+          'docs/test_vectors/entity_id.json',
+        ];
+        File? file;
+        for (final path in paths) {
+          final f = File(path);
+          if (f.existsSync()) {
+            file = f;
+            break;
+          }
+        }
+        if (file == null) {
           throw StateError(
-            'Test vectors not found. Run from bindings/dart/entidb_dart directory.',
+            'Test vectors not found. Tried paths: ${paths.join(", ")}',
           );
         }
         vectors = jsonDecode(file.readAsStringSync()) as List<dynamic>;

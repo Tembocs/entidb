@@ -129,3 +129,22 @@ site/
 # Benchmarks
 /benches/results/
 *.criterion/
+
+# Built native libraries (FFI)
+*.a
+*.lib
+*.exp
+*.pyd
+*.node
+
+# Maturin build artifacts
+bindings/python/*/*.pyd
+bindings/python/*/*.so
+bindings/python/*/.maturin-*
+
+# Dart FFI artifacts  
+bindings/dart/*/native/
+
+# Virtual environments
+.venv/
+.env/
