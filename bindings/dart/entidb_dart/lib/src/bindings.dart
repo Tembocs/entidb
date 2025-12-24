@@ -360,6 +360,126 @@ typedef EntiDbCountDart = int Function(
   Pointer<IntPtr> outCount,
 );
 
+// Checkpoint function
+typedef EntiDbCheckpointNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+);
+typedef EntiDbCheckpointDart = int Function(
+  Pointer<EntiDbHandle> handle,
+);
+
+// Backup functions
+typedef EntiDbBackupNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbBackupDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+typedef EntiDbBackupWithOptionsNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Bool includeTombstones,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbBackupWithOptionsDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  bool includeTombstones,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Restore stats structure
+final class EntiDbRestoreStats extends Struct {
+  @Uint64()
+  external int entitiesRestored;
+
+  @Uint64()
+  external int tombstonesApplied;
+
+  @Uint64()
+  external int backupTimestamp;
+
+  @Uint64()
+  external int backupSequence;
+
+  /// Allocates an empty restore stats struct.
+  static Pointer<EntiDbRestoreStats> allocate() {
+    return calloc<EntiDbRestoreStats>();
+  }
+}
+
+// Backup info structure
+final class EntiDbBackupInfo extends Struct {
+  @Bool()
+  external bool valid;
+
+  @Uint64()
+  external int timestamp;
+
+  @Uint64()
+  external int sequence;
+
+  @Uint32()
+  external int recordCount;
+
+  @IntPtr()
+  external int size;
+
+  /// Allocates an empty backup info struct.
+  static Pointer<EntiDbBackupInfo> allocate() {
+    return calloc<EntiDbBackupInfo>();
+  }
+}
+
+// Restore function
+typedef EntiDbRestoreNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint8> data,
+  IntPtr dataLen,
+  Pointer<EntiDbRestoreStats> outStats,
+);
+typedef EntiDbRestoreDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint8> data,
+  int dataLen,
+  Pointer<EntiDbRestoreStats> outStats,
+);
+
+// Validate backup function
+typedef EntiDbValidateBackupNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint8> data,
+  IntPtr dataLen,
+  Pointer<EntiDbBackupInfo> outInfo,
+);
+typedef EntiDbValidateBackupDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint8> data,
+  int dataLen,
+  Pointer<EntiDbBackupInfo> outInfo,
+);
+
+// Committed sequence function
+typedef EntiDbCommittedSeqNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outSeq,
+);
+typedef EntiDbCommittedSeqDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outSeq,
+);
+
+// Entity count function
+typedef EntiDbEntityCountNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<IntPtr> outCount,
+);
+typedef EntiDbEntityCountDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<IntPtr> outCount,
+);
+
 // ============================================================================
 // Library Loading
 // ============================================================================
@@ -503,6 +623,38 @@ class EntiDbBindings {
 
   late final entidbCount =
       _lib.lookupFunction<EntiDbCountNative, EntiDbCountDart>('entidb_count');
+
+  // Checkpoint function
+  late final entidbCheckpoint =
+      _lib.lookupFunction<EntiDbCheckpointNative, EntiDbCheckpointDart>(
+          'entidb_checkpoint');
+
+  // Backup functions
+  late final entidbBackup = _lib
+      .lookupFunction<EntiDbBackupNative, EntiDbBackupDart>('entidb_backup');
+
+  late final entidbBackupWithOptions = _lib.lookupFunction<
+      EntiDbBackupWithOptionsNative,
+      EntiDbBackupWithOptionsDart>('entidb_backup_with_options');
+
+  // Restore function
+  late final entidbRestore = _lib
+      .lookupFunction<EntiDbRestoreNative, EntiDbRestoreDart>('entidb_restore');
+
+  // Validate backup function
+  late final entidbValidateBackup =
+      _lib.lookupFunction<EntiDbValidateBackupNative, EntiDbValidateBackupDart>(
+          'entidb_validate_backup');
+
+  // Committed sequence function
+  late final entidbCommittedSeq =
+      _lib.lookupFunction<EntiDbCommittedSeqNative, EntiDbCommittedSeqDart>(
+          'entidb_committed_seq');
+
+  // Entity count function
+  late final entidbEntityCount =
+      _lib.lookupFunction<EntiDbEntityCountNative, EntiDbEntityCountDart>(
+          'entidb_entity_count');
 }
 
 /// Cached bindings instance.

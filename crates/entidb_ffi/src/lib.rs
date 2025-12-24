@@ -29,6 +29,11 @@
 //!
 //! Use `entidb_iter_create`, `entidb_iter_has_next`, `entidb_iter_next`,
 //! `entidb_iter_free` to iterate over entities.
+//!
+//! ## Backup/Restore API
+//!
+//! Use `entidb_checkpoint`, `entidb_backup`, `entidb_restore`,
+//! `entidb_validate_backup` for backup and restore operations.
 
 #![warn(missing_docs)]
 

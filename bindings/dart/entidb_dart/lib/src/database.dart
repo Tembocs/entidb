@@ -508,4 +508,295 @@ final class Database {
       throw const EntiDbInvalidError('Database is closed');
     }
   }
+
+  // =========================================================================
+  // Checkpoint, Backup, and Restore
+  // =========================================================================
+
+  /// Creates a checkpoint.
+  ///
+  /// A checkpoint persists all committed data and truncates the WAL.
+  /// After a checkpoint:
+  /// - All committed transactions are durable in segments
+  /// - The WAL is cleared
+  /// - The manifest is updated with the checkpoint sequence
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// db.checkpoint();
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  void checkpoint() {
+    _ensureOpen();
+
+    final result = bindings.entidbCheckpoint(_handle!);
+    checkResult(result);
+  }
+
+  /// Creates a backup of the database.
+  ///
+  /// Returns the backup data as bytes that can be saved to a file.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final backupData = db.backup();
+  /// File('backup.endb').writeAsBytesSync(backupData);
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  Uint8List backup() {
+    _ensureOpen();
+
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      final result = bindings.entidbBackup(_handle!, bufferPtr);
+      checkResult(result);
+
+      final buffer = bufferPtr.ref;
+      if (buffer.isNull) {
+        return Uint8List(0);
+      }
+
+      final data = Uint8List.fromList(buffer.toList());
+      bindings.entidbFreeBuffer(buffer);
+      return data;
+    } finally {
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Creates a backup with custom options.
+  ///
+  /// ## Parameters
+  ///
+  /// - [includeTombstones]: Whether to include deleted entities in the backup.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final backupData = db.backupWithOptions(includeTombstones: true);
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  Uint8List backupWithOptions({bool includeTombstones = false}) {
+    _ensureOpen();
+
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      final result = bindings.entidbBackupWithOptions(
+        _handle!,
+        includeTombstones,
+        bufferPtr,
+      );
+      checkResult(result);
+
+      final buffer = bufferPtr.ref;
+      if (buffer.isNull) {
+        return Uint8List(0);
+      }
+
+      final data = Uint8List.fromList(buffer.toList());
+      bindings.entidbFreeBuffer(buffer);
+      return data;
+    } finally {
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Restores entities from a backup into this database.
+  ///
+  /// This merges the backup data into the current database.
+  /// Existing entities with the same ID will be overwritten.
+  ///
+  /// ## Parameters
+  ///
+  /// - [backupData]: The backup data bytes.
+  ///
+  /// ## Returns
+  ///
+  /// A [RestoreStats] object with information about the restore operation.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final backupData = File('backup.endb').readAsBytesSync();
+  /// final stats = db.restore(backupData);
+  /// print('Restored ${stats.entitiesRestored} entities');
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  RestoreStats restore(Uint8List backupData) {
+    _ensureOpen();
+
+    final dataPtr = calloc<Uint8>(backupData.length);
+    final statsPtr = EntiDbRestoreStats.allocate();
+
+    try {
+      for (var i = 0; i < backupData.length; i++) {
+        dataPtr[i] = backupData[i];
+      }
+
+      final result = bindings.entidbRestore(
+        _handle!,
+        dataPtr,
+        backupData.length,
+        statsPtr,
+      );
+      checkResult(result);
+
+      return RestoreStats._(statsPtr.ref);
+    } finally {
+      calloc.free(dataPtr);
+      calloc.free(statsPtr);
+    }
+  }
+
+  /// Validates a backup without restoring it.
+  ///
+  /// Returns the backup metadata if valid.
+  ///
+  /// ## Parameters
+  ///
+  /// - [backupData]: The backup data bytes.
+  ///
+  /// ## Returns
+  ///
+  /// A [BackupInfo] object with metadata about the backup.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final info = db.validateBackup(backupData);
+  /// if (info.valid) {
+  ///   print('Backup has ${info.recordCount} records');
+  /// }
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  BackupInfo validateBackup(Uint8List backupData) {
+    _ensureOpen();
+
+    final dataPtr = calloc<Uint8>(backupData.length);
+    final infoPtr = EntiDbBackupInfo.allocate();
+
+    try {
+      for (var i = 0; i < backupData.length; i++) {
+        dataPtr[i] = backupData[i];
+      }
+
+      final result = bindings.entidbValidateBackup(
+        _handle!,
+        dataPtr,
+        backupData.length,
+        infoPtr,
+      );
+      checkResult(result);
+
+      return BackupInfo._(infoPtr.ref);
+    } finally {
+      calloc.free(dataPtr);
+      calloc.free(infoPtr);
+    }
+  }
+
+  /// Returns the current committed sequence number.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// print('Committed seq: ${db.committedSeq}');
+  /// ```
+  int get committedSeq {
+    _ensureOpen();
+
+    final seqPtr = calloc<Uint64>();
+
+    try {
+      final result = bindings.entidbCommittedSeq(_handle!, seqPtr);
+      checkResult(result);
+      return seqPtr.value;
+    } finally {
+      calloc.free(seqPtr);
+    }
+  }
+
+  /// Returns the total entity count.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// print('Total entities: ${db.entityCount}');
+  /// ```
+  int get entityCount {
+    _ensureOpen();
+
+    final countPtr = calloc<IntPtr>();
+
+    try {
+      final result = bindings.entidbEntityCount(_handle!, countPtr);
+      checkResult(result);
+      return countPtr.value;
+    } finally {
+      calloc.free(countPtr);
+    }
+  }
+}
+
+/// Statistics from a restore operation.
+final class RestoreStats {
+  /// Number of entities restored.
+  final int entitiesRestored;
+
+  /// Number of tombstones (deletions) applied.
+  final int tombstonesApplied;
+
+  /// Timestamp when the backup was created (Unix millis).
+  final int backupTimestamp;
+
+  /// Sequence number at the time of backup.
+  final int backupSequence;
+
+  RestoreStats._(EntiDbRestoreStats ref)
+      : entitiesRestored = ref.entitiesRestored,
+        tombstonesApplied = ref.tombstonesApplied,
+        backupTimestamp = ref.backupTimestamp,
+        backupSequence = ref.backupSequence;
+
+  @override
+  String toString() =>
+      'RestoreStats(entitiesRestored: $entitiesRestored, tombstonesApplied: $tombstonesApplied, backupTimestamp: $backupTimestamp, backupSequence: $backupSequence)';
+}
+
+/// Information about a backup.
+final class BackupInfo {
+  /// Whether the backup checksum is valid.
+  final bool valid;
+
+  /// Timestamp when the backup was created (Unix millis).
+  final int timestamp;
+
+  /// Sequence number at the time of backup.
+  final int sequence;
+
+  /// Number of records in the backup.
+  final int recordCount;
+
+  /// Size of the backup in bytes.
+  final int size;
+
+  BackupInfo._(EntiDbBackupInfo ref)
+      : valid = ref.valid,
+        timestamp = ref.timestamp,
+        sequence = ref.sequence,
+        recordCount = ref.recordCount,
+        size = ref.size;
+
+  @override
+  String toString() =>
+      'BackupInfo(valid: $valid, timestamp: $timestamp, sequence: $sequence, recordCount: $recordCount, size: $size)';
 }

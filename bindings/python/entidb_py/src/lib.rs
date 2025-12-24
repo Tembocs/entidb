@@ -501,6 +501,116 @@ impl Database {
         self.inner.is_open()
     }
 
+    /// Creates a checkpoint.
+    ///
+    /// A checkpoint persists all committed data and truncates the WAL.
+    /// After a checkpoint:
+    /// - All committed transactions are durable in segments
+    /// - The WAL is cleared
+    /// - The manifest is updated with the checkpoint sequence
+    fn checkpoint(&self) -> PyResult<()> {
+        self.inner
+            .checkpoint()
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Creates a backup of the database.
+    ///
+    /// Returns the backup data as bytes that can be saved to a file.
+    ///
+    /// Example:
+    /// ```python
+    /// backup_data = db.backup()
+    /// with open('backup.endb', 'wb') as f:
+    ///     f.write(backup_data)
+    /// ```
+    fn backup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.inner
+            .backup()
+            .map(|data| PyBytes::new(py, &data))
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Creates a backup with custom options.
+    ///
+    /// Args:
+    ///     include_tombstones: Whether to include deleted entities in the backup.
+    #[pyo3(signature = (include_tombstones=false))]
+    fn backup_with_options<'py>(
+        &self,
+        py: Python<'py>,
+        include_tombstones: bool,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.inner
+            .backup_with_options(include_tombstones)
+            .map(|data| PyBytes::new(py, &data))
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Restores entities from a backup into this database.
+    ///
+    /// This merges the backup data into the current database.
+    /// Existing entities with the same ID will be overwritten.
+    ///
+    /// Args:
+    ///     backup_data: The backup data bytes.
+    ///
+    /// Returns:
+    ///     RestoreStats with information about the restore operation.
+    ///
+    /// Example:
+    /// ```python
+    /// with open('backup.endb', 'rb') as f:
+    ///     backup_data = f.read()
+    /// stats = db.restore(backup_data)
+    /// print(f"Restored {stats.entities_restored} entities")
+    /// ```
+    fn restore(&self, backup_data: &[u8]) -> PyResult<RestoreStats> {
+        self.inner
+            .restore(backup_data)
+            .map(|stats| RestoreStats {
+                entities_restored: stats.entities_restored,
+                tombstones_applied: stats.tombstones_applied,
+                backup_timestamp: stats.backup_timestamp,
+                backup_sequence: stats.backup_sequence,
+            })
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Validates a backup without restoring it.
+    ///
+    /// Returns the backup metadata if valid.
+    ///
+    /// Args:
+    ///     backup_data: The backup data bytes.
+    ///
+    /// Returns:
+    ///     BackupInfo with metadata about the backup.
+    fn validate_backup(&self, backup_data: &[u8]) -> PyResult<BackupInfo> {
+        self.inner
+            .validate_backup(backup_data)
+            .map(|info| BackupInfo {
+                valid: info.valid,
+                timestamp: info.timestamp,
+                sequence: info.sequence,
+                record_count: info.record_count,
+                size: info.size,
+            })
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Returns the current committed sequence number.
+    #[getter]
+    fn committed_seq(&self) -> u64 {
+        self.inner.committed_seq().as_u64()
+    }
+
+    /// Returns the total entity count.
+    #[getter]
+    fn entity_count(&self) -> usize {
+        self.inner.entity_count()
+    }
+
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -517,6 +627,72 @@ impl Database {
     }
 }
 
+/// Statistics from a restore operation.
+#[pyclass]
+#[derive(Clone)]
+pub struct RestoreStats {
+    /// Number of entities restored.
+    #[pyo3(get)]
+    pub entities_restored: u64,
+    /// Number of tombstones (deletions) applied.
+    #[pyo3(get)]
+    pub tombstones_applied: u64,
+    /// Timestamp when the backup was created (Unix millis).
+    #[pyo3(get)]
+    pub backup_timestamp: u64,
+    /// Sequence number at the time of backup.
+    #[pyo3(get)]
+    pub backup_sequence: u64,
+}
+
+#[pymethods]
+impl RestoreStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "RestoreStats(entities_restored={}, tombstones_applied={}, backup_timestamp={}, backup_sequence={})",
+            self.entities_restored,
+            self.tombstones_applied,
+            self.backup_timestamp,
+            self.backup_sequence
+        )
+    }
+}
+
+/// Information about a backup.
+#[pyclass]
+#[derive(Clone)]
+pub struct BackupInfo {
+    /// Whether the backup checksum is valid.
+    #[pyo3(get)]
+    pub valid: bool,
+    /// Timestamp when the backup was created (Unix millis).
+    #[pyo3(get)]
+    pub timestamp: u64,
+    /// Sequence number at the time of backup.
+    #[pyo3(get)]
+    pub sequence: u64,
+    /// Number of records in the backup.
+    #[pyo3(get)]
+    pub record_count: u32,
+    /// Size of the backup in bytes.
+    #[pyo3(get)]
+    pub size: usize,
+}
+
+#[pymethods]
+impl BackupInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "BackupInfo(valid={}, timestamp={}, sequence={}, record_count={}, size={})",
+            self.valid,
+            self.timestamp,
+            self.sequence,
+            self.record_count,
+            self.size
+        )
+    }
+}
+
 /// Python module initialization.
 #[pymodule]
 fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -525,6 +701,8 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Transaction>()?;
     m.add_class::<Database>()?;
     m.add_class::<EntityIterator>()?;
+    m.add_class::<RestoreStats>()?;
+    m.add_class::<BackupInfo>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     Ok(())
 }

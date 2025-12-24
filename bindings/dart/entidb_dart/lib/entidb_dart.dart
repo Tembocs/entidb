@@ -49,7 +49,7 @@
 /// ```
 library entidb_dart;
 
-export 'src/database.dart' show Database;
+export 'src/database.dart' show Database, RestoreStats, BackupInfo;
 export 'src/collection.dart' show Collection;
 export 'src/entity_id.dart' show EntityId;
 export 'src/transaction.dart' show Transaction;

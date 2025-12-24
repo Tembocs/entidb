@@ -451,4 +451,275 @@ void main() {
       }
     });
   });
+
+  group('Checkpoint', () {
+    test('checkpoint succeeds on clean database', () {
+      final db = Database.openMemory();
+      try {
+        // Should not throw
+        db.checkpoint();
+      } finally {
+        db.close();
+      }
+    });
+
+    test('checkpoint after writes', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add some data
+        for (var i = 0; i < 10; i++) {
+          db.put(users, EntityId.generate(), Uint8List.fromList([i]));
+        }
+
+        // Checkpoint should succeed
+        db.checkpoint();
+
+        // Data should still be accessible
+        expect(db.count(users), equals(10));
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  group('Backup and Restore', () {
+    test('backup creates data', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add some data
+        final id = EntityId.generate();
+        db.put(users, id, Uint8List.fromList([1, 2, 3, 4, 5]));
+
+        // Create backup
+        final backupData = db.backup();
+        expect(backupData, isNotEmpty);
+      } finally {
+        db.close();
+      }
+    });
+
+    test('backup and restore roundtrip', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add some data
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        db.put(users, id1, Uint8List.fromList([1, 2, 3]));
+        db.put(users, id2, Uint8List.fromList([4, 5, 6]));
+
+        // Create backup
+        final backupData = db.backup();
+
+        // Create new database and restore
+        final db2 = Database.openMemory();
+        try {
+          final stats = db2.restore(backupData);
+          expect(stats.entitiesRestored, equals(2));
+
+          // Verify data
+          final users2 = db2.collection('users');
+          expect(db2.get(users2, id1), equals(Uint8List.fromList([1, 2, 3])));
+          expect(db2.get(users2, id2), equals(Uint8List.fromList([4, 5, 6])));
+        } finally {
+          db2.close();
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+    test('backup with options includes tombstones', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add and delete some data
+        final id = EntityId.generate();
+        db.put(users, id, Uint8List.fromList([1, 2, 3]));
+        db.delete(users, id);
+
+        // Backup without tombstones
+        final backupWithout = db.backupWithOptions(includeTombstones: false);
+
+        // Backup with tombstones
+        final backupWith = db.backupWithOptions(includeTombstones: true);
+
+        // Backup with tombstones should be larger or equal
+        expect(backupWith.length, greaterThanOrEqualTo(backupWithout.length));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('restore returns valid stats', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add data to multiple collections
+        for (var i = 0; i < 5; i++) {
+          db.put(users, EntityId.generate(), Uint8List.fromList([i]));
+        }
+
+        final notes = db.collection('notes');
+        for (var i = 0; i < 3; i++) {
+          db.put(notes, EntityId.generate(), Uint8List.fromList([i + 10]));
+        }
+
+        // Create backup and restore to new db
+        final backupData = db.backup();
+
+        final db2 = Database.openMemory();
+        try {
+          final stats = db2.restore(backupData);
+          expect(stats.entitiesRestored, equals(8));
+          expect(stats.tombstonesApplied, greaterThanOrEqualTo(0));
+          expect(stats.backupSequence, greaterThan(0));
+        } finally {
+          db2.close();
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+    test('validate backup returns info', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+
+        // Add data
+        for (var i = 0; i < 5; i++) {
+          db.put(users, EntityId.generate(), Uint8List.fromList([i]));
+        }
+
+        // Create backup
+        final backupData = db.backup();
+
+        // Validate backup
+        final info = db.validateBackup(backupData);
+        expect(info.recordCount, greaterThanOrEqualTo(5));
+        expect(info.valid, isTrue);
+        expect(info.sequence, greaterThan(0));
+        expect(info.size, equals(backupData.length));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('validate backup detects invalid data', () {
+      final db = Database.openMemory();
+      try {
+        // Invalid backup data
+        final invalidData = Uint8List.fromList([0, 1, 2, 3, 4, 5]);
+
+        // Should throw for invalid backup
+        expect(
+          () => db.validateBackup(invalidData),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    test('restore to non-empty database', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        final id = EntityId.generate();
+        db.put(users, id, Uint8List.fromList([1, 2, 3]));
+
+        final backupData = db.backup();
+
+        // Create new database with existing data
+        final db2 = Database.openMemory();
+        try {
+          final existingUsers = db2.collection('users');
+          db2.put(existingUsers, EntityId.generate(),
+              Uint8List.fromList([9, 8, 7]));
+
+          // Restore should add data
+          final stats = db2.restore(backupData);
+          expect(stats.entitiesRestored, equals(1));
+
+          // Should now have both entities
+          expect(db2.count(existingUsers), equals(2));
+        } finally {
+          db2.close();
+        }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  group('Database Properties', () {
+    test('committedSeq returns valid sequence', () {
+      final db = Database.openMemory();
+      try {
+        final initialSeq = db.committedSeq;
+        expect(initialSeq, greaterThanOrEqualTo(0));
+
+        // Write some data
+        final users = db.collection('users');
+        db.put(users, EntityId.generate(), Uint8List.fromList([1]));
+
+        // Sequence should advance
+        final newSeq = db.committedSeq;
+        expect(newSeq, greaterThan(initialSeq));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('entityCount returns correct count', () {
+      final db = Database.openMemory();
+      try {
+        expect(db.entityCount, equals(0));
+
+        final users = db.collection('users');
+        for (var i = 0; i < 5; i++) {
+          db.put(users, EntityId.generate(), Uint8List.fromList([i]));
+        }
+
+        expect(db.entityCount, equals(5));
+
+        final notes = db.collection('notes');
+        for (var i = 0; i < 3; i++) {
+          db.put(notes, EntityId.generate(), Uint8List.fromList([i]));
+        }
+
+        expect(db.entityCount, equals(8));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('entityCount includes tombstones until compaction', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        final id = EntityId.generate();
+
+        db.put(users, id, Uint8List.fromList([1, 2, 3]));
+        expect(db.entityCount, equals(1));
+
+        db.delete(users, id);
+        // Entity count may still include tombstone
+        expect(db.entityCount, greaterThanOrEqualTo(0));
+
+        // But the entity should not be retrievable
+        expect(db.get(users, id), isNull);
+      } finally {
+        db.close();
+      }
+    });
+  });
 }

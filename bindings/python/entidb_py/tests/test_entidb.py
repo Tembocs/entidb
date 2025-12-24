@@ -6,7 +6,16 @@ import pytest
 # Run: maturin develop
 
 try:
-    from entidb import Database, EntityId, Collection, Transaction, EntityIterator, version
+    from entidb import (
+        Database,
+        EntityId,
+        Collection,
+        Transaction,
+        EntityIterator,
+        RestoreStats,
+        BackupInfo,
+        version,
+    )
     ENTIDB_AVAILABLE = True
 except ImportError:
     ENTIDB_AVAILABLE = False
@@ -274,3 +283,165 @@ class TestEntityIterator:
 
             items = list(iterator)
             assert items == []
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestCheckpoint:
+    def test_checkpoint(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            db.put(users, entity_id, b"checkpoint test")
+
+            # Checkpoint should succeed
+            db.checkpoint()
+
+            # Data should still be accessible
+            assert db.get(users, entity_id) == b"checkpoint test"
+
+    def test_checkpoint_updates_sequence(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+
+            # Add some data
+            db.put(users, EntityId(), b"data1")
+            seq1 = db.committed_seq
+
+            # Checkpoint
+            db.checkpoint()
+
+            # Sequence should be the same (checkpoint doesn't create new commits)
+            assert db.committed_seq >= seq1
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestBackupRestore:
+    def test_backup(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            db.put(users, entity_id, b"backup test")
+
+            backup_data = db.backup()
+            assert isinstance(backup_data, bytes)
+            assert len(backup_data) > 0
+
+    def test_backup_with_options(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            db.put(users, entity_id, b"data")
+
+            # Backup without tombstones
+            backup1 = db.backup_with_options(include_tombstones=False)
+            assert len(backup1) > 0
+
+            # Backup with tombstones
+            backup2 = db.backup_with_options(include_tombstones=True)
+            assert len(backup2) > 0
+
+    def test_restore(self):
+        # Create first database with data
+        with Database.open_memory() as db1:
+            users = db1.collection("users")
+            entity_id = EntityId()
+
+            db1.put(users, entity_id, b"original data")
+
+            # Create backup
+            backup_data = db1.backup()
+
+            # Create second database and restore
+            with Database.open_memory() as db2:
+                # Need to create collection first
+                db2.collection("users")
+
+                stats = db2.restore(backup_data)
+
+                assert isinstance(stats, RestoreStats)
+                assert stats.entities_restored == 1
+                assert stats.tombstones_applied == 0
+
+                # Data should be accessible
+                result = db2.get(db2.collection("users"), entity_id)
+                assert result == b"original data"
+
+    def test_restore_stats(self):
+        with Database.open_memory() as db1:
+            users = db1.collection("users")
+
+            # Add multiple entities
+            for i in range(5):
+                db1.put(users, EntityId(), f"data-{i}".encode())
+
+            backup_data = db1.backup()
+
+            with Database.open_memory() as db2:
+                db2.collection("users")
+                stats = db2.restore(backup_data)
+
+                assert stats.entities_restored == 5
+                assert stats.backup_timestamp > 0
+                assert stats.backup_sequence >= 0
+
+    def test_validate_backup(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.put(users, EntityId(), b"validation test")
+
+            backup_data = db.backup()
+
+            info = db.validate_backup(backup_data)
+
+            assert isinstance(info, BackupInfo)
+            assert info.valid is True
+            assert info.record_count > 0
+            assert info.size > 0
+            assert info.timestamp > 0
+
+    def test_validate_invalid_backup(self):
+        with Database.open_memory() as db:
+            # Try to validate garbage data
+            with pytest.raises(IOError):
+                db.validate_backup(b"not a valid backup")
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestDatabaseProperties:
+    def test_committed_seq(self):
+        with Database.open_memory() as db:
+            initial_seq = db.committed_seq
+            assert initial_seq >= 0
+
+            users = db.collection("users")
+            db.put(users, EntityId(), b"data")
+
+            # Sequence should increase after commit
+            assert db.committed_seq > initial_seq
+
+    def test_entity_count(self):
+        with Database.open_memory() as db:
+            assert db.entity_count == 0
+
+            users = db.collection("users")
+            for i in range(3):
+                db.put(users, EntityId(), f"data-{i}".encode())
+
+            assert db.entity_count == 3
+
+    def test_entity_count_after_delete(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            db.put(users, entity_id, b"data")
+            assert db.entity_count == 1
+
+            db.delete(users, entity_id)
+            # Note: Entity count may not decrease immediately after delete
+            # because tombstones are still tracked until compaction
+            # The entity should not be retrievable, which is the key invariant
+            assert db.get(users, entity_id) is None
