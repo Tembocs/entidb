@@ -6,11 +6,14 @@ use entidb_core::{
     CollectionId, Config, Database as CoreDatabase, EntityId as CoreEntityId,
 };
 use entidb_storage::FileBackend;
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyStopIteration, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Library version.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Entity ID - a 16-byte unique identifier.
 #[pyclass]
@@ -107,6 +110,7 @@ pub struct Transaction {
     db: Arc<CoreDatabase>,
     writes: Vec<(u32, [u8; 16], Option<Vec<u8>>)>,
     committed: bool,
+    aborted: bool,
 }
 
 #[pymethods]
@@ -114,7 +118,10 @@ impl Transaction {
     /// Puts an entity in a collection.
     fn put(&mut self, collection: &Collection, entity_id: &EntityId, data: &[u8]) -> PyResult<()> {
         if self.committed {
-            return Err(PyRuntimeError::new_err("Transaction already completed"));
+            return Err(PyRuntimeError::new_err("Transaction already committed"));
+        }
+        if self.aborted {
+            return Err(PyRuntimeError::new_err("Transaction already aborted"));
         }
         self.writes.push((
             collection.id,
@@ -127,7 +134,10 @@ impl Transaction {
     /// Deletes an entity from a collection.
     fn delete(&mut self, collection: &Collection, entity_id: &EntityId) -> PyResult<()> {
         if self.committed {
-            return Err(PyRuntimeError::new_err("Transaction already completed"));
+            return Err(PyRuntimeError::new_err("Transaction already committed"));
+        }
+        if self.aborted {
+            return Err(PyRuntimeError::new_err("Transaction already aborted"));
         }
         self.writes
             .push((collection.id, *entity_id.inner.as_bytes(), None));
@@ -160,6 +170,107 @@ impl Transaction {
             .get(coll, ent)
             .map(|opt| opt.map(|data| PyBytes::new(py, &data)))
             .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Commits the transaction.
+    fn commit(&mut self) -> PyResult<()> {
+        if self.committed {
+            return Err(PyRuntimeError::new_err("Transaction already committed"));
+        }
+        if self.aborted {
+            return Err(PyRuntimeError::new_err("Transaction already aborted"));
+        }
+
+        let writes = std::mem::take(&mut self.writes);
+        self.committed = true;
+
+        self.db
+            .transaction(|core_txn| {
+                for (coll_id, ent_id, payload) in writes {
+                    let coll = CollectionId::new(coll_id);
+                    let ent = CoreEntityId::from_bytes(ent_id);
+
+                    match payload {
+                        Some(data) => core_txn.put(coll, ent, data)?,
+                        None => core_txn.delete(coll, ent)?,
+                    }
+                }
+                Ok(())
+            })
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Aborts the transaction, discarding all changes.
+    fn abort(&mut self) {
+        self.writes.clear();
+        self.aborted = true;
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    #[pyo3(signature = (exc_type=None, _exc_val=None, _exc_tb=None))]
+    fn __exit__(
+        &mut self,
+        exc_type: Option<PyObject>,
+        _exc_val: Option<PyObject>,
+        _exc_tb: Option<PyObject>,
+    ) -> PyResult<bool> {
+        if !self.committed && !self.aborted {
+            if exc_type.is_some() {
+                // Exception occurred, abort the transaction
+                self.abort();
+            } else {
+                // No exception, commit the transaction
+                self.commit()?;
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Iterator over entities in a collection.
+///
+/// Memory-efficient iteration that doesn't load all entities at once.
+/// Use `Database.iter()` to create an iterator.
+#[pyclass]
+pub struct EntityIterator {
+    entities: Vec<(CoreEntityId, Vec<u8>)>,
+    index: usize,
+}
+
+#[pymethods]
+impl EntityIterator {
+    /// Returns self as iterator.
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    /// Returns the next entity or raises StopIteration.
+    fn __next__<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        py: Python<'py>,
+    ) -> PyResult<(EntityId, Bound<'py, PyBytes>)> {
+        if slf.index >= slf.entities.len() {
+            return Err(PyStopIteration::new_err(()));
+        }
+
+        let index = slf.index;
+        slf.index += 1;
+
+        let (id, data) = &slf.entities[index];
+        Ok((EntityId { inner: *id }, PyBytes::new(py, data)))
+    }
+
+    /// Returns the number of remaining entities.
+    fn remaining(&self) -> usize {
+        self.entities.len().saturating_sub(self.index)
+    }
+
+    /// Returns the total number of entities.
+    fn count(&self) -> usize {
+        self.entities.len()
     }
 }
 
@@ -337,44 +448,44 @@ impl Database {
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
-    /// Executes a function within a transaction.
+    /// Returns an iterator over entities in a collection.
+    ///
+    /// This is more memory-efficient than `list()` for large collections
+    /// as it supports lazy iteration.
+    fn iter(&self, collection: &Collection) -> PyResult<EntityIterator> {
+        let coll = CollectionId::new(collection.id);
+
+        self.inner
+            .list(coll)
+            .map(|entities| EntityIterator { entities, index: 0 })
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Creates a new transaction.
+    ///
+    /// Transactions support context manager protocol and automatically
+    /// commit on success or abort on exception.
     ///
     /// Usage:
     /// ```python
     /// with db.transaction() as txn:
     ///     txn.put(collection, entity_id, data)
+    ///     # auto-commits on exit
+    /// ```
+    ///
+    /// Or manually:
+    /// ```python
+    /// txn = db.transaction()
+    /// txn.put(collection, entity_id, data)
+    /// txn.commit()  # or txn.abort()
     /// ```
     fn transaction(&self) -> Transaction {
         Transaction {
             db: Arc::clone(&self.inner),
             writes: Vec::new(),
             committed: false,
+            aborted: false,
         }
-    }
-
-    /// Commits a transaction.
-    fn commit(&self, txn: &mut Transaction) -> PyResult<()> {
-        if txn.committed {
-            return Err(PyRuntimeError::new_err("Transaction already committed"));
-        }
-
-        let writes = std::mem::take(&mut txn.writes);
-        txn.committed = true;
-
-        self.inner
-            .transaction(|core_txn| {
-                for (coll_id, ent_id, payload) in writes {
-                    let coll = CollectionId::new(coll_id);
-                    let ent = CoreEntityId::from_bytes(ent_id);
-
-                    match payload {
-                        Some(data) => core_txn.put(coll, ent, data)?,
-                        None => core_txn.delete(coll, ent)?,
-                    }
-                }
-                Ok(())
-            })
-            .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Closes the database.
@@ -413,5 +524,13 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Collection>()?;
     m.add_class::<Transaction>()?;
     m.add_class::<Database>()?;
+    m.add_class::<EntityIterator>()?;
+    m.add_function(wrap_pyfunction!(version, m)?)?;
     Ok(())
+}
+
+/// Returns the EntiDB library version.
+#[pyfunction]
+fn version() -> &'static str {
+    VERSION
 }

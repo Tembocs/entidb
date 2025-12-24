@@ -189,43 +189,45 @@ print(f"Users: {db.count(users)}")
 
 Creates a new transaction for batched operations.
 
+Transactions support the context manager protocol and automatically
+commit on success or abort on exception.
+
 **Returns:** A `Transaction` object
 
-**Example:**
+**Example (context manager, recommended):**
+```python
+with db.transaction() as txn:
+    txn.put(users, id1, data1)
+    txn.put(users, id2, data2)
+    # auto-commits on exit
+```
+
+**Example (manual):**
 ```python
 txn = db.transaction()
 txn.put(users, id1, data1)
 txn.put(users, id2, data2)
-db.commit(txn)
+txn.commit()  # or txn.abort()
 ```
 
-##### `commit(txn: Transaction) -> None`
+##### `iter(collection: Collection) -> EntityIterator`
 
-Commits a transaction atomically.
+Returns an iterator over entities in a collection.
+
+More memory-efficient than `list()` for large collections
+as it supports lazy iteration.
 
 **Parameters:**
-- `txn`: The transaction to commit
+- `collection`: The collection to iterate
 
-**Raises:** `RuntimeError` if transaction already committed
+**Returns:** An `EntityIterator` object
 
 **Example:**
 ```python
-txn = db.transaction()
-txn.put(users, user_id, data)
-db.commit(txn)
+for entity_id, data in db.iter(users):
+    print(f"Entity: {entity_id}")
 ```
 
-##### `close() -> None`
-
-Closes the database and releases resources.
-
-#### Context Manager
-
-`Database` supports the context manager protocol:
-
-```python
-with Database.open_memory() as db:
-    # ... use database
 # Database is automatically closed
 ```
 
@@ -326,7 +328,7 @@ Represents a named collection of entities.
 
 ### Transaction
 
-A database transaction for batched operations.
+A database transaction for batched operations. Supports context manager protocol.
 
 #### Methods
 
@@ -342,6 +344,70 @@ Deletes an entity within this transaction.
 
 Gets an entity, seeing uncommitted writes in this transaction.
 
+##### `commit() -> None`
+
+Commits the transaction, making all changes permanent.
+
+**Raises:** `RuntimeError` if already committed or aborted
+
+##### `abort() -> None`
+
+Aborts the transaction, discarding all changes.
+
+#### Context Manager
+
+Transactions support the context manager protocol:
+
+```python
+with db.transaction() as txn:
+    txn.put(users, id1, data1)
+    txn.put(users, id2, data2)
+    # auto-commits on successful exit
+    # auto-aborts on exception
+```
+
+---
+
+### EntityIterator
+
+An iterator over entities in a collection.
+
+#### Methods
+
+##### `remaining() -> int`
+
+Returns the number of remaining entities.
+
+##### `count() -> int`
+
+Returns the total number of entities (not remaining).
+
+#### Iterator Protocol
+
+Implements Python's iterator protocol (`__iter__` and `__next__`).
+
+**Example:**
+```python
+for entity_id, data in db.iter(users):
+    print(f"Entity: {entity_id}")
+```
+
+---
+
+## Functions
+
+### `version() -> str`
+
+Returns the EntiDB library version.
+
+**Returns:** Version string (e.g., "0.1.0")
+
+**Example:**
+```python
+from entidb import version
+print(f"EntiDB version: {version()}")
+```
+
 ---
 
 ## Error Handling
@@ -355,14 +421,17 @@ try:
 except IOError as e:
     print(f"Failed to open: {e}")
 
-# Transactions automatically rollback on exception
-try:
-    txn = db.transaction()
-    txn.put(users, id1, data1)
-    raise ValueError("Abort!")
-    db.commit(txn)  # Never reached
-except ValueError:
-    pass  # Transaction was not committed
+# Transactions automatically abort on exception when using context manager
+with Database.open_memory() as db:
+    users = db.collection("users")
+    
+    try:
+        with db.transaction() as txn:
+            txn.put(users, EntityId(), b"data")
+            raise ValueError("Abort!")
+            # Transaction is auto-aborted due to exception
+    except ValueError:
+        pass  # Data was not committed
 ```
 
 ---
@@ -376,22 +445,18 @@ except ValueError:
 with Database.open_memory() as db:
     # ... use database
 
-# Alternative: manual close
-db = Database.open_memory()
-try:
-    # ... use database
-finally:
-    db.close()
+# Good: transaction auto-commits
+with db.transaction() as txn:
+    txn.put(users, EntityId(), b"data")
 ```
 
 ### 2. Batch Operations in Transactions
 
 ```python
 # Good: atomic and efficient
-txn = db.transaction()
-for i in range(1000):
-    txn.put(items, EntityId(), data)
-db.commit(txn)
+with db.transaction() as txn:
+    for i in range(1000):
+        txn.put(items, EntityId(), data)
 
 # Bad: 1000 separate transactions
 for i in range(1000):

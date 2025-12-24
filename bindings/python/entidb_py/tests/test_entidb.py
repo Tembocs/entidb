@@ -6,10 +6,18 @@ import pytest
 # Run: maturin develop
 
 try:
-    from entidb import Database, EntityId, Collection, Transaction
+    from entidb import Database, EntityId, Collection, Transaction, EntityIterator, version
     ENTIDB_AVAILABLE = True
 except ImportError:
     ENTIDB_AVAILABLE = False
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestVersion:
+    def test_version(self):
+        ver = version()
+        assert isinstance(ver, str)
+        assert len(ver) > 0
 
 
 @pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
@@ -128,7 +136,7 @@ class TestTransaction:
 
             txn = db.transaction()
             txn.put(users, entity_id, b"txn data")
-            db.commit(txn)
+            txn.commit()
 
             assert db.get(users, entity_id) == b"txn data"
 
@@ -163,7 +171,7 @@ class TestTransaction:
             txn = db.transaction()
             for i, entity_id in enumerate(ids):
                 txn.put(users, entity_id, f"data-{i}".encode())
-            db.commit(txn)
+            txn.commit()
 
             assert db.count(users) == 3
 
@@ -182,7 +190,87 @@ class TestTransaction:
             # Transaction should see the delete
             assert txn.get(users, entity_id) is None
 
-            db.commit(txn)
+            txn.commit()
 
             # After commit, should be deleted
             assert db.get(users, entity_id) is None
+
+    def test_abort(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            txn = db.transaction()
+            txn.put(users, entity_id, b"aborted data")
+            txn.abort()
+
+            # Aborted transaction should not persist
+            assert db.get(users, entity_id) is None
+
+    def test_context_manager_commit(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            with db.transaction() as txn:
+                txn.put(users, entity_id, b"context data")
+
+            # Should be committed after context exit
+            assert db.get(users, entity_id) == b"context data"
+
+    def test_context_manager_abort_on_exception(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            entity_id = EntityId()
+
+            try:
+                with db.transaction() as txn:
+                    txn.put(users, entity_id, b"error data")
+                    raise ValueError("simulated error")
+            except ValueError:
+                pass
+
+            # Should not be committed due to exception
+            assert db.get(users, entity_id) is None
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestEntityIterator:
+    def test_iter(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+
+            ids = [EntityId() for _ in range(3)]
+            for i, entity_id in enumerate(ids):
+                db.put(users, entity_id, f"data-{i}".encode())
+
+            iterator = db.iter(users)
+            count = 0
+            for entity_id, data in iterator:
+                count += 1
+                assert isinstance(entity_id, EntityId)
+                assert isinstance(data, bytes)
+
+            assert count == 3
+
+    def test_remaining(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+
+            for i in range(5):
+                db.put(users, EntityId(), f"data-{i}".encode())
+
+            iterator = db.iter(users)
+            assert iterator.remaining() == 5
+            assert iterator.count() == 5
+
+            next(iterator)
+            assert iterator.remaining() == 4
+
+    def test_empty_collection(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            iterator = db.iter(users)
+
+            items = list(iterator)
+            assert items == []
