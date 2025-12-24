@@ -337,6 +337,127 @@ impl Database {
         Ok(())
     }
 
+    /// Creates a backup of the database.
+    ///
+    /// Returns the backup data as a Uint8Array that can be saved or transferred.
+    /// Use `restore()` to restore from a backup.
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const backup = db.backup();
+    /// // Save backup to a file or send to server
+    /// const blob = new Blob([backup], { type: 'application/octet-stream' });
+    /// ```
+    #[wasm_bindgen]
+    pub fn backup(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        let db = self.inner.borrow();
+        let data = db
+            .backup()
+            .map_err(|e| JsValue::from_str(&format!("Failed to create backup: {}", e)))?;
+        Ok(js_sys::Uint8Array::from(data.as_slice()))
+    }
+
+    /// Creates a backup with custom options.
+    ///
+    /// # Arguments
+    ///
+    /// * `include_tombstones` - Whether to include deleted entities
+    #[wasm_bindgen(js_name = backupWithOptions)]
+    pub fn backup_with_options(&self, include_tombstones: bool) -> Result<js_sys::Uint8Array, JsValue> {
+        let db = self.inner.borrow();
+        let data = db
+            .backup_with_options(include_tombstones)
+            .map_err(|e| JsValue::from_str(&format!("Failed to create backup: {}", e)))?;
+        Ok(js_sys::Uint8Array::from(data.as_slice()))
+    }
+
+    /// Restores the database from a backup.
+    ///
+    /// This replaces all current data with the backup data.
+    /// The backup must have been created with the `backup()` method.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The backup data as a Uint8Array
+    ///
+    /// # Returns
+    ///
+    /// The number of entities restored.
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const restoredCount = db.restore(backupData);
+    /// console.log(`Restored ${restoredCount} entities`);
+    /// ```
+    #[wasm_bindgen]
+    pub fn restore(&self, data: &[u8]) -> Result<u32, JsValue> {
+        let db = self.inner.borrow();
+        let stats = db
+            .restore(data)
+            .map_err(|e| JsValue::from_str(&format!("Failed to restore from backup: {}", e)))?;
+        Ok(stats.entities_restored as u32)
+    }
+
+    /// Validates backup data without restoring it.
+    ///
+    /// Returns information about the backup if valid.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The backup data to validate
+    ///
+    /// # Returns
+    ///
+    /// An object with backup information: { valid: boolean, recordCount: number, timestamp: number, sequence: number, size: number }
+    #[wasm_bindgen(js_name = validateBackup)]
+    pub fn validate_backup(&self, data: &[u8]) -> Result<JsValue, JsValue> {
+        let db = self.inner.borrow();
+        match db.validate_backup(data) {
+            Ok(info) => {
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(&obj, &"valid".into(), &JsValue::from(info.valid))?;
+                js_sys::Reflect::set(&obj, &"recordCount".into(), &JsValue::from(info.record_count))?;
+                js_sys::Reflect::set(&obj, &"timestamp".into(), &JsValue::from(info.timestamp as f64))?;
+                js_sys::Reflect::set(&obj, &"sequence".into(), &JsValue::from(info.sequence as f64))?;
+                js_sys::Reflect::set(&obj, &"size".into(), &JsValue::from(info.size as u32))?;
+                Ok(obj.into())
+            }
+            Err(e) => {
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(&obj, &"valid".into(), &JsValue::FALSE)?;
+                js_sys::Reflect::set(&obj, &"error".into(), &JsValue::from_str(&e.to_string()))?;
+                Ok(obj.into())
+            }
+        }
+    }
+
+    /// Compacts the database, removing obsolete versions and optionally tombstones.
+    ///
+    /// # Arguments
+    ///
+    /// * `remove_tombstones` - If true, tombstones (deleted entities) are removed
+    ///
+    /// # Returns
+    ///
+    /// An object with compaction statistics.
+    #[wasm_bindgen]
+    pub fn compact(&self, remove_tombstones: bool) -> Result<JsValue, JsValue> {
+        let db = self.inner.borrow();
+        let stats = db
+            .compact(remove_tombstones)
+            .map_err(|e| JsValue::from_str(&format!("Failed to compact database: {}", e)))?;
+
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"inputRecords".into(), &JsValue::from(stats.input_records as u32))?;
+        js_sys::Reflect::set(&obj, &"outputRecords".into(), &JsValue::from(stats.output_records as u32))?;
+        js_sys::Reflect::set(&obj, &"tombstonesRemoved".into(), &JsValue::from(stats.tombstones_removed as u32))?;
+        js_sys::Reflect::set(&obj, &"obsoleteVersionsRemoved".into(), &JsValue::from(stats.obsolete_versions_removed as u32))?;
+        js_sys::Reflect::set(&obj, &"bytesSaved".into(), &JsValue::from(stats.bytes_saved as u32))?;
+        Ok(obj.into())
+    }
+
     /// Saves the database to persistent storage.
     ///
     /// This must be called to persist changes to OPFS/IndexedDB.

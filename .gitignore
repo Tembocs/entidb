@@ -6,6 +6,7 @@ Cargo.lock
 
 # Rust build artifacts
 /crates/*/target/
+web/entidb_wasm/target/
 *.rlib
 *.so
 *.dylib

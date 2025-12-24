@@ -220,4 +220,9 @@ impl StorageBackend for PersistentBackend {
         // Use save() async method for persistence.
         self.memory.sync()
     }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        *self.dirty.write().unwrap() = true;
+        self.memory.truncate(new_size)
+    }
 }

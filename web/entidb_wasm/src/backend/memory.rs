@@ -100,6 +100,17 @@ impl StorageBackend for WasmMemoryBackend {
         // No-op for in-memory storage
         Ok(())
     }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        let mut data = self.data.write().map_err(|_| {
+            StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        data.truncate(new_size as usize);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

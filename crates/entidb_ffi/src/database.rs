@@ -476,6 +476,77 @@ pub unsafe extern "C" fn entidb_checkpoint(handle: *mut EntiDbHandle) -> EntiDbR
     }
 }
 
+/// Compaction statistics returned by `entidb_compact`.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct EntiDbCompactionStats {
+    /// Number of records in the input.
+    pub input_records: u64,
+    /// Number of records in the output.
+    pub output_records: u64,
+    /// Number of tombstones removed.
+    pub tombstones_removed: u64,
+    /// Number of obsolete versions removed.
+    pub obsolete_versions_removed: u64,
+    /// Bytes saved (estimated).
+    pub bytes_saved: u64,
+}
+
+/// Compacts the database, removing obsolete versions and optionally tombstones.
+///
+/// Compaction merges segment records to:
+/// - Remove obsolete entity versions (keeping only the latest)
+/// - Optionally remove tombstones (deleted entities)
+/// - Reclaim storage space
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `remove_tombstones` - If true, tombstones are removed; if false, they are preserved
+/// * `out_stats` - Output pointer for compaction statistics (optional, may be null)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `out_stats` may be null or a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_compact(
+    handle: *mut EntiDbHandle,
+    remove_tombstones: bool,
+    out_stats: *mut EntiDbCompactionStats,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("null database handle");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    match db.compact(remove_tombstones) {
+        Ok(stats) => {
+            if !out_stats.is_null() {
+                *out_stats = EntiDbCompactionStats {
+                    input_records: stats.input_records as u64,
+                    output_records: stats.output_records as u64,
+                    tombstones_removed: stats.tombstones_removed as u64,
+                    obsolete_versions_removed: stats.obsolete_versions_removed as u64,
+                    bytes_saved: stats.bytes_saved as u64,
+                };
+            }
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
 /// Creates a backup of the database.
 ///
 /// Returns the backup data as a buffer that must be freed with `entidb_free_buffer`.

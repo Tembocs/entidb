@@ -56,6 +56,23 @@ impl<K: IndexKey> HashIndex<K> {
             let _ = self.insert(key, entity_id);
         }
     }
+
+    /// Returns a reference to all entries for iteration.
+    ///
+    /// Used by persistence layer to serialize index state.
+    pub fn entries(&self) -> &HashMap<K, HashSet<EntityId>> {
+        &self.entries
+    }
+
+    /// Serializes this index to bytes for persistence.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        crate::index::persistence::persist_hash_index(self)
+    }
+
+    /// Deserializes a hash index from bytes.
+    pub fn from_bytes(data: &[u8]) -> crate::error::CoreResult<Self> {
+        crate::index::persistence::load_hash_index(data)
+    }
 }
 
 impl<K: IndexKey> Index<K> for HashIndex<K> {

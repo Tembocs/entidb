@@ -1,1 +1,0 @@
-std::cell::RefMut<'_, entidb_core::Database>
