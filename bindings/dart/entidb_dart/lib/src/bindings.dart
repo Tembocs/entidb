@@ -118,6 +118,51 @@ final class EntiDbBuffer extends Struct {
   }
 }
 
+/// Database statistics snapshot.
+final class EntiDbStats extends Struct {
+  @Uint64()
+  external int reads;
+
+  @Uint64()
+  external int writes;
+
+  @Uint64()
+  external int deletes;
+
+  @Uint64()
+  external int scans;
+
+  @Uint64()
+  external int indexLookups;
+
+  @Uint64()
+  external int transactionsStarted;
+
+  @Uint64()
+  external int transactionsCommitted;
+
+  @Uint64()
+  external int transactionsAborted;
+
+  @Uint64()
+  external int bytesRead;
+
+  @Uint64()
+  external int bytesWritten;
+
+  @Uint64()
+  external int checkpoints;
+
+  @Uint64()
+  external int errors;
+
+  @Uint64()
+  external int entityCount;
+
+  /// Creates a stats pointer.
+  static Pointer<EntiDbStats> allocate() => calloc<EntiDbStats>();
+}
+
 // ============================================================================
 // Result Codes
 // ============================================================================
@@ -366,6 +411,16 @@ typedef EntiDbCheckpointNative = Int32 Function(
 );
 typedef EntiDbCheckpointDart = int Function(
   Pointer<EntiDbHandle> handle,
+);
+
+// Stats function
+typedef EntiDbStatsNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<EntiDbStats> outStats,
+);
+typedef EntiDbStatsDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<EntiDbStats> outStats,
 );
 
 // Backup functions
@@ -842,6 +897,10 @@ class EntiDbBindings {
   late final entidbCheckpoint =
       _lib.lookupFunction<EntiDbCheckpointNative, EntiDbCheckpointDart>(
           'entidb_checkpoint');
+
+  // Stats function
+  late final entidbStats =
+      _lib.lookupFunction<EntiDbStatsNative, EntiDbStatsDart>('entidb_stats');
 
   // Backup functions
   late final entidbBackup = _lib

@@ -2138,3 +2138,95 @@ mod tests {
         }
     }
 }
+
+// ============================================================================
+// Observability (Stats)
+// ============================================================================
+
+/// Gets the current database statistics.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `out_stats` - Output pointer for the stats structure
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `out_stats` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_stats(
+    handle: *mut EntiDbHandle,
+    out_stats: *mut crate::types::EntiDbStats,
+) -> EntiDbResult {
+    if handle.is_null() {
+        return EntiDbResult::NullPointer;
+    }
+    if out_stats.is_null() {
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let stats = db.stats();
+    *out_stats = crate::types::EntiDbStats::from(stats);
+    EntiDbResult::Ok
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use crate::buffer::entidb_free_buffer;
+
+    #[test]
+    fn test_stats() {
+        unsafe {
+            // Open database
+            let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+            let result = entidb_open_memory(&mut handle);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Get initial stats
+            let mut stats = crate::types::EntiDbStats::default();
+            let result = entidb_stats(handle, &mut stats);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(stats.reads, 0);
+            assert_eq!(stats.writes, 0);
+
+            // Perform a write
+            let coll_name = std::ffi::CString::new("test").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            let result = entidb_collection(handle, coll_name.as_ptr(), &mut coll_id);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            let entity_id = EntiDbEntityId::from_bytes([1u8; 16]);
+            let payload = vec![10u8, 20, 30];
+            let result = entidb_put(handle, coll_id, entity_id, payload.as_ptr(), payload.len());
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Stats should reflect the write
+            let result = entidb_stats(handle, &mut stats);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(stats.transactions_committed, 1);
+            assert_eq!(stats.writes, 1);
+            assert_eq!(stats.bytes_written, 3);
+
+            // Perform a read
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_get(handle, coll_id, entity_id, &mut buffer);
+            assert_eq!(result, EntiDbResult::Ok);
+            entidb_free_buffer(buffer);
+
+            // Stats should reflect the read
+            let result = entidb_stats(handle, &mut stats);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(stats.reads, 1);
+            assert_eq!(stats.bytes_read, 3);
+
+            entidb_close(handle);
+        }
+    }
+}

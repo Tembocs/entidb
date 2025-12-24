@@ -75,6 +75,10 @@ pub struct Database {
     hash_indexes: RwLock<HashMap<(u32, String), HashIndex<Vec<u8>>>>,
     /// BTree indexes keyed by (collection_id, index_name).
     btree_indexes: RwLock<HashMap<(u32, String), BTreeIndex<Vec<u8>>>>,
+    /// Change feed for observing committed operations.
+    change_feed: Arc<crate::change_feed::ChangeFeed>,
+    /// Database statistics.
+    stats: Arc<crate::stats::DatabaseStats>,
 }
 
 impl Database {
@@ -204,6 +208,8 @@ impl Database {
             is_open: RwLock::new(true),
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
+            change_feed: Arc::new(crate::change_feed::ChangeFeed::new()),
+            stats: Arc::new(crate::stats::DatabaseStats::new()),
         })
     }
 
@@ -246,6 +252,8 @@ impl Database {
             is_open: RwLock::new(true),
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
+            change_feed: Arc::new(crate::change_feed::ChangeFeed::new()),
+            stats: Arc::new(crate::stats::DatabaseStats::new()),
         })
     }
 
@@ -372,18 +380,60 @@ impl Database {
     /// Begins a new transaction.
     pub fn begin(&self) -> CoreResult<Transaction> {
         self.ensure_open()?;
+        self.stats.record_transaction_start();
         self.txn_manager.begin()
     }
 
     /// Commits a transaction.
+    ///
+    /// After successful commit, change events are emitted to all subscribers.
     pub fn commit(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
-        self.txn_manager.commit(txn)
+        
+        // Collect pending writes before commit (they're consumed during commit)
+        let pending_writes: Vec<_> = txn.pending_writes()
+            .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
+            .collect();
+        
+        // Commit the transaction
+        let sequence = self.txn_manager.commit(txn)?;
+        
+        // Record stats
+        self.stats.record_transaction_commit();
+        
+        // Emit change events for each write
+        for (collection_id, entity_id, write) in pending_writes {
+            let event = match write {
+                crate::transaction::PendingWrite::Put { payload } => {
+                    // Track bytes written
+                    self.stats.record_write(payload.len() as u64);
+                    // Determine if this is insert or update (for now, always use insert semantics)
+                    crate::change_feed::ChangeEvent::insert(
+                        sequence.as_u64(),
+                        collection_id.as_u32(),
+                        *entity_id.as_bytes(),
+                        payload,
+                    )
+                }
+                crate::transaction::PendingWrite::Delete => {
+                    self.stats.record_delete();
+                    crate::change_feed::ChangeEvent::delete(
+                        sequence.as_u64(),
+                        collection_id.as_u32(),
+                        *entity_id.as_bytes(),
+                    )
+                }
+            };
+            self.change_feed.emit(event);
+        }
+        
+        Ok(sequence)
     }
 
     /// Aborts a transaction.
     pub fn abort(&self, txn: &mut Transaction) -> CoreResult<()> {
         self.ensure_open()?;
+        self.stats.record_transaction_abort();
         self.txn_manager.abort(txn)
     }
 
@@ -396,7 +446,18 @@ impl Database {
         F: FnOnce(&mut Transaction) -> CoreResult<T>,
     {
         self.ensure_open()?;
-        self.entity_store.transaction(f)
+        let mut txn = self.begin()?;
+        match f(&mut txn) {
+            Ok(result) => {
+                self.commit(&mut txn)?;
+                Ok(result)
+            }
+            Err(e) => {
+                // Abort will record the abort stat
+                let _ = self.abort(&mut txn);
+                Err(e)
+            }
+        }
     }
 
     /// Gets an entity by collection and ID.
@@ -406,7 +467,11 @@ impl Database {
         entity_id: EntityId,
     ) -> CoreResult<Option<Vec<u8>>> {
         self.ensure_open()?;
-        self.entity_store.get(collection_id, entity_id)
+        let result = self.entity_store.get(collection_id, entity_id);
+        if let Ok(Some(ref data)) = result {
+            self.stats.record_read(data.len() as u64);
+        }
+        result
     }
 
     /// Gets an entity within a transaction.
@@ -417,12 +482,17 @@ impl Database {
         entity_id: EntityId,
     ) -> CoreResult<Option<Vec<u8>>> {
         self.ensure_open()?;
-        self.entity_store.get_in_txn(txn, collection_id, entity_id)
+        let result = self.entity_store.get_in_txn(txn, collection_id, entity_id);
+        if let Ok(Some(ref data)) = result {
+            self.stats.record_read(data.len() as u64);
+        }
+        result
     }
 
     /// Lists all entities in a collection.
     pub fn list(&self, collection_id: CollectionId) -> CoreResult<Vec<(EntityId, Vec<u8>)>> {
         self.ensure_open()?;
+        self.stats.record_scan(); // Full collection scan
         self.entity_store.list(collection_id)
     }
 
@@ -475,6 +545,9 @@ impl Database {
             manifest.last_checkpoint = Some(self.committed_seq());
             dir.save_manifest(&manifest)?;
         }
+        
+        // Record checkpoint stat
+        self.stats.record_checkpoint();
         
         Ok(())
     }
@@ -531,6 +604,59 @@ impl Database {
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    // ========================================================================
+    // Observability
+    // ========================================================================
+
+    /// Subscribes to the change feed.
+    ///
+    /// Returns a receiver that will receive `ChangeEvent` notifications
+    /// for all committed operations. The receiver is automatically cleaned up
+    /// when dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::thread;
+    ///
+    /// let rx = db.subscribe();
+    ///
+    /// // In another thread, listen for changes
+    /// thread::spawn(move || {
+    ///     while let Ok(event) = rx.recv() {
+    ///         println!("Change: {:?}", event);
+    ///     }
+    /// });
+    /// ```
+    #[must_use]
+    pub fn subscribe(&self) -> std::sync::mpsc::Receiver<crate::change_feed::ChangeEvent> {
+        self.change_feed.subscribe()
+    }
+
+    /// Returns a snapshot of database statistics.
+    ///
+    /// Statistics include counts of reads, writes, transactions, bytes,
+    /// and other operations. This is useful for monitoring and diagnostics.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let stats = db.stats();
+    /// println!("Reads: {}, Writes: {}", stats.reads, stats.writes);
+    /// ```
+    #[must_use]
+    pub fn stats(&self) -> crate::stats::StatsSnapshot {
+        self.stats.snapshot()
+    }
+
+    /// Returns the change feed for direct access.
+    ///
+    /// This is useful for advanced use cases like polling with a cursor.
+    #[must_use]
+    pub fn change_feed(&self) -> &crate::change_feed::ChangeFeed {
+        &self.change_feed
     }
 
     // ========================================================================
@@ -834,6 +960,7 @@ impl Database {
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
+        self.stats.record_index_lookup();
 
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let indexes = self.hash_indexes.read();
@@ -929,6 +1056,7 @@ impl Database {
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
+        self.stats.record_index_lookup();
 
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let indexes = self.btree_indexes.read();
@@ -966,6 +1094,7 @@ impl Database {
         max_key: Option<&[u8]>,
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
+        self.stats.record_index_lookup(); // Range query is still an index operation
 
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let indexes = self.btree_indexes.read();
@@ -1652,5 +1781,207 @@ mod index_tests {
         // Lookup on non-existent index should fail
         let result = db.hash_index_lookup(collection, "nonexistent", b"test");
         assert!(result.is_err());
+    }
+}
+
+/// Observability tests for change feed and stats.
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn create_db() -> Database {
+        Database::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn stats_track_operations() {
+        let db = create_db();
+        let collection = db.collection("items");
+        let entity = EntityId::new();
+        let payload = vec![1, 2, 3, 4, 5];
+
+        // Initial stats should be zero
+        let stats = db.stats();
+        assert_eq!(stats.transactions_started, 0);
+        assert_eq!(stats.transactions_committed, 0);
+
+        // Perform a write transaction
+        db.transaction(|txn| {
+            txn.put(collection, entity, payload.clone())?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Stats should reflect the transaction
+        let stats = db.stats();
+        assert_eq!(stats.transactions_started, 1);
+        assert_eq!(stats.transactions_committed, 1);
+        assert_eq!(stats.writes, 1);
+        assert_eq!(stats.bytes_written, payload.len() as u64);
+
+        // Read should be tracked
+        let _data = db.get(collection, entity).unwrap();
+        let stats = db.stats();
+        assert_eq!(stats.reads, 1);
+        assert_eq!(stats.bytes_read, payload.len() as u64);
+    }
+
+    #[test]
+    fn stats_track_aborted_transactions() {
+        let db = create_db();
+        let collection = db.collection("items");
+
+        // Start a transaction and abort it
+        let mut txn = db.begin().unwrap();
+        txn.put(collection, EntityId::new(), vec![1, 2, 3]).unwrap();
+        db.abort(&mut txn).unwrap();
+
+        // Stats should reflect the abort
+        let stats = db.stats();
+        assert_eq!(stats.transactions_started, 1);
+        assert_eq!(stats.transactions_aborted, 1);
+        assert_eq!(stats.transactions_committed, 0);
+    }
+
+    #[test]
+    fn stats_track_scans() {
+        let db = create_db();
+        let collection = db.collection("items");
+
+        // Put some data
+        for i in 0..3 {
+            let entity = EntityId::new();
+            db.transaction(|txn| {
+                txn.put(collection, entity, vec![i])?;
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        // List triggers a scan
+        let _items = db.list(collection).unwrap();
+        let stats = db.stats();
+        assert_eq!(stats.scans, 1);
+    }
+
+    #[test]
+    fn stats_track_checkpoints() {
+        let db = create_db();
+        let collection = db.collection("items");
+
+        // Put some data
+        db.transaction(|txn| {
+            txn.put(collection, EntityId::new(), vec![1, 2, 3])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Checkpoint
+        db.checkpoint().unwrap();
+
+        let stats = db.stats();
+        assert_eq!(stats.checkpoints, 1);
+    }
+
+    #[test]
+    fn subscribe_receives_change_events() {
+        let db = create_db();
+        let collection = db.collection("items");
+        let entity = EntityId::new();
+        let payload = vec![10, 20, 30];
+
+        // Subscribe before making changes
+        let rx = db.subscribe();
+
+        // Perform a write
+        db.transaction(|txn| {
+            txn.put(collection, entity, payload.clone())?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Should receive the change event
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.collection_id, collection.as_u32());
+        assert_eq!(event.entity_id, *entity.as_bytes());
+        assert_eq!(
+            event.change_type,
+            crate::change_feed::ChangeType::Insert
+        );
+        assert_eq!(event.payload, Some(payload));
+    }
+
+    #[test]
+    fn subscribe_receives_delete_events() {
+        let db = create_db();
+        let collection = db.collection("items");
+        let entity = EntityId::new();
+        let payload = vec![1, 2, 3];
+
+        // Insert first
+        db.transaction(|txn| {
+            txn.put(collection, entity, payload.clone())?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Subscribe
+        let rx = db.subscribe();
+
+        // Delete
+        db.transaction(|txn| {
+            txn.delete(collection, entity)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Should receive delete event
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, crate::change_feed::ChangeType::Delete);
+        assert!(event.payload.is_none());
+    }
+
+    #[test]
+    fn change_feed_poll_allows_catchup() {
+        let db = create_db();
+        let collection = db.collection("items");
+
+        // Perform several writes
+        for i in 0..5u8 {
+            db.transaction(|txn| {
+                txn.put(collection, EntityId::new(), vec![i])?;
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        // Poll from beginning
+        let events = db.change_feed().poll(0, 10);
+        assert_eq!(events.len(), 5);
+
+        // Poll from middle
+        let events = db.change_feed().poll(3, 10);
+        assert_eq!(events.len(), 2); // sequences 4 and 5
+    }
+
+    #[test]
+    fn stats_track_index_lookups() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        // Create an index
+        db.create_hash_index(collection, "email", false).unwrap();
+
+        // Insert some data
+        let entity = EntityId::new();
+        db.hash_index_insert(collection, "email", b"test@example.com".to_vec(), entity)
+            .unwrap();
+
+        // Perform lookup
+        let _results = db.hash_index_lookup(collection, "email", b"test@example.com").unwrap();
+
+        let stats = db.stats();
+        assert_eq!(stats.index_lookups, 1);
     }
 }

@@ -7,6 +7,7 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 **Update (December 2024):** Phase 1 (Core Completeness) is now ✅ COMPLETE.
 **Update (December 2024):** Phase 2 (Binding Parity) is now ✅ COMPLETE.
 **Update (December 2024):** Phase 3 (Index APIs) is now ✅ COMPLETE.
+**Update (December 2024):** Phase 4 (Observability) is now ✅ COMPLETE.
 
 ---
 
@@ -97,22 +98,64 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 - Dart: 9 new tests (54 total)
 - Python: 8 new tests
 
+### 6. **Observability (Change Feed & Stats)** - ✅ COMPLETE
+**Implementation (December 2024):**
+
+| Feature | Core | FFI | Dart | Python | WASM |
+|---------|:----:|:---:|:----:|:------:|:----:|
+| Change Feed | ✅ | - | - | - | ❌ |
+| Database Stats | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Subscribe to Changes | ✅ | - | - | - | ❌ |
+| Poll Changes | ✅ | - | - | - | ❌ |
+
+**Core Modules Created:**
+- `entidb_core::change_feed` - Observable change feed for committed operations
+  - `ChangeFeed` - Thread-safe change emitter with subscriber management
+  - `ChangeEvent` - Represents a single committed change (insert/update/delete)
+  - `ChangeType` - Enum: Insert, Update, Delete
+- `entidb_core::stats` - Database statistics and telemetry
+  - `DatabaseStats` - Atomic counters for all operations
+  - `StatsSnapshot` - Serializable copy of stats for external use
+
+**Core Database Methods:**
+- `db.subscribe()` - Returns a channel receiver for real-time change events
+- `db.stats()` - Returns a snapshot of database statistics
+- `db.change_feed()` - Direct access to the change feed for polling
+
+**Statistics Tracked:**
+- `reads` - Entity read operations
+- `writes` - Entity write operations (put)
+- `deletes` - Entity delete operations
+- `scans` - Full collection scans (AC-11 compliance)
+- `index_lookups` - Index query operations
+- `transactions_started` / `transactions_committed` / `transactions_aborted`
+- `bytes_read` / `bytes_written`
+- `checkpoints` - Number of checkpoints performed
+- `errors` - Error count
+- `entity_count` - Total entities
+
+**Integration Points:**
+- Stats recorded in `Database::begin()`, `commit()`, `abort()`
+- Stats recorded in `get()`, `get_in_txn()`, `list()`
+- Stats recorded in `hash_index_lookup()`, `btree_index_lookup()`, `btree_index_range()`
+- Stats recorded in `checkpoint()`
+- Change events emitted after successful commit in `Database::commit()`
+
+**FFI/Binding Support:**
+- `entidb_stats(handle, out_stats)` - FFI function
+- `EntiDbStats` - C-compatible struct with all counters
+- Dart: `DatabaseStats` class, `db.stats()` method
+- Python: `DatabaseStats` class, `db.stats()` method
+
+**Tests Added:**
+- Core change_feed: 8 tests
+- Core stats: 5 tests
+- Core database observability: 8 tests
+- FFI: 1 test
+
 ---
 
-## 🔴 Critical Missing Features
-
-### 6. **Change Feed Integration with Core** - MISSING
-**Current State:** `ChangeFeed` exists in `entidb_sync_protocol` but is **not wired** into `Database` or `TransactionManager`.
-
-**Impact:** No way to observe committed changes for sync, reactive UIs, or auditing.
-
-**Required:**
-- Hook in `TransactionManager::commit()` to emit `ChangeEvent`
-- Expose `db.subscribe()` or `db.changes()` API
-
----
-
-## 🟡 Moderate Missing Features
+## � Moderate Missing Features
 
 ### 7. **Segment Auto-Sealing & Rotation** - PARTIAL
 **Current State:** `SegmentManager` has a single segment. `max_segment_size` config exists but is **never checked**.
@@ -126,24 +169,12 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 
 ---
 
-### 8. **Telemetry/Diagnostics (AC-11)** - MISSING
-**Current State:** Doc comments warn about scans but **no actual telemetry**.
-
-**Impact:** No way to detect performance issues, full scans, or gather metrics.
-
-**Required:**
-- Event hooks for operations
-- Metrics counters (reads, writes, scans, transactions)
-- `db.stats()` or `db.info()` method
-
----
-
-### 9. **Full-Text Index (FtsIndex)** - MISSING
+### 8. **Full-Text Index (FtsIndex)** - MISSING
 **Current State:** Mentioned as "Phase 2" in docs. Not implemented.
 
 ---
 
-### 10. **Sync Layer Not Integrated** - PARTIAL
+### 9. **Sync Layer Not Integrated** - PARTIAL
 **Current State:** Sync protocol, engine, and server exist but:
 - Client oplog is in-memory only
 - Server doesn't use EntiDB for storage
@@ -180,9 +211,9 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 7. ✅ **Index creation in FFI/bindings** - Create hash and btree indexes
 8. ✅ **Index query APIs** - Insert, remove, lookup, range queries
 
-### Phase 4: Observability
-9. **Change feed integration** - Sync prerequisite, reactive apps
-10. **Telemetry hooks** - AC-11 compliance, debugging
+### Phase 4: Observability ✅ COMPLETE
+9. ✅ **Change feed integration** - Sync prerequisite, reactive apps
+10. ✅ **Telemetry hooks (AC-11)** - Stats tracking, scan detection
 
 ### Phase 5: Advanced
 11. **Segment rotation** - Large database support

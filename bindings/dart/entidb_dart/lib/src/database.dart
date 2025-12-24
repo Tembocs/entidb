@@ -535,6 +535,35 @@ final class Database {
     checkResult(result);
   }
 
+  /// Returns a snapshot of database statistics.
+  ///
+  /// Statistics include counts of reads, writes, transactions, and other
+  /// operations. This is useful for monitoring and diagnostics.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final stats = db.stats();
+  /// print('Reads: ${stats.reads}, Writes: ${stats.writes}');
+  /// print('Transactions committed: ${stats.transactionsCommitted}');
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  DatabaseStats stats() {
+    _ensureOpen();
+
+    final statsPtr = EntiDbStats.allocate();
+
+    try {
+      final result = bindings.entidbStats(_handle!, statsPtr);
+      checkResult(result);
+
+      return DatabaseStats._(statsPtr.ref);
+    } finally {
+      calloc.free(statsPtr);
+    }
+  }
+
   /// Creates a backup of the database.
   ///
   /// Returns the backup data as bytes that can be saved to a file.
@@ -1197,4 +1226,72 @@ final class BackupInfo {
   @override
   String toString() =>
       'BackupInfo(valid: $valid, timestamp: $timestamp, sequence: $sequence, recordCount: $recordCount, size: $size)';
+}
+
+/// A snapshot of database statistics.
+///
+/// Contains counters for various database operations, useful for
+/// monitoring and diagnostics.
+final class DatabaseStats {
+  /// Number of entity read operations.
+  final int reads;
+
+  /// Number of entity write operations (put).
+  final int writes;
+
+  /// Number of entity delete operations.
+  final int deletes;
+
+  /// Number of full collection scans.
+  final int scans;
+
+  /// Number of index lookup operations.
+  final int indexLookups;
+
+  /// Number of transactions started.
+  final int transactionsStarted;
+
+  /// Number of transactions committed.
+  final int transactionsCommitted;
+
+  /// Number of transactions aborted.
+  final int transactionsAborted;
+
+  /// Total bytes read from entities.
+  final int bytesRead;
+
+  /// Total bytes written to entities.
+  final int bytesWritten;
+
+  /// Number of checkpoints performed.
+  final int checkpoints;
+
+  /// Number of errors recorded.
+  final int errors;
+
+  /// Total entity count (as of last update).
+  final int entityCount;
+
+  DatabaseStats._(EntiDbStats ref)
+      : reads = ref.reads,
+        writes = ref.writes,
+        deletes = ref.deletes,
+        scans = ref.scans,
+        indexLookups = ref.indexLookups,
+        transactionsStarted = ref.transactionsStarted,
+        transactionsCommitted = ref.transactionsCommitted,
+        transactionsAborted = ref.transactionsAborted,
+        bytesRead = ref.bytesRead,
+        bytesWritten = ref.bytesWritten,
+        checkpoints = ref.checkpoints,
+        errors = ref.errors,
+        entityCount = ref.entityCount;
+
+  @override
+  String toString() =>
+      'DatabaseStats(reads: $reads, writes: $writes, deletes: $deletes, '
+      'scans: $scans, indexLookups: $indexLookups, '
+      'transactionsStarted: $transactionsStarted, transactionsCommitted: $transactionsCommitted, '
+      'transactionsAborted: $transactionsAborted, bytesRead: $bytesRead, bytesWritten: $bytesWritten, '
+      'checkpoints: $checkpoints, errors: $errors, entityCount: $entityCount)';
 }

@@ -514,6 +514,36 @@ impl Database {
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
+    /// Returns a snapshot of database statistics.
+    ///
+    /// Statistics include counts of reads, writes, transactions, and other
+    /// operations. This is useful for monitoring and diagnostics.
+    ///
+    /// Example:
+    /// ```python
+    /// stats = db.stats()
+    /// print(f"Reads: {stats.reads}, Writes: {stats.writes}")
+    /// print(f"Transactions committed: {stats.transactions_committed}")
+    /// ```
+    fn stats(&self) -> DatabaseStats {
+        let s = self.inner.stats();
+        DatabaseStats {
+            reads: s.reads,
+            writes: s.writes,
+            deletes: s.deletes,
+            scans: s.scans,
+            index_lookups: s.index_lookups,
+            transactions_started: s.transactions_started,
+            transactions_committed: s.transactions_committed,
+            transactions_aborted: s.transactions_aborted,
+            bytes_read: s.bytes_read,
+            bytes_written: s.bytes_written,
+            checkpoints: s.checkpoints,
+            errors: s.errors,
+            entity_count: s.entity_count,
+        }
+    }
+
     /// Creates a backup of the database.
     ///
     /// Returns the backup data as bytes that can be saved to a file.
@@ -905,6 +935,78 @@ impl BackupInfo {
     }
 }
 
+/// Database statistics snapshot.
+///
+/// Contains counters for various database operations, useful for
+/// monitoring and diagnostics.
+#[pyclass]
+#[derive(Clone)]
+pub struct DatabaseStats {
+    /// Number of entity read operations.
+    #[pyo3(get)]
+    pub reads: u64,
+    /// Number of entity write operations (put).
+    #[pyo3(get)]
+    pub writes: u64,
+    /// Number of entity delete operations.
+    #[pyo3(get)]
+    pub deletes: u64,
+    /// Number of full collection scans.
+    #[pyo3(get)]
+    pub scans: u64,
+    /// Number of index lookup operations.
+    #[pyo3(get)]
+    pub index_lookups: u64,
+    /// Number of transactions started.
+    #[pyo3(get)]
+    pub transactions_started: u64,
+    /// Number of transactions committed.
+    #[pyo3(get)]
+    pub transactions_committed: u64,
+    /// Number of transactions aborted.
+    #[pyo3(get)]
+    pub transactions_aborted: u64,
+    /// Total bytes read from entities.
+    #[pyo3(get)]
+    pub bytes_read: u64,
+    /// Total bytes written to entities.
+    #[pyo3(get)]
+    pub bytes_written: u64,
+    /// Number of checkpoints performed.
+    #[pyo3(get)]
+    pub checkpoints: u64,
+    /// Number of errors recorded.
+    #[pyo3(get)]
+    pub errors: u64,
+    /// Total entity count (as of last update).
+    #[pyo3(get)]
+    pub entity_count: u64,
+}
+
+#[pymethods]
+impl DatabaseStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "DatabaseStats(reads={}, writes={}, deletes={}, scans={}, index_lookups={}, \
+             transactions_started={}, transactions_committed={}, transactions_aborted={}, \
+             bytes_read={}, bytes_written={}, checkpoints={}, errors={}, entity_count={})",
+            self.reads,
+            self.writes,
+            self.deletes,
+            self.scans,
+            self.index_lookups,
+            self.transactions_started,
+            self.transactions_committed,
+            self.transactions_aborted,
+            self.bytes_read,
+            self.bytes_written,
+            self.checkpoints,
+            self.errors,
+            self.entity_count
+        )
+    }
+}
+
 /// Python module initialization.
 #[pymodule]
 fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -915,6 +1017,7 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EntityIterator>()?;
     m.add_class::<RestoreStats>()?;
     m.add_class::<BackupInfo>()?;
+    m.add_class::<DatabaseStats>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     Ok(())
 }

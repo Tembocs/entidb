@@ -65,6 +65,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 mod backup;
+mod change_feed;
 mod collection;
 mod config;
 pub mod crypto;
@@ -76,11 +77,13 @@ mod index;
 mod manifest;
 mod migration;
 mod segment;
+mod stats;
 mod transaction;
 mod types;
 mod wal;
 
 pub use backup::{BackupConfig, BackupManager, BackupMetadata, BackupResult, RestoreResult};
+pub use change_feed::{ChangeEvent, ChangeFeed, ChangeType};
 pub use collection::{Collection, EntityCodec};
 pub use config::Config;
 #[cfg(feature = "encryption")]
@@ -97,6 +100,7 @@ pub use migration::{
 pub use segment::{
     CompactionConfig, CompactionResult, Compactor, Segment, SegmentManager, SegmentRecord,
 };
+pub use stats::{DatabaseStats, StatsSnapshot};
 pub use transaction::{Transaction, TransactionManager};
 pub use types::{CollectionId, SequenceNumber, TransactionId};
 pub use wal::{WalManager, WalRecord, WalRecordType};

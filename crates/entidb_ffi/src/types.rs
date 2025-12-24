@@ -75,6 +75,61 @@ impl Default for EntiDbConfig {
     }
 }
 
+/// Database statistics snapshot.
+///
+/// This struct contains atomic counters for various database operations.
+/// Use `entidb_stats()` to get the current statistics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EntiDbStats {
+    /// Number of entity read operations.
+    pub reads: u64,
+    /// Number of entity write operations (put).
+    pub writes: u64,
+    /// Number of entity delete operations.
+    pub deletes: u64,
+    /// Number of full collection scans.
+    pub scans: u64,
+    /// Number of index lookup operations.
+    pub index_lookups: u64,
+    /// Number of transactions started.
+    pub transactions_started: u64,
+    /// Number of transactions committed.
+    pub transactions_committed: u64,
+    /// Number of transactions aborted.
+    pub transactions_aborted: u64,
+    /// Total bytes read from entities.
+    pub bytes_read: u64,
+    /// Total bytes written to entities.
+    pub bytes_written: u64,
+    /// Number of checkpoints performed.
+    pub checkpoints: u64,
+    /// Number of errors recorded.
+    pub errors: u64,
+    /// Total entity count (as of last update).
+    pub entity_count: u64,
+}
+
+impl From<entidb_core::StatsSnapshot> for EntiDbStats {
+    fn from(s: entidb_core::StatsSnapshot) -> Self {
+        Self {
+            reads: s.reads,
+            writes: s.writes,
+            deletes: s.deletes,
+            scans: s.scans,
+            index_lookups: s.index_lookups,
+            transactions_started: s.transactions_started,
+            transactions_committed: s.transactions_committed,
+            transactions_aborted: s.transactions_aborted,
+            bytes_read: s.bytes_read,
+            bytes_written: s.bytes_written,
+            checkpoints: s.checkpoints,
+            errors: s.errors,
+            entity_count: s.entity_count,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
