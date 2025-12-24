@@ -1,6 +1,7 @@
 //! Database facade and recovery.
 
 use crate::config::Config;
+#[cfg(feature = "std")]
 use crate::dir::DatabaseDir;
 use crate::entity::{EntityId, EntityStore};
 use crate::error::{CoreError, CoreResult};
@@ -13,6 +14,7 @@ use crate::wal::{WalManager, WalRecord};
 use entidb_storage::StorageBackend;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "std")]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -73,6 +75,7 @@ pub struct Database {
     /// Configuration.
     config: Config,
     /// Database directory (holds the lock). None for in-memory databases.
+    #[cfg(feature = "std")]
     dir: Option<DatabaseDir>,
     /// Database manifest.
     manifest: RwLock<Manifest>,
@@ -124,6 +127,7 @@ impl Database {
     ///
     /// let db = Database::open(Path::new("my_database"))?;
     /// ```
+    #[cfg(feature = "std")]
     pub fn open(path: &Path) -> CoreResult<Self> {
         Self::open_with_config(path, Config::default())
     }
@@ -147,6 +151,7 @@ impl Database {
     ///
     /// let db = Database::open_with_config(Path::new("my_database"), config)?;
     /// ```
+    #[cfg(feature = "std")]
     pub fn open_with_config(path: &Path, config: Config) -> CoreResult<Self> {
         use entidb_storage::FileBackend;
 
@@ -214,6 +219,7 @@ impl Database {
 
         Ok(Self {
             config,
+            #[cfg(feature = "std")]
             dir: Some(dir),
             manifest: RwLock::new(recovered_manifest),
             wal,
@@ -258,6 +264,7 @@ impl Database {
 
         Ok(Self {
             config,
+            #[cfg(feature = "std")]
             dir: None,
             manifest: RwLock::new(manifest),
             wal,
@@ -521,6 +528,7 @@ impl Database {
         let id = manifest.get_or_create_collection(name);
         
         // Save manifest if this was a new collection
+        #[cfg(feature = "std")]
         if existing.is_none() {
             if let Some(ref dir) = self.dir {
                 // Best-effort save - log but don't fail
@@ -531,6 +539,8 @@ impl Database {
                 }
             }
         }
+        #[cfg(not(feature = "std"))]
+        let _ = existing;
         
         CollectionId::new(id)
     }
@@ -555,6 +565,7 @@ impl Database {
         self.txn_manager.checkpoint()?;
         
         // Update manifest with checkpoint sequence and save
+        #[cfg(feature = "std")]
         if let Some(ref dir) = self.dir {
             let mut manifest = self.manifest.write();
             manifest.last_checkpoint = Some(self.committed_seq());
@@ -658,6 +669,7 @@ impl Database {
         }
 
         // Save manifest if we have a directory
+        #[cfg(feature = "std")]
         if let Some(ref dir) = self.dir {
             let manifest = self.manifest.read();
             dir.save_manifest(&manifest)?;

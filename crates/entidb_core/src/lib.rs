@@ -70,6 +70,7 @@ mod collection;
 mod config;
 pub mod crypto;
 mod database;
+#[cfg(feature = "std")]
 mod dir;
 mod entity;
 mod error;

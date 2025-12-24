@@ -12,7 +12,8 @@ categories = ["database-implementations", "data-structures"]
 readme = "README.md"
 
 [features]
-default = []
+default = ["std"]
+std = ["dep:fs2"]
 encryption = ["dep:aes-gcm", "dep:rand", "dep:zeroize"]
 
 [dependencies]
@@ -22,7 +23,7 @@ thiserror.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 tracing.workspace = true
-fs2.workspace = true
+fs2 = { workspace = true, optional = true }
 
 # Optional encryption dependencies
 aes-gcm = { workspace = true, optional = true }
