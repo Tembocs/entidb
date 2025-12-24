@@ -187,6 +187,28 @@ impl WalManager {
         }
         Ok(())
     }
+
+    /// Truncates the WAL to the specified offset.
+    ///
+    /// This is used after checkpoint to reclaim space. All data after
+    /// the specified offset is discarded.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The offset to truncate to (all data after this is removed)
+    pub fn truncate(&self, offset: u64) -> CoreResult<()> {
+        let mut backend = self.backend.lock();
+        backend.truncate(offset)?;
+        Ok(())
+    }
+
+    /// Clears all data from the WAL.
+    ///
+    /// This truncates the WAL to 0 bytes. Used after checkpoint when
+    /// all committed transactions have been flushed to segments.
+    pub fn clear(&self) -> CoreResult<()> {
+        self.truncate(0)
+    }
 }
 
 impl std::fmt::Debug for WalManager {
@@ -376,5 +398,60 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn clear_wal() {
+        let wal = create_wal();
+
+        // Write some records
+        wal.append(&WalRecord::Begin {
+            txid: TransactionId::new(1),
+        })
+        .unwrap();
+        wal.append(&WalRecord::Commit {
+            txid: TransactionId::new(1),
+            sequence: SequenceNumber::new(1),
+        })
+        .unwrap();
+
+        assert!(wal.size().unwrap() > 0);
+        assert_eq!(wal.read_all().unwrap().len(), 2);
+
+        // Clear the WAL
+        wal.clear().unwrap();
+
+        assert_eq!(wal.size().unwrap(), 0);
+        assert!(wal.read_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn truncate_wal() {
+        let wal = create_wal();
+
+        // Write a record and capture its end offset
+        let offset1 = wal
+            .append(&WalRecord::Begin {
+                txid: TransactionId::new(1),
+            })
+            .unwrap();
+        let size_after_first = wal.size().unwrap();
+
+        // Write second record
+        wal.append(&WalRecord::Commit {
+            txid: TransactionId::new(1),
+            sequence: SequenceNumber::new(1),
+        })
+        .unwrap();
+
+        assert_eq!(wal.read_all().unwrap().len(), 2);
+
+        // Truncate back to after first record
+        wal.truncate(size_after_first).unwrap();
+
+        // Should only have the first record
+        let records = wal.read_all().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, offset1);
     }
 }

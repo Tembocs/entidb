@@ -50,6 +50,7 @@ thiserror = "1.0"
 bytes = "1.5"
 parking_lot = "0.12"
 uuid = { version = "1.6", features = ["v4", "serde"] }
+fs2 = "0.4"
 
 # Async (for sync server)
 tokio = { version = "1.35", features = ["full"] }

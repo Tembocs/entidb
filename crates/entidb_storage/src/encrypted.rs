@@ -245,6 +245,26 @@ impl StorageBackend for EncryptedBackend {
         let mut inner = self.inner.write();
         inner.sync()
     }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        // For encrypted backend, truncation is complex because records have overhead.
+        // For now, we only support truncating to 0 (full clear).
+        if new_size == 0 {
+            let mut inner = self.inner.write();
+            inner.truncate(0)?;
+            *self.logical_size.write() = 0;
+            self.cache.write().clear();
+            Ok(())
+        } else {
+            // Partial truncation of encrypted data is not supported
+            // because encrypted records have variable overhead and we can't
+            // easily map logical size to physical size.
+            Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "encrypted backend only supports truncate to 0",
+            )))
+        }
+    }
 }
 
 #[cfg(test)]

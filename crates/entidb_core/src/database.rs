@@ -1,6 +1,7 @@
 //! Database facade and recovery.
 
 use crate::config::Config;
+use crate::dir::DatabaseDir;
 use crate::entity::{EntityId, EntityStore};
 use crate::error::{CoreError, CoreResult};
 use crate::manifest::Manifest;
@@ -11,6 +12,7 @@ use crate::wal::{WalManager, WalRecord};
 use entidb_storage::StorageBackend;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 /// The main database handle.
@@ -22,27 +24,40 @@ use std::sync::Arc;
 /// - Collection management
 /// - Recovery from crashes
 ///
-/// # Example
+/// # Opening a Database
+///
+/// Use `Database::open()` to open a database from a directory path:
 ///
 /// ```rust,ignore
-/// use entidb_core::{Database, Config};
-/// use entidb_storage::InMemoryBackend;
+/// use entidb_core::Database;
+/// use std::path::Path;
 ///
-/// let db = Database::open_with_backends(
-///     Config::default(),
-///     Box::new(InMemoryBackend::new()), // WAL
-///     Box::new(InMemoryBackend::new()), // Segments
-/// )?;
+/// // Open or create a database
+/// let db = Database::open(Path::new("my_database"))?;
 ///
+/// // Use the database
 /// db.transaction(|txn| {
-///     let entity_id = EntityId::new();
-///     txn.put(CollectionId::new(1), entity_id, vec![1, 2, 3])?;
+///     let id = entidb_core::EntityId::new();
+///     txn.put(db.collection("users"), id, vec![1, 2, 3])?;
 ///     Ok(())
 /// })?;
+///
+/// // Close gracefully
+/// db.close()?;
+/// ```
+///
+/// # In-Memory Databases
+///
+/// For testing, use `Database::open_in_memory()`:
+///
+/// ```rust,ignore
+/// let db = Database::open_in_memory()?;
 /// ```
 pub struct Database {
     /// Configuration.
     config: Config,
+    /// Database directory (holds the lock). None for in-memory databases.
+    dir: Option<DatabaseDir>,
     /// Database manifest.
     manifest: RwLock<Manifest>,
     /// WAL manager.
@@ -58,9 +73,137 @@ pub struct Database {
 }
 
 impl Database {
+    /// Opens a database from a directory path.
+    ///
+    /// This is the recommended way to open a persistent database. The method:
+    /// - Creates the directory if it doesn't exist (unless `create_if_missing` is false)
+    /// - Acquires an exclusive lock to prevent concurrent access
+    /// - Loads or creates the manifest
+    /// - Recovers from the WAL if present
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Another process has the database locked (`DatabaseLocked`)
+    /// - The database format is incompatible (`InvalidFormat`)
+    /// - I/O errors occur
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use entidb_core::Database;
+    /// use std::path::Path;
+    ///
+    /// let db = Database::open(Path::new("my_database"))?;
+    /// ```
+    pub fn open(path: &Path) -> CoreResult<Self> {
+        Self::open_with_config(path, Config::default())
+    }
+
+    /// Opens a database from a directory path with custom configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory
+    /// * `config` - Database configuration
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use entidb_core::{Database, Config};
+    /// use std::path::Path;
+    ///
+    /// let config = Config::default()
+    ///     .create_if_missing(true)
+    ///     .sync_on_commit(true);
+    ///
+    /// let db = Database::open_with_config(Path::new("my_database"), config)?;
+    /// ```
+    pub fn open_with_config(path: &Path, config: Config) -> CoreResult<Self> {
+        use entidb_storage::FileBackend;
+
+        // Open directory with lock
+        let dir = DatabaseDir::open(path, config.create_if_missing)?;
+
+        // Check if this is an existing database
+        if !config.create_if_missing && dir.is_new_database() {
+            return Err(CoreError::invalid_format(
+                "database does not exist and create_if_missing is false",
+            ));
+        }
+
+        if config.error_if_exists && !dir.is_new_database() {
+            return Err(CoreError::invalid_format(
+                "database already exists and error_if_exists is true",
+            ));
+        }
+
+        // Load or create manifest
+        let manifest = match dir.load_manifest()? {
+            Some(m) => {
+                // Validate format version
+                if m.format_version.0 != config.format_version.0 {
+                    return Err(CoreError::invalid_format(format!(
+                        "incompatible format version: database is v{}.{}, expected v{}.{}",
+                        m.format_version.0,
+                        m.format_version.1,
+                        config.format_version.0,
+                        config.format_version.1
+                    )));
+                }
+                m
+            }
+            None => Manifest::new(config.format_version),
+        };
+
+        // Open storage backends
+        let wal_backend = FileBackend::open_with_create_dirs(&dir.wal_path())?;
+        let segment_backend = FileBackend::open_with_create_dirs(&dir.segment_path())?;
+
+        // Create managers
+        let wal = Arc::new(WalManager::new(
+            Box::new(wal_backend),
+            config.sync_on_commit,
+        ));
+        let segments = Arc::new(SegmentManager::new(
+            Box::new(segment_backend),
+            config.max_segment_size,
+        ));
+
+        // Recover from WAL (use existing manifest as base)
+        let (recovered_manifest, next_txid, next_seq, committed_seq) =
+            Self::recover_with_manifest(&wal, &segments, manifest)?;
+
+        let txn_manager = Arc::new(TransactionManager::with_state(
+            Arc::clone(&wal),
+            Arc::clone(&segments),
+            next_txid,
+            next_seq,
+            committed_seq,
+        ));
+
+        let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
+
+        Ok(Self {
+            config,
+            dir: Some(dir),
+            manifest: RwLock::new(recovered_manifest),
+            wal,
+            segments,
+            txn_manager,
+            entity_store,
+            is_open: RwLock::new(true),
+        })
+    }
+
     /// Opens a database with the given backends.
     ///
-    /// This is the primary constructor when you have pre-configured backends.
+    /// This is a lower-level constructor for when you have pre-configured backends.
+    /// For most use cases, prefer `Database::open()` instead.
     pub fn open_with_backends(
         config: Config,
         wal_backend: Box<dyn StorageBackend>,
@@ -87,6 +230,7 @@ impl Database {
 
         Ok(Self {
             config,
+            dir: None,
             manifest: RwLock::new(manifest),
             wal,
             segments,
@@ -97,6 +241,9 @@ impl Database {
     }
 
     /// Opens a fresh in-memory database for testing.
+    ///
+    /// This creates a non-persistent database that exists only in memory.
+    /// Data is lost when the database is closed.
     pub fn open_in_memory() -> CoreResult<Self> {
         use entidb_storage::InMemoryBackend;
         Self::open_with_backends(
@@ -112,6 +259,17 @@ impl Database {
     fn recover(
         wal: &WalManager,
         segments: &SegmentManager,
+    ) -> CoreResult<(Manifest, u64, u64, u64)> {
+        Self::recover_with_manifest(wal, segments, Manifest::new((1, 0)))
+    }
+
+    /// Recovers database state from WAL with an existing manifest.
+    ///
+    /// Returns (manifest, next_txid, next_seq, committed_seq).
+    fn recover_with_manifest(
+        wal: &WalManager,
+        segments: &SegmentManager,
+        manifest: Manifest,
     ) -> CoreResult<(Manifest, u64, u64, u64)> {
         let records = wal.read_all()?;
 
@@ -199,8 +357,6 @@ impl Database {
         // Rebuild segment index
         segments.rebuild_index()?;
 
-        let manifest = Manifest::new((1, 0));
-
         Ok((manifest, max_txid + 1, max_seq + 1, committed_seq))
     }
 
@@ -262,9 +418,27 @@ impl Database {
     }
 
     /// Gets or creates a collection ID for a name.
+    ///
+    /// If this is a persistent database (opened via `open()` or `open_with_config()`),
+    /// the manifest is automatically saved to disk when a new collection is created.
     pub fn collection(&self, name: &str) -> CollectionId {
         let mut manifest = self.manifest.write();
-        CollectionId::new(manifest.get_or_create_collection(name))
+        let existing = manifest.get_collection(name);
+        let id = manifest.get_or_create_collection(name);
+        
+        // Save manifest if this was a new collection
+        if existing.is_none() {
+            if let Some(ref dir) = self.dir {
+                // Best-effort save - log but don't fail
+                if let Err(e) = dir.save_manifest(&manifest) {
+                    // In production, this would be logged
+                    // For now, we just ignore the error since collection() returns CollectionId, not Result
+                    let _ = e;
+                }
+            }
+        }
+        
+        CollectionId::new(id)
     }
 
     /// Gets a collection ID by name, if it exists.
@@ -274,9 +448,26 @@ impl Database {
     }
 
     /// Creates a checkpoint.
+    ///
+    /// A checkpoint persists all committed data and truncates the WAL
+    /// to reclaim space. After a checkpoint:
+    /// - All committed transactions are durable in segments
+    /// - The WAL is cleared
+    /// - The manifest is updated with the checkpoint sequence
     pub fn checkpoint(&self) -> CoreResult<()> {
         self.ensure_open()?;
-        self.txn_manager.checkpoint()
+        
+        // Perform the checkpoint (flushes segments, truncates WAL)
+        self.txn_manager.checkpoint()?;
+        
+        // Update manifest with checkpoint sequence and save
+        if let Some(ref dir) = self.dir {
+            let mut manifest = self.manifest.write();
+            manifest.last_checkpoint = Some(self.committed_seq());
+            dir.save_manifest(&manifest)?;
+        }
+        
+        Ok(())
     }
 
     /// Returns the current committed sequence number.
@@ -296,6 +487,12 @@ impl Database {
         let mut is_open = self.is_open.write();
         if !*is_open {
             return Ok(());
+        }
+
+        // Save manifest if we have a directory
+        if let Some(ref dir) = self.dir {
+            let manifest = self.manifest.read();
+            dir.save_manifest(&manifest)?;
         }
 
         // Flush everything
@@ -701,5 +898,152 @@ mod tests {
         // Cross-collection isolation
         assert!(db.get(users, post_id).unwrap().is_none());
         assert!(db.get(posts, user_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn checkpoint_clears_wal() {
+        let db = create_db();
+        let collection = db.collection("test");
+
+        // Create some data
+        db.transaction(|txn| {
+            txn.put(collection, EntityId::new(), vec![1, 2, 3])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // WAL should have data
+        assert!(db.wal.size().unwrap() > 0);
+
+        // Checkpoint should clear the WAL
+        db.checkpoint().unwrap();
+
+        // WAL should be empty after checkpoint
+        assert_eq!(db.wal.size().unwrap(), 0);
+
+        // But data should still be accessible from segments
+        let items = db.list(collection).unwrap();
+        assert_eq!(items.len(), 1);
+    }
+}
+
+/// Persistence tests that require a real file system.
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn collections_persist_across_restarts() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("persist_test");
+
+        let entity_id = EntityId::new();
+
+        // First session: create collection and data
+        {
+            let db = Database::open(&db_path).unwrap();
+            let users = db.collection("users");
+            let posts = db.collection("posts");
+
+            db.transaction(|txn| {
+                txn.put(users, entity_id, vec![1, 2, 3])?;
+                Ok(())
+            })
+            .unwrap();
+
+            // Close to ensure everything is saved
+            db.close().unwrap();
+        }
+
+        // Second session: verify collections and data persist
+        {
+            let db = Database::open(&db_path).unwrap();
+
+            // Collections should be found
+            let users = db.get_collection("users");
+            let posts = db.get_collection("posts");
+            assert!(users.is_some(), "users collection should persist");
+            assert!(posts.is_some(), "posts collection should persist");
+
+            // Data should be available
+            let data = db.get(users.unwrap(), entity_id).unwrap();
+            assert_eq!(data, Some(vec![1, 2, 3]));
+
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn wal_recovery_after_crash() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("crash_test");
+
+        let entity_id = EntityId::new();
+
+        // First session: create data but don't call close()
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("test");
+
+            db.transaction(|txn| {
+                txn.put(collection, entity_id, vec![42, 43, 44])?;
+                Ok(())
+            })
+            .unwrap();
+
+            // Simulate crash - don't call close(), just drop
+            // This means WAL is flushed but manifest might not be saved
+        }
+
+        // Second session: should recover from WAL
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("test");
+
+            let data = db.get(collection, entity_id).unwrap();
+            assert_eq!(data, Some(vec![42, 43, 44]));
+
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn checkpoint_enables_wal_free_restart() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("checkpoint_test");
+
+        let entity_id = EntityId::new();
+
+        // First session: create data and checkpoint
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("items");
+
+            db.transaction(|txn| {
+                txn.put(collection, entity_id, vec![1, 2, 3, 4, 5])?;
+                Ok(())
+            })
+            .unwrap();
+
+            // Checkpoint flushes everything to segments and clears WAL
+            db.checkpoint().unwrap();
+
+            // WAL should be empty
+            assert_eq!(db.wal.size().unwrap(), 0);
+
+            db.close().unwrap();
+        }
+
+        // Second session: data should be recovered from segments only
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("items");
+
+            let data = db.get(collection, entity_id).unwrap();
+            assert_eq!(data, Some(vec![1, 2, 3, 4, 5]));
+
+            db.close().unwrap();
+        }
     }
 }

@@ -95,6 +95,24 @@ impl StorageBackend for InMemoryBackend {
         // In-memory backend has no metadata to sync
         Ok(())
     }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        let mut data = self.data.write();
+        let current_size = data.len() as u64;
+
+        if new_size > current_size {
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cannot truncate to size {} which is greater than current size {}",
+                    new_size, current_size
+                ),
+            )));
+        }
+
+        data.truncate(new_size as usize);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -195,5 +213,35 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend.append(b"data").unwrap();
         assert!(backend.sync().is_ok());
+    }
+
+    #[test]
+    fn memory_truncate_to_zero() {
+        let mut backend = InMemoryBackend::new();
+        backend.append(b"hello world").unwrap();
+        assert_eq!(backend.size().unwrap(), 11);
+
+        backend.truncate(0).unwrap();
+        assert_eq!(backend.size().unwrap(), 0);
+        assert!(backend.data().is_empty());
+    }
+
+    #[test]
+    fn memory_truncate_partial() {
+        let mut backend = InMemoryBackend::new();
+        backend.append(b"hello world").unwrap();
+        
+        backend.truncate(5).unwrap();
+        assert_eq!(backend.size().unwrap(), 5);
+        assert_eq!(backend.read_at(0, 5).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn memory_truncate_to_larger_size_fails() {
+        let mut backend = InMemoryBackend::new();
+        backend.append(b"hello").unwrap();
+        
+        let result = backend.truncate(100);
+        assert!(result.is_err());
     }
 }

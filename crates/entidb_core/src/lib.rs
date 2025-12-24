@@ -69,6 +69,7 @@ mod collection;
 mod config;
 pub mod crypto;
 mod database;
+mod dir;
 mod entity;
 mod error;
 mod index;

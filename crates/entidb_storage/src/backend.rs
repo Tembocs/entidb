@@ -67,4 +67,20 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// Returns an error if the sync operation fails.
     fn sync(&mut self) -> StorageResult<()>;
+
+    /// Truncates the storage to the given size.
+    ///
+    /// This removes all data after the specified offset. This is used
+    /// for WAL truncation after checkpoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_size` - The new size of the storage (offset to truncate to)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The truncation fails
+    /// - `new_size` is greater than current size
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()>;
 }

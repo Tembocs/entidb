@@ -137,6 +137,27 @@ impl StorageBackend for FileBackend {
         file.sync_all()?;
         Ok(())
     }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        let mut file = self.file.write();
+        let mut size = self.size.write();
+
+        if new_size > *size {
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "cannot truncate to size {} which is greater than current size {}",
+                    new_size, *size
+                ),
+            )));
+        }
+
+        file.set_len(new_size)?;
+        file.sync_all()?;
+        *size = new_size;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
