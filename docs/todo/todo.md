@@ -8,6 +8,7 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 **Update (December 2024):** Phase 2 (Binding Parity) is now ✅ COMPLETE.
 **Update (December 2024):** Phase 3 (Index APIs) is now ✅ COMPLETE.
 **Update (December 2024):** Phase 4 (Observability) is now ✅ COMPLETE.
+**Update (December 2024):** Phase 5 (Advanced Features) is now ✅ COMPLETE.
 
 ---
 
@@ -155,31 +156,70 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 
 ---
 
-## � Moderate Missing Features
+## 🟢 Completed Features (Phase 5)
 
-### 7. **Segment Auto-Sealing & Rotation** - PARTIAL
-**Current State:** `SegmentManager` has a single segment. `max_segment_size` config exists but is **never checked**.
+### 7. **Segment Auto-Sealing & Rotation** - ✅ COMPLETE
+**Implementation (December 2024):**
 
-**Impact:** Single segment grows forever. No multi-segment structure.
+The `SegmentManager` now supports multi-segment storage with automatic sealing and rotation:
 
-**Required:**
-- Auto-seal when size exceeded
-- Create new segment file
-- Manage multiple segment files
+**New Components:**
+- `SegmentInfo` - Metadata for each segment (id, path, size, sealed status, record count)
+- `IndexEntry` - Extended to track segment_id + offset + sequence
+- Factory pattern for creating backends per segment
+
+**Key Features:**
+- `with_factory(factory, max_size)` - Constructor with custom backend factory
+- `seal_and_rotate()` - Manually seal current segment and create a new one
+- Auto-sealing when `max_segment_size` is exceeded during `append()`
+- `on_segment_sealed(callback)` - Register callback for segment seal events
+- `list_segments()` - Get info about all segments
+- `segment_count()` / `sealed_segment_count()` - Segment statistics
+
+**Tests Added:** 12 segment tests (24 in module)
 
 ---
 
-### 8. **Full-Text Index (FtsIndex)** - MISSING
-**Current State:** Mentioned as "Phase 2" in docs. Not implemented.
+### 8. **Full-Text Index (FtsIndex)** - ✅ COMPLETE
+**Implementation (December 2024):**
+
+A complete full-text search index with token-based matching:
+
+**Components:**
+- `FtsIndex` - Main FTS index with inverted and forward indexes
+- `FtsIndexSpec` - Index specification (collection_id, name, tokenizer config)
+- `TokenizerConfig` - Configurable tokenizer (min/max length, case sensitivity)
+
+**Features:**
+- `index_text(entity_id, text)` - Index text content for an entity
+- `remove_entity(entity_id)` - Remove entity from index
+- `search(query)` - Search with AND semantics (all tokens must match)
+- `search_any(query)` - Search with OR semantics (any token matches)
+- `search_prefix(prefix)` - Prefix matching for autocomplete
+- Unicode support, punctuation stripping, configurable tokenization
+
+**Tests Added:** 18 comprehensive tests
 
 ---
 
-### 9. **Sync Layer Not Integrated** - PARTIAL
-**Current State:** Sync protocol, engine, and server exist but:
-- Client oplog is in-memory only
-- Server doesn't use EntiDB for storage
-- No real HTTP transport (only mock)
-- No authentication
+### 9. **Complete Sync Layer** - ✅ COMPLETE
+**Implementation (December 2024):**
+
+The sync layer now follows the architecture specification completely:
+
+**HTTP Transport (`entidb_sync_engine::http`):**
+- `HttpClient` trait - Abstract HTTP client interface
+- `HttpTransport<C>` - Implements `SyncTransport` using any `HttpClient`
+- `CborEncode` / `CborDecode` traits - CBOR serialization for protocol messages
+- `LoopbackClient` / `LoopbackServer` traits - Testing without network
+
+**Database-Backed Applier (`entidb_sync_engine::DatabaseApplier`):**
+- Uses EntiDB for sync state persistence (per architecture requirement)
+- Server uses the **same EntiDB core** as clients (no external database)
+- Applies remote operations in atomic transactions
+
+**Integration Tests Added:** 5 tests
+**Total Sync Layer Tests:** 32
 
 ---
 
@@ -215,9 +255,9 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 9. ✅ **Change feed integration** - Sync prerequisite, reactive apps
 10. ✅ **Telemetry hooks (AC-11)** - Stats tracking, scan detection
 
-### Phase 5: Advanced
-11. **Segment rotation** - Large database support
-12. **Full-text index** - Text search capability
-13. **Complete sync layer** - Offline-first apps
+### Phase 5: Advanced ✅ COMPLETE
+11. ✅ **Segment rotation** - Multi-segment storage with auto-sealing
+12. ✅ **Full-text index** - Token-based text search with FtsIndex
+13. ✅ **Complete sync layer** - HTTP transport + DatabaseApplier
 
 ---

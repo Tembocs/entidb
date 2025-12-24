@@ -1,7 +1,7 @@
 //! Integration tests for sync engine and server.
 
 use entidb_sync_engine::{
-    MemorySyncApplier, SyncConfig, SyncEngine, SyncResult, SyncTransport,
+    DatabaseApplier, MemorySyncApplier, SyncConfig, SyncEngine, SyncResult, SyncTransport,
 };
 use entidb_sync_server::{ServerConfig, ServerOplog, SyncServer};
 use entidb_sync_protocol::{
@@ -142,4 +142,88 @@ fn empty_sync() {
     assert!(result.success);
     assert_eq!(result.pushed, 0);
     assert_eq!(result.pulled, 0);
+}
+
+#[test]
+fn database_applier_sync() {
+    // This test uses the DatabaseApplier backed by EntiDB
+    // to verify the architecture requirement that sync server
+    // uses the same EntiDB core as clients.
+
+    let server = Arc::new(SyncServer::new(ServerConfig::default()));
+    let config = SyncConfig::new([1u8; 16], [2u8; 16], "memory://");
+    let transport = InMemoryTransport::new(Arc::clone(&server));
+
+    // Use DatabaseApplier backed by an in-memory EntiDB database
+    let db = entidb_core::Database::open_in_memory().unwrap();
+    let applier = DatabaseApplier::new(Arc::new(db));
+
+    // Add some pending operations
+    applier.add_pending(SyncOperation {
+        op_id: 0,
+        collection_id: 100,
+        entity_id: [1u8; 16],
+        op_type: OperationType::Put,
+        payload: Some(vec![0xCA, 0xFE]),
+        sequence: 1,
+    });
+
+    let engine = SyncEngine::new(config, transport, applier);
+
+    // Run sync
+    let result = engine.sync().unwrap();
+    assert!(result.success);
+    assert_eq!(result.pushed, 1);
+    assert_eq!(result.pulled, 0);
+
+    // Server should have the operation
+    assert_eq!(server.operation_count(), 1);
+}
+
+#[test]
+fn database_applier_pull_persists() {
+    // Test that pulling operations via DatabaseApplier persists them to EntiDB
+
+    // Server has existing data
+    let server_oplog = Arc::new(ServerOplog::new());
+    let server = Arc::new(SyncServer::with_oplog(
+        ServerConfig::default(),
+        Arc::clone(&server_oplog),
+    ));
+
+    // Another client pushed some data
+    server
+        .handle_push(PushRequest::new(
+            vec![SyncOperation {
+                op_id: 0,
+                collection_id: 200,
+                entity_id: [42u8; 16],
+                op_type: OperationType::Put,
+                payload: Some(vec![1, 2, 3, 4]),
+                sequence: 1,
+            }],
+            1,
+        ))
+        .unwrap();
+
+    // Our client with DatabaseApplier
+    let config = SyncConfig::new([1u8; 16], [2u8; 16], "memory://");
+    let transport = InMemoryTransport::new(Arc::clone(&server));
+
+    let db = entidb_core::Database::open_in_memory().unwrap();
+    let db_arc = Arc::new(db);
+    let applier = DatabaseApplier::new(Arc::clone(&db_arc));
+
+    let engine = SyncEngine::new(config, transport, applier);
+
+    // Run sync - should pull the remote operation
+    let result = engine.sync().unwrap();
+    assert!(result.success);
+    assert_eq!(result.pulled, 1);
+
+    // Verify the entity was persisted to the database
+    let collection_id = entidb_core::CollectionId::new(200);
+    let entity_id = entidb_core::EntityId::from_bytes([42u8; 16]);
+    let data = db_arc.get(collection_id, entity_id).unwrap();
+    assert_eq!(data, Some(vec![1, 2, 3, 4]));
 }

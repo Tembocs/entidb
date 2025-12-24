@@ -12,6 +12,14 @@
 //! Flags:
 //! - `0x01` = tombstone (deleted entity)
 //! - `0x02` = encrypted
+//!
+//! ## Segment Auto-Sealing & Rotation
+//!
+//! The [`SegmentManager`] automatically seals segments when they exceed
+//! `max_segment_size` and creates new segments for writes. This ensures:
+//! - Individual segments remain manageable in size
+//! - Sealed segments can be backed up or replicated independently
+//! - Compaction can be performed on sealed segments
 
 mod compaction;
 mod record;
@@ -19,5 +27,5 @@ mod store;
 
 pub use compaction::{CompactionConfig, CompactionResult, Compactor};
 pub use record::{Segment, SegmentRecord};
-pub use store::SegmentManager;
+pub use store::{SegmentInfo, SegmentManager};
 
