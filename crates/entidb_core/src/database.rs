@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::dir::DatabaseDir;
 use crate::entity::{EntityId, EntityStore};
 use crate::error::{CoreError, CoreResult};
+use crate::index::{BTreeIndex, HashIndex, Index, IndexSpec};
 use crate::manifest::Manifest;
 use crate::segment::{SegmentManager, SegmentRecord};
 use crate::transaction::{Transaction, TransactionManager};
@@ -70,6 +71,10 @@ pub struct Database {
     entity_store: EntityStore,
     /// Whether the database is open.
     is_open: RwLock<bool>,
+    /// Hash indexes keyed by (collection_id, index_name).
+    hash_indexes: RwLock<HashMap<(u32, String), HashIndex<Vec<u8>>>>,
+    /// BTree indexes keyed by (collection_id, index_name).
+    btree_indexes: RwLock<HashMap<(u32, String), BTreeIndex<Vec<u8>>>>,
 }
 
 impl Database {
@@ -197,6 +202,8 @@ impl Database {
             txn_manager,
             entity_store,
             is_open: RwLock::new(true),
+            hash_indexes: RwLock::new(HashMap::new()),
+            btree_indexes: RwLock::new(HashMap::new()),
         })
     }
 
@@ -237,6 +244,8 @@ impl Database {
             txn_manager,
             entity_store,
             is_open: RwLock::new(true),
+            hash_indexes: RwLock::new(HashMap::new()),
+            btree_indexes: RwLock::new(HashMap::new()),
         })
     }
 
@@ -642,6 +651,418 @@ impl Database {
             size: metadata.size,
         })
     }
+
+    // ========================================================================
+    // Index Management
+    // ========================================================================
+
+    /// Creates a hash index for fast equality lookups.
+    ///
+    /// Hash indexes provide O(1) lookup by exact key match. They are ideal for:
+    /// - Unique identifier lookups
+    /// - Foreign key relationships
+    /// - Equality filters
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection to index
+    /// * `name` - A unique name for this index within the collection
+    /// * `unique` - Whether the index should enforce uniqueness
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let users = db.collection("users");
+    /// db.create_hash_index(users, "email", true)?; // Unique email index
+    /// ```
+    pub fn create_hash_index(
+        &self,
+        collection_id: CollectionId,
+        name: &str,
+        unique: bool,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let key = (collection_id.as_u32(), name.to_string());
+        let mut indexes = self.hash_indexes.write();
+
+        if indexes.contains_key(&key) {
+            return Err(CoreError::invalid_format(format!(
+                "hash index '{}' already exists on collection {}",
+                name,
+                collection_id.as_u32()
+            )));
+        }
+
+        let spec = if unique {
+            IndexSpec::new(collection_id, name).unique()
+        } else {
+            IndexSpec::new(collection_id, name)
+        };
+
+        indexes.insert(key, HashIndex::new(spec));
+        Ok(())
+    }
+
+    /// Creates a BTree index for ordered traversal and range queries.
+    ///
+    /// BTree indexes support:
+    /// - Equality lookups
+    /// - Range queries (greater than, less than, between)
+    /// - Ordered iteration
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection to index
+    /// * `name` - A unique name for this index within the collection
+    /// * `unique` - Whether the index should enforce uniqueness
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let users = db.collection("users");
+    /// db.create_btree_index(users, "age", false)?; // Non-unique age index
+    /// ```
+    pub fn create_btree_index(
+        &self,
+        collection_id: CollectionId,
+        name: &str,
+        unique: bool,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let key = (collection_id.as_u32(), name.to_string());
+        let mut indexes = self.btree_indexes.write();
+
+        if indexes.contains_key(&key) {
+            return Err(CoreError::invalid_format(format!(
+                "btree index '{}' already exists on collection {}",
+                name,
+                collection_id.as_u32()
+            )));
+        }
+
+        let spec = if unique {
+            IndexSpec::new(collection_id, name).unique()
+        } else {
+            IndexSpec::new(collection_id, name)
+        };
+
+        indexes.insert(key, BTreeIndex::new(spec));
+        Ok(())
+    }
+
+    /// Inserts an entry into a hash index.
+    ///
+    /// This should be called when inserting/updating an entity to maintain the index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the hash index
+    /// * `key` - The indexed key value as bytes
+    /// * `entity_id` - The entity ID to associate with this key
+    pub fn hash_index_insert(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: Vec<u8>,
+        entity_id: EntityId,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.hash_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "hash index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.insert(key, entity_id)
+    }
+
+    /// Removes an entry from a hash index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the hash index
+    /// * `key` - The indexed key value as bytes
+    /// * `entity_id` - The entity ID to remove
+    pub fn hash_index_remove(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: &[u8],
+        entity_id: EntityId,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.hash_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "hash index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.remove(&key.to_vec(), entity_id)
+    }
+
+    /// Looks up entities by exact key match in a hash index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the hash index
+    /// * `key` - The key to look up
+    ///
+    /// # Returns
+    ///
+    /// A vector of entity IDs that have the given key value.
+    pub fn hash_index_lookup(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: &[u8],
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.hash_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "hash index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.lookup(&key.to_vec())
+    }
+
+    /// Inserts an entry into a BTree index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the BTree index
+    /// * `key` - The indexed key value as bytes
+    /// * `entity_id` - The entity ID to associate with this key
+    pub fn btree_index_insert(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: Vec<u8>,
+        entity_id: EntityId,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.btree_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "btree index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.insert(key, entity_id)
+    }
+
+    /// Removes an entry from a BTree index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the BTree index
+    /// * `key` - The indexed key value as bytes
+    /// * `entity_id` - The entity ID to remove
+    pub fn btree_index_remove(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: &[u8],
+        entity_id: EntityId,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.btree_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "btree index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.remove(&key.to_vec(), entity_id)
+    }
+
+    /// Looks up entities by exact key match in a BTree index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the BTree index
+    /// * `key` - The key to look up
+    ///
+    /// # Returns
+    ///
+    /// A vector of entity IDs that have the given key value.
+    pub fn btree_index_lookup(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        key: &[u8],
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.btree_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "btree index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.lookup(&key.to_vec())
+    }
+
+    /// Performs a range query on a BTree index.
+    ///
+    /// Returns all entities whose key is >= min_key and <= max_key.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the BTree index
+    /// * `min_key` - The minimum key (inclusive), or None for unbounded
+    /// * `max_key` - The maximum key (inclusive), or None for unbounded
+    ///
+    /// # Returns
+    ///
+    /// A vector of entity IDs whose keys fall within the range.
+    pub fn btree_index_range(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        min_key: Option<&[u8]>,
+        max_key: Option<&[u8]>,
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.btree_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "btree index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        use std::ops::Bound;
+
+        let start = match min_key {
+            Some(k) => Bound::Included(k.to_vec()),
+            None => Bound::Unbounded,
+        };
+        let end = match max_key {
+            Some(k) => Bound::Included(k.to_vec()),
+            None => Bound::Unbounded,
+        };
+
+        index.range((start, end))
+    }
+
+    /// Returns the number of entries in a hash index.
+    pub fn hash_index_len(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<usize> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.hash_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "hash index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        Ok(index.len())
+    }
+
+    /// Returns the number of entries in a BTree index.
+    pub fn btree_index_len(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<usize> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.btree_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_format(format!(
+                "btree index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        Ok(index.len())
+    }
+
+    /// Drops a hash index.
+    pub fn drop_hash_index(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.hash_indexes.write();
+
+        Ok(indexes.remove(&idx_key).is_some())
+    }
+
+    /// Drops a BTree index.
+    pub fn drop_btree_index(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.btree_indexes.write();
+
+        Ok(indexes.remove(&idx_key).is_some())
+    }
 }
 
 /// Statistics from a restore operation.
@@ -1045,5 +1466,191 @@ mod persistence_tests {
 
             db.close().unwrap();
         }
+    }
+}
+
+/// Index tests.
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    fn create_db() -> Database {
+        Database::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn create_hash_index() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "email", true).unwrap();
+
+        // Should be able to insert
+        let entity = EntityId::new();
+        db.hash_index_insert(collection, "email", b"alice@example.com".to_vec(), entity)
+            .unwrap();
+
+        // Should be able to lookup
+        let found = db.hash_index_lookup(collection, "email", b"alice@example.com").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], entity);
+    }
+
+    #[test]
+    fn hash_index_multiple_entries() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "status", false).unwrap();
+
+        let e1 = EntityId::new();
+        let e2 = EntityId::new();
+        let e3 = EntityId::new();
+
+        db.hash_index_insert(collection, "status", b"active".to_vec(), e1).unwrap();
+        db.hash_index_insert(collection, "status", b"active".to_vec(), e2).unwrap();
+        db.hash_index_insert(collection, "status", b"inactive".to_vec(), e3).unwrap();
+
+        let active = db.hash_index_lookup(collection, "status", b"active").unwrap();
+        assert_eq!(active.len(), 2);
+
+        let inactive = db.hash_index_lookup(collection, "status", b"inactive").unwrap();
+        assert_eq!(inactive.len(), 1);
+    }
+
+    #[test]
+    fn hash_index_unique_constraint() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "email", true).unwrap();
+
+        let e1 = EntityId::new();
+        let e2 = EntityId::new();
+
+        db.hash_index_insert(collection, "email", b"alice@example.com".to_vec(), e1)
+            .unwrap();
+
+        // Duplicate should fail
+        let result = db.hash_index_insert(collection, "email", b"alice@example.com".to_vec(), e2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hash_index_remove() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "email", false).unwrap();
+
+        let entity = EntityId::new();
+        db.hash_index_insert(collection, "email", b"alice@example.com".to_vec(), entity)
+            .unwrap();
+
+        assert_eq!(db.hash_index_len(collection, "email").unwrap(), 1);
+
+        db.hash_index_remove(collection, "email", b"alice@example.com", entity)
+            .unwrap();
+
+        assert_eq!(db.hash_index_len(collection, "email").unwrap(), 0);
+    }
+
+    #[test]
+    fn create_btree_index() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_btree_index(collection, "age", false).unwrap();
+
+        let e1 = EntityId::new();
+        let e2 = EntityId::new();
+        let e3 = EntityId::new();
+
+        // Use big-endian bytes for proper ordering
+        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e1)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e2)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e3)
+            .unwrap();
+
+        // Lookup exact
+        let found = db.btree_index_lookup(collection, "age", &30i64.to_be_bytes()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], e2);
+    }
+
+    #[test]
+    fn btree_index_range_query() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_btree_index(collection, "age", false).unwrap();
+
+        let e1 = EntityId::new();
+        let e2 = EntityId::new();
+        let e3 = EntityId::new();
+        let e4 = EntityId::new();
+
+        db.btree_index_insert(collection, "age", 20i64.to_be_bytes().to_vec(), e1).unwrap();
+        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e2).unwrap();
+        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e3).unwrap();
+        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e4).unwrap();
+
+        // Range: 25 <= age <= 30
+        let min = 25i64.to_be_bytes();
+        let max = 30i64.to_be_bytes();
+        let found = db.btree_index_range(collection, "age", Some(&min), Some(&max)).unwrap();
+        assert_eq!(found.len(), 2);
+
+        // Range: age >= 30
+        let found = db.btree_index_range(collection, "age", Some(&max), None).unwrap();
+        assert_eq!(found.len(), 2);
+
+        // Range: age <= 25
+        let found = db.btree_index_range(collection, "age", None, Some(&min)).unwrap();
+        assert_eq!(found.len(), 2);
+
+        // All
+        let found = db.btree_index_range(collection, "age", None, None).unwrap();
+        assert_eq!(found.len(), 4);
+    }
+
+    #[test]
+    fn drop_index() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "email", true).unwrap();
+        db.create_btree_index(collection, "age", false).unwrap();
+
+        assert!(db.drop_hash_index(collection, "email").unwrap());
+        assert!(db.drop_btree_index(collection, "age").unwrap());
+
+        // Lookup on dropped index should fail
+        assert!(db.hash_index_lookup(collection, "email", b"test").is_err());
+        assert!(db.btree_index_lookup(collection, "age", b"test").is_err());
+    }
+
+    #[test]
+    fn duplicate_index_creation_fails() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        db.create_hash_index(collection, "email", true).unwrap();
+
+        // Creating same index again should fail
+        let result = db.create_hash_index(collection, "email", true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn index_not_found_error() {
+        let db = create_db();
+        let collection = db.collection("users");
+
+        // Lookup on non-existent index should fail
+        let result = db.hash_index_lookup(collection, "nonexistent", b"test");
+        assert!(result.is_err());
     }
 }

@@ -481,6 +481,220 @@ typedef EntiDbEntityCountDart = int Function(
 );
 
 // ============================================================================
+// Index Functions
+// ============================================================================
+
+// Create hash index
+typedef EntiDbCreateHashIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Bool unique,
+);
+typedef EntiDbCreateHashIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  bool unique,
+);
+
+// Create btree index
+typedef EntiDbCreateBTreeIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Bool unique,
+);
+typedef EntiDbCreateBTreeIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  bool unique,
+);
+
+// Hash index insert
+typedef EntiDbHashIndexInsertNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  EntiDbEntityId entityId,
+);
+typedef EntiDbHashIndexInsertDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  EntiDbEntityId entityId,
+);
+
+// BTree index insert
+typedef EntiDbBTreeIndexInsertNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  EntiDbEntityId entityId,
+);
+typedef EntiDbBTreeIndexInsertDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  EntiDbEntityId entityId,
+);
+
+// Hash index remove
+typedef EntiDbHashIndexRemoveNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  EntiDbEntityId entityId,
+);
+typedef EntiDbHashIndexRemoveDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  EntiDbEntityId entityId,
+);
+
+// BTree index remove
+typedef EntiDbBTreeIndexRemoveNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  EntiDbEntityId entityId,
+);
+typedef EntiDbBTreeIndexRemoveDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  EntiDbEntityId entityId,
+);
+
+// Hash index lookup
+typedef EntiDbHashIndexLookupNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbHashIndexLookupDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// BTree index lookup
+typedef EntiDbBTreeIndexLookupNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  IntPtr keyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbBTreeIndexLookupDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> key,
+  int keyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// BTree index range
+typedef EntiDbBTreeIndexRangeNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> minKey,
+  IntPtr minKeyLen,
+  Pointer<Uint8> maxKey,
+  IntPtr maxKeyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbBTreeIndexRangeDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Uint8> minKey,
+  int minKeyLen,
+  Pointer<Uint8> maxKey,
+  int maxKeyLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Hash index length
+typedef EntiDbHashIndexLenNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+typedef EntiDbHashIndexLenDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+
+// BTree index length
+typedef EntiDbBTreeIndexLenNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+typedef EntiDbBTreeIndexLenDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+
+// Drop hash index
+typedef EntiDbDropHashIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+typedef EntiDbDropHashIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+
+// Drop btree index
+typedef EntiDbDropBTreeIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+typedef EntiDbDropBTreeIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+
+// ============================================================================
 // Library Loading
 // ============================================================================
 
@@ -655,6 +869,59 @@ class EntiDbBindings {
   late final entidbEntityCount =
       _lib.lookupFunction<EntiDbEntityCountNative, EntiDbEntityCountDart>(
           'entidb_entity_count');
+
+  // Index functions
+  late final entidbCreateHashIndex = _lib.lookupFunction<
+      EntiDbCreateHashIndexNative,
+      EntiDbCreateHashIndexDart>('entidb_create_hash_index');
+
+  late final entidbCreateBTreeIndex = _lib.lookupFunction<
+      EntiDbCreateBTreeIndexNative,
+      EntiDbCreateBTreeIndexDart>('entidb_create_btree_index');
+
+  late final entidbHashIndexInsert = _lib.lookupFunction<
+      EntiDbHashIndexInsertNative,
+      EntiDbHashIndexInsertDart>('entidb_hash_index_insert');
+
+  late final entidbBTreeIndexInsert = _lib.lookupFunction<
+      EntiDbBTreeIndexInsertNative,
+      EntiDbBTreeIndexInsertDart>('entidb_btree_index_insert');
+
+  late final entidbHashIndexRemove = _lib.lookupFunction<
+      EntiDbHashIndexRemoveNative,
+      EntiDbHashIndexRemoveDart>('entidb_hash_index_remove');
+
+  late final entidbBTreeIndexRemove = _lib.lookupFunction<
+      EntiDbBTreeIndexRemoveNative,
+      EntiDbBTreeIndexRemoveDart>('entidb_btree_index_remove');
+
+  late final entidbHashIndexLookup = _lib.lookupFunction<
+      EntiDbHashIndexLookupNative,
+      EntiDbHashIndexLookupDart>('entidb_hash_index_lookup');
+
+  late final entidbBTreeIndexLookup = _lib.lookupFunction<
+      EntiDbBTreeIndexLookupNative,
+      EntiDbBTreeIndexLookupDart>('entidb_btree_index_lookup');
+
+  late final entidbBTreeIndexRange = _lib.lookupFunction<
+      EntiDbBTreeIndexRangeNative,
+      EntiDbBTreeIndexRangeDart>('entidb_btree_index_range');
+
+  late final entidbHashIndexLen =
+      _lib.lookupFunction<EntiDbHashIndexLenNative, EntiDbHashIndexLenDart>(
+          'entidb_hash_index_len');
+
+  late final entidbBTreeIndexLen =
+      _lib.lookupFunction<EntiDbBTreeIndexLenNative, EntiDbBTreeIndexLenDart>(
+          'entidb_btree_index_len');
+
+  late final entidbDropHashIndex =
+      _lib.lookupFunction<EntiDbDropHashIndexNative, EntiDbDropHashIndexDart>(
+          'entidb_drop_hash_index');
+
+  late final entidbDropBTreeIndex =
+      _lib.lookupFunction<EntiDbDropBTreeIndexNative, EntiDbDropBTreeIndexDart>(
+          'entidb_drop_btree_index');
 }
 
 /// Cached bindings instance.

@@ -445,3 +445,137 @@ class TestDatabaseProperties:
             # because tombstones are still tracked until compaction
             # The entity should not be retrievable, which is the key invariant
             assert db.get(users, entity_id) is None
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestHashIndex:
+    def test_create_and_insert(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_hash_index(users, "email", unique=True)
+
+            entity_id = EntityId()
+            db.hash_index_insert(users, "email", b"alice@example.com", entity_id)
+
+            results = db.hash_index_lookup(users, "email", b"alice@example.com")
+            assert len(results) == 1
+            assert results[0] == entity_id
+
+    def test_non_unique_index(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_hash_index(users, "status", unique=False)
+
+            e1 = EntityId()
+            e2 = EntityId()
+            e3 = EntityId()
+
+            db.hash_index_insert(users, "status", b"active", e1)
+            db.hash_index_insert(users, "status", b"active", e2)
+            db.hash_index_insert(users, "status", b"inactive", e3)
+
+            active = db.hash_index_lookup(users, "status", b"active")
+            assert len(active) == 2
+
+            inactive = db.hash_index_lookup(users, "status", b"inactive")
+            assert len(inactive) == 1
+
+    def test_unique_constraint(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_hash_index(users, "email", unique=True)
+
+            e1 = EntityId()
+            e2 = EntityId()
+
+            db.hash_index_insert(users, "email", b"alice@example.com", e1)
+
+            # Should fail on duplicate key
+            with pytest.raises(IOError):
+                db.hash_index_insert(users, "email", b"alice@example.com", e2)
+
+    def test_remove(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_hash_index(users, "email", unique=False)
+
+            entity_id = EntityId()
+            db.hash_index_insert(users, "email", b"alice@example.com", entity_id)
+
+            assert db.hash_index_len(users, "email") == 1
+
+            db.hash_index_remove(users, "email", b"alice@example.com", entity_id)
+
+            assert db.hash_index_len(users, "email") == 0
+
+    def test_drop_index(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_hash_index(users, "email", unique=True)
+
+            assert db.drop_hash_index(users, "email") is True
+
+            # Lookup on dropped index should fail
+            with pytest.raises(IOError):
+                db.hash_index_lookup(users, "email", b"test")
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestBTreeIndex:
+    def test_create_and_insert(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_btree_index(users, "age", unique=False)
+
+            e1 = EntityId()
+            e2 = EntityId()
+            e3 = EntityId()
+
+            # Use big-endian encoding for proper ordering
+            db.btree_index_insert(users, "age", (25).to_bytes(8, 'big'), e1)
+            db.btree_index_insert(users, "age", (30).to_bytes(8, 'big'), e2)
+            db.btree_index_insert(users, "age", (35).to_bytes(8, 'big'), e3)
+
+            results = db.btree_index_lookup(users, "age", (30).to_bytes(8, 'big'))
+            assert len(results) == 1
+            assert results[0] == e2
+
+    def test_range_query(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_btree_index(users, "age", unique=False)
+
+            e1 = EntityId()
+            e2 = EntityId()
+            e3 = EntityId()
+            e4 = EntityId()
+
+            db.btree_index_insert(users, "age", (20).to_bytes(8, 'big'), e1)
+            db.btree_index_insert(users, "age", (25).to_bytes(8, 'big'), e2)
+            db.btree_index_insert(users, "age", (30).to_bytes(8, 'big'), e3)
+            db.btree_index_insert(users, "age", (35).to_bytes(8, 'big'), e4)
+
+            # Range: 25 <= age <= 30
+            min_key = (25).to_bytes(8, 'big')
+            max_key = (30).to_bytes(8, 'big')
+            results = db.btree_index_range(users, "age", min_key, max_key)
+            assert len(results) == 2
+
+            # Unbounded range (all)
+            all_results = db.btree_index_range(users, "age", None, None)
+            assert len(all_results) == 4
+
+            # Greater than or equal
+            gte_results = db.btree_index_range(users, "age", min_key, None)
+            assert len(gte_results) == 3
+
+    def test_drop_index(self):
+        with Database.open_memory() as db:
+            users = db.collection("users")
+            db.create_btree_index(users, "age", unique=False)
+
+            assert db.drop_btree_index(users, "age") is True
+
+            # Lookup on dropped index should fail
+            with pytest.raises(IOError):
+                db.btree_index_lookup(users, "age", (25).to_bytes(8, 'big'))

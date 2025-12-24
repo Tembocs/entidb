@@ -722,4 +722,236 @@ void main() {
       }
     });
   });
+
+  group('Hash Index', () {
+    test('create and lookup', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createHashIndex(users, 'email_idx');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        final key1 = Uint8List.fromList([1, 2, 3]);
+        final key2 = Uint8List.fromList([4, 5, 6]);
+
+        db.hashIndexInsert(users, 'email_idx', key1, id1);
+        db.hashIndexInsert(users, 'email_idx', key2, id2);
+
+        final results = db.hashIndexLookup(users, 'email_idx', key1);
+        expect(results.length, equals(1));
+        expect(results.first, equals(id1));
+
+        expect(db.hashIndexLen(users, 'email_idx'), equals(2));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('non-unique index allows duplicates', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createHashIndex(users, 'tag_idx', unique: false);
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        final sameKey = Uint8List.fromList([1, 2, 3]);
+
+        db.hashIndexInsert(users, 'tag_idx', sameKey, id1);
+        db.hashIndexInsert(users, 'tag_idx', sameKey, id2);
+
+        final results = db.hashIndexLookup(users, 'tag_idx', sameKey);
+        expect(results.length, equals(2));
+        expect(results, containsAll([id1, id2]));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('unique index rejects duplicates', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createHashIndex(users, 'email_idx', unique: true);
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        final sameKey = Uint8List.fromList([1, 2, 3]);
+
+        db.hashIndexInsert(users, 'email_idx', sameKey, id1);
+
+        expect(
+          () => db.hashIndexInsert(users, 'email_idx', sameKey, id2),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    test('remove entry', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createHashIndex(users, 'idx');
+
+        final id = EntityId.generate();
+        final key = Uint8List.fromList([1, 2, 3]);
+
+        db.hashIndexInsert(users, 'idx', key, id);
+        expect(db.hashIndexLen(users, 'idx'), equals(1));
+
+        db.hashIndexRemove(users, 'idx', key, id);
+        expect(db.hashIndexLen(users, 'idx'), equals(0));
+        expect(db.hashIndexLookup(users, 'idx', key), isEmpty);
+      } finally {
+        db.close();
+      }
+    });
+
+    test('drop index', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createHashIndex(users, 'idx');
+
+        final id = EntityId.generate();
+        db.hashIndexInsert(users, 'idx', Uint8List.fromList([1]), id);
+
+        db.dropHashIndex(users, 'idx');
+
+        // After dropping, trying to use should fail
+        expect(
+          () => db.hashIndexLen(users, 'idx'),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  group('BTree Index', () {
+    test('create and lookup', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createBTreeIndex(users, 'age_idx');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        // Use big-endian for proper ordering
+        final key25 = Uint8List.fromList([0, 0, 0, 25]);
+        final key30 = Uint8List.fromList([0, 0, 0, 30]);
+
+        db.btreeIndexInsert(users, 'age_idx', key25, id1);
+        db.btreeIndexInsert(users, 'age_idx', key30, id2);
+
+        final results = db.btreeIndexLookup(users, 'age_idx', key25);
+        expect(results.length, equals(1));
+        expect(results.first, equals(id1));
+
+        expect(db.btreeIndexLen(users, 'age_idx'), equals(2));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('range query', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createBTreeIndex(users, 'score_idx');
+
+        final id10 = EntityId.generate();
+        final id20 = EntityId.generate();
+        final id30 = EntityId.generate();
+        final id40 = EntityId.generate();
+
+        // Big-endian keys for proper ordering
+        db.btreeIndexInsert(
+            users, 'score_idx', Uint8List.fromList([0, 0, 0, 10]), id10);
+        db.btreeIndexInsert(
+            users, 'score_idx', Uint8List.fromList([0, 0, 0, 20]), id20);
+        db.btreeIndexInsert(
+            users, 'score_idx', Uint8List.fromList([0, 0, 0, 30]), id30);
+        db.btreeIndexInsert(
+            users, 'score_idx', Uint8List.fromList([0, 0, 0, 40]), id40);
+
+        // Range [15, 35] should return 20 and 30
+        final results = db.btreeIndexRange(
+          users,
+          'score_idx',
+          minKey: Uint8List.fromList([0, 0, 0, 15]),
+          maxKey: Uint8List.fromList([0, 0, 0, 35]),
+        );
+
+        expect(results.length, equals(2));
+        expect(results, containsAll([id20, id30]));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('unbounded range queries', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createBTreeIndex(users, 'idx');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+        final id3 = EntityId.generate();
+
+        db.btreeIndexInsert(users, 'idx', Uint8List.fromList([0, 1]), id1);
+        db.btreeIndexInsert(users, 'idx', Uint8List.fromList([0, 2]), id2);
+        db.btreeIndexInsert(users, 'idx', Uint8List.fromList([0, 3]), id3);
+
+        // No bounds - get all
+        final all = db.btreeIndexRange(users, 'idx');
+        expect(all.length, equals(3));
+
+        // Only min bound
+        final fromMiddle = db.btreeIndexRange(
+          users,
+          'idx',
+          minKey: Uint8List.fromList([0, 2]),
+        );
+        expect(fromMiddle.length, equals(2));
+        expect(fromMiddle, containsAll([id2, id3]));
+
+        // Only max bound
+        final toMiddle = db.btreeIndexRange(
+          users,
+          'idx',
+          maxKey: Uint8List.fromList([0, 2]),
+        );
+        expect(toMiddle.length, equals(2));
+        expect(toMiddle, containsAll([id1, id2]));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('drop index', () {
+      final db = Database.openMemory();
+      try {
+        final users = db.collection('users');
+        db.createBTreeIndex(users, 'idx');
+
+        final id = EntityId.generate();
+        db.btreeIndexInsert(users, 'idx', Uint8List.fromList([1]), id);
+
+        db.dropBTreeIndex(users, 'idx');
+
+        expect(
+          () => db.btreeIndexLen(users, 'idx'),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+  });
 }

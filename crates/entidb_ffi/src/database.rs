@@ -806,6 +806,854 @@ pub unsafe extern "C" fn entidb_entity_count(
     EntiDbResult::Ok
 }
 
+// ============================================================================
+// Index Management
+// ============================================================================
+
+/// Index type enumeration for FFI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntiDbIndexType {
+    /// Hash index for O(1) equality lookups.
+    Hash = 0,
+    /// BTree index for ordered and range lookups.
+    BTree = 1,
+}
+
+/// Creates a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `unique` - Whether the index enforces unique constraint
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_create_hash_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    unique: bool,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    match db.create_hash_index(coll_id, name_str, unique) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Creates a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `unique` - Whether the index enforces unique constraint
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_create_btree_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    unique: bool,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    match db.create_btree_index(coll_id, name_str, unique) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Inserts a key-entity pair into a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `entity_id` - The entity ID to associate with the key
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+#[no_mangle]
+pub unsafe extern "C" fn entidb_hash_index_insert(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    entity_id: EntiDbEntityId,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len).to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.hash_index_insert(coll_id, name_str, key_bytes, ent_id) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Inserts a key-entity pair into a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `entity_id` - The entity ID to associate with the key
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+#[no_mangle]
+pub unsafe extern "C" fn entidb_btree_index_insert(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    entity_id: EntiDbEntityId,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len).to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.btree_index_insert(coll_id, name_str, key_bytes, ent_id) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Removes a key-entity pair from a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `entity_id` - The entity ID to remove
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+#[no_mangle]
+pub unsafe extern "C" fn entidb_hash_index_remove(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    entity_id: EntiDbEntityId,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len)
+    } else {
+        &[]
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.hash_index_remove(coll_id, name_str, key_bytes, ent_id) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Removes a key-entity pair from a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `entity_id` - The entity ID to remove
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+#[no_mangle]
+pub unsafe extern "C" fn entidb_btree_index_remove(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    entity_id: EntiDbEntityId,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len)
+    } else {
+        &[]
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.btree_index_remove(coll_id, name_str, key_bytes, ent_id) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Looks up entities by key in a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_hash_index_lookup(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len)
+    } else {
+        &[]
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.hash_index_lookup(coll_id, name_str, key_bytes) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Looks up entities by key in a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `key` - Pointer to key bytes
+/// * `key_len` - Length of key bytes
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `key` must be valid for `key_len` bytes
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_btree_index_lookup(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    key: *const u8,
+    key_len: usize,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    if key.is_null() && key_len > 0 {
+        set_last_error("null key pointer with non-zero length");
+        return EntiDbResult::InvalidArgument;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let key_bytes = if key_len > 0 {
+        std::slice::from_raw_parts(key, key_len)
+    } else {
+        &[]
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.btree_index_lookup(coll_id, name_str, key_bytes) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Performs a range query on a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `min_key` - Pointer to minimum key bytes (or null for unbounded)
+/// * `min_key_len` - Length of minimum key bytes
+/// * `max_key` - Pointer to maximum key bytes (or null for unbounded)
+/// * `max_key_len` - Length of maximum key bytes
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `min_key` must be valid for `min_key_len` bytes if non-null
+/// - `max_key` must be valid for `max_key_len` bytes if non-null
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_btree_index_range(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    min_key: *const u8,
+    min_key_len: usize,
+    max_key: *const u8,
+    max_key_len: usize,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let min_key_bytes = if min_key.is_null() {
+        None
+    } else if min_key_len > 0 {
+        Some(std::slice::from_raw_parts(min_key, min_key_len))
+    } else {
+        Some(&[] as &[u8])
+    };
+
+    let max_key_bytes = if max_key.is_null() {
+        None
+    } else if max_key_len > 0 {
+        Some(std::slice::from_raw_parts(max_key, max_key_len))
+    } else {
+        Some(&[] as &[u8])
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.btree_index_range(coll_id, name_str, min_key_bytes, max_key_bytes) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Returns the number of entries in a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `out_count` - Output pointer for the count
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `out_count` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_hash_index_len(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    out_count: *mut usize,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_count.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.hash_index_len(coll_id, name_str) {
+        Ok(count) => {
+            *out_count = count;
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Returns the number of entries in a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `out_count` - Output pointer for the count
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `out_count` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_btree_index_len(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    out_count: *mut usize,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_count.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.btree_index_len(coll_id, name_str) {
+        Ok(count) => {
+            *out_count = count;
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Drops a hash index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success (returns Ok even if index didn't exist).
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_drop_hash_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.drop_hash_index(coll_id, name_str) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Drops a BTree index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success (returns Ok even if index didn't exist).
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_drop_btree_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.drop_btree_index(coll_id, name_str) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1138,6 +1986,153 @@ mod tests {
             let result = entidb_committed_seq(handle, &mut new_seq);
             assert_eq!(result, EntiDbResult::Ok);
             assert!(new_seq > seq);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn hash_index_operations() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            // Get collection
+            let name = std::ffi::CString::new("users").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            // Create hash index
+            let index_name = std::ffi::CString::new("email").unwrap();
+            let result = entidb_create_hash_index(handle, coll_id, index_name.as_ptr(), true);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Generate entity ID
+            let mut entity_id = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity_id);
+
+            // Insert into index
+            let key = b"alice@example.com";
+            let result =
+                entidb_hash_index_insert(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), entity_id);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Lookup
+            let mut buffer = EntiDbBuffer::empty();
+            let result =
+                entidb_hash_index_lookup(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), &mut buffer);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 16); // One entity ID
+
+            // Check length
+            let mut count: usize = 0;
+            let result = entidb_hash_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(count, 1);
+
+            // Remove
+            let result =
+                entidb_hash_index_remove(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), entity_id);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Check length is 0
+            let result = entidb_hash_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(count, 0);
+
+            // Drop index
+            let result = entidb_drop_hash_index(handle, coll_id, index_name.as_ptr());
+            assert_eq!(result, EntiDbResult::Ok);
+
+            entidb_free_buffer(buffer);
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn btree_index_operations() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            // Get collection
+            let name = std::ffi::CString::new("users").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            // Create btree index
+            let index_name = std::ffi::CString::new("age").unwrap();
+            let result = entidb_create_btree_index(handle, coll_id, index_name.as_ptr(), false);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Generate entity IDs
+            let mut e1 = EntiDbEntityId::zero();
+            let mut e2 = EntiDbEntityId::zero();
+            let mut e3 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut e1);
+            entidb_generate_id(&mut e2);
+            entidb_generate_id(&mut e3);
+
+            // Insert into index (big-endian for proper ordering)
+            let key1 = 25i64.to_be_bytes();
+            let key2 = 30i64.to_be_bytes();
+            let key3 = 35i64.to_be_bytes();
+
+            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key1.as_ptr(), key1.len(), e1);
+            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key2.as_ptr(), key2.len(), e2);
+            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key3.as_ptr(), key3.len(), e3);
+
+            // Lookup exact
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_btree_index_lookup(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key2.as_ptr(),
+                key2.len(),
+                &mut buffer,
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 16); // One entity
+            entidb_free_buffer(buffer);
+
+            // Range query: 25 <= age <= 30
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_btree_index_range(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key1.as_ptr(),
+                key1.len(),
+                key2.as_ptr(),
+                key2.len(),
+                &mut buffer,
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 32); // Two entities
+            entidb_free_buffer(buffer);
+
+            // Range query: unbounded (all)
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_btree_index_range(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut buffer,
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 48); // Three entities
+            entidb_free_buffer(buffer);
+
+            // Drop index
+            let result = entidb_drop_btree_index(handle, coll_id, index_name.as_ptr());
+            assert_eq!(result, EntiDbResult::Ok);
 
             entidb_close(handle);
         }

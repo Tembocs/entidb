@@ -745,6 +745,404 @@ final class Database {
       calloc.free(countPtr);
     }
   }
+
+  // ==========================================================================
+  // Index Management
+  // ==========================================================================
+
+  /// Creates a hash index for O(1) equality lookups.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to create the index on.
+  /// - [name]: The index name.
+  /// - [unique]: Whether the index enforces unique keys.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final users = db.collection('users');
+  /// db.createHashIndex(users, 'email', unique: true);
+  /// ```
+  void createHashIndex(Collection collection, String name,
+      {bool unique = false}) {
+    _ensureOpen();
+
+    final namePtr = name.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result =
+          bindings.entidbCreateHashIndex(_handle!, collId.ref, namePtr, unique);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Creates a BTree index for ordered and range lookups.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to create the index on.
+  /// - [name]: The index name.
+  /// - [unique]: Whether the index enforces unique keys.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final users = db.collection('users');
+  /// db.createBTreeIndex(users, 'age', unique: false);
+  /// ```
+  void createBTreeIndex(Collection collection, String name,
+      {bool unique = false}) {
+    _ensureOpen();
+
+    final namePtr = name.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result = bindings.entidbCreateBTreeIndex(
+          _handle!, collId.ref, namePtr, unique);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Inserts a key-entity pair into a hash index.
+  void hashIndexInsert(Collection collection, String indexName, Uint8List key,
+      EntityId entityId) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbHashIndexInsert(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Inserts a key-entity pair into a BTree index.
+  ///
+  /// Note: For proper ordering, use big-endian encoding for numeric keys.
+  void btreeIndexInsert(Collection collection, String indexName, Uint8List key,
+      EntityId entityId) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbBTreeIndexInsert(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Removes a key-entity pair from a hash index.
+  void hashIndexRemove(Collection collection, String indexName, Uint8List key,
+      EntityId entityId) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbHashIndexRemove(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Removes a key-entity pair from a BTree index.
+  void btreeIndexRemove(Collection collection, String indexName, Uint8List key,
+      EntityId entityId) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbBTreeIndexRemove(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Looks up entities by key in a hash index.
+  ///
+  /// Returns a list of EntityIds matching the key.
+  List<EntityId> hashIndexLookup(
+      Collection collection, String indexName, Uint8List key) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbHashIndexLookup(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, bufferPtr);
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      bindings.entidbFreeBuffer(bufferPtr.ref);
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Looks up entities by key in a BTree index.
+  ///
+  /// Returns a list of EntityIds matching the key.
+  List<EntityId> btreeIndexLookup(
+      Collection collection, String indexName, Uint8List key) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final keyPtr = calloc<Uint8>(key.length);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      for (var i = 0; i < key.length; i++) {
+        keyPtr[i] = key[i];
+      }
+
+      final result = bindings.entidbBTreeIndexLookup(
+          _handle!, collId.ref, namePtr, keyPtr, key.length, bufferPtr);
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      bindings.entidbFreeBuffer(bufferPtr.ref);
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(keyPtr);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Performs a range query on a BTree index.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection the index belongs to.
+  /// - [indexName]: The name of the index.
+  /// - [minKey]: Optional minimum key (inclusive). Null for unbounded.
+  /// - [maxKey]: Optional maximum key (inclusive). Null for unbounded.
+  ///
+  /// Returns a list of EntityIds in the range.
+  List<EntityId> btreeIndexRange(
+    Collection collection,
+    String indexName, {
+    Uint8List? minKey,
+    Uint8List? maxKey,
+  }) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    Pointer<Uint8> minKeyPtr = nullptr;
+    Pointer<Uint8> maxKeyPtr = nullptr;
+    int minKeyLen = 0;
+    int maxKeyLen = 0;
+
+    try {
+      if (minKey != null) {
+        minKeyPtr = calloc<Uint8>(minKey.length);
+        minKeyLen = minKey.length;
+        for (var i = 0; i < minKey.length; i++) {
+          minKeyPtr[i] = minKey[i];
+        }
+      }
+
+      if (maxKey != null) {
+        maxKeyPtr = calloc<Uint8>(maxKey.length);
+        maxKeyLen = maxKey.length;
+        for (var i = 0; i < maxKey.length; i++) {
+          maxKeyPtr[i] = maxKey[i];
+        }
+      }
+
+      final result = bindings.entidbBTreeIndexRange(
+        _handle!,
+        collId.ref,
+        namePtr,
+        minKeyPtr,
+        minKeyLen,
+        maxKeyPtr,
+        maxKeyLen,
+        bufferPtr,
+      );
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      bindings.entidbFreeBuffer(bufferPtr.ref);
+      calloc.free(namePtr);
+      calloc.free(collId);
+      if (minKeyPtr != nullptr) calloc.free(minKeyPtr);
+      if (maxKeyPtr != nullptr) calloc.free(maxKeyPtr);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Returns the number of entries in a hash index.
+  int hashIndexLen(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final countPtr = calloc<IntPtr>();
+
+    try {
+      final result =
+          bindings.entidbHashIndexLen(_handle!, collId.ref, namePtr, countPtr);
+      checkResult(result);
+      return countPtr.value;
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(countPtr);
+    }
+  }
+
+  /// Returns the number of entries in a BTree index.
+  int btreeIndexLen(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final countPtr = calloc<IntPtr>();
+
+    try {
+      final result =
+          bindings.entidbBTreeIndexLen(_handle!, collId.ref, namePtr, countPtr);
+      checkResult(result);
+      return countPtr.value;
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(countPtr);
+    }
+  }
+
+  /// Drops a hash index.
+  ///
+  /// Throws if the index doesn't exist after the call (for safety).
+  void dropHashIndex(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result =
+          bindings.entidbDropHashIndex(_handle!, collId.ref, namePtr);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Drops a BTree index.
+  ///
+  /// Throws if the index doesn't exist after the call (for safety).
+  void dropBTreeIndex(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result =
+          bindings.entidbDropBTreeIndex(_handle!, collId.ref, namePtr);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Helper to parse entity IDs from a buffer (16 bytes each).
+  List<EntityId> _parseEntityIds(Pointer<EntiDbBuffer> bufferPtr) {
+    final length = bufferPtr.ref.len;
+    if (length == 0) return [];
+
+    final count = length ~/ 16;
+    final result = <EntityId>[];
+
+    for (var i = 0; i < count; i++) {
+      final bytes = <int>[];
+      for (var j = 0; j < 16; j++) {
+        bytes.add(bufferPtr.ref.data[i * 16 + j]);
+      }
+      result.add(EntityId.fromBytes(Uint8List.fromList(bytes)));
+    }
+
+    return result;
+  }
 }
 
 /// Statistics from a restore operation.

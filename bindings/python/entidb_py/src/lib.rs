@@ -611,6 +611,218 @@ impl Database {
         self.inner.entity_count()
     }
 
+    // ========================================================================
+    // Index Management
+    // ========================================================================
+
+    /// Creates a hash index for O(1) equality lookups.
+    ///
+    /// Args:
+    ///     collection: The collection to create the index on.
+    ///     name: The index name.
+    ///     unique: Whether the index enforces unique keys.
+    ///
+    /// Example:
+    /// ```python
+    /// db.create_hash_index(users, "email", unique=True)
+    /// ```
+    #[pyo3(signature = (collection, name, unique=false))]
+    fn create_hash_index(
+        &self,
+        collection: &Collection,
+        name: &str,
+        unique: bool,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .create_hash_index(coll, name, unique)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Creates a BTree index for ordered and range lookups.
+    ///
+    /// Args:
+    ///     collection: The collection to create the index on.
+    ///     name: The index name.
+    ///     unique: Whether the index enforces unique keys.
+    ///
+    /// Example:
+    /// ```python
+    /// db.create_btree_index(users, "age", unique=False)
+    /// ```
+    #[pyo3(signature = (collection, name, unique=false))]
+    fn create_btree_index(
+        &self,
+        collection: &Collection,
+        name: &str,
+        unique: bool,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .create_btree_index(coll, name, unique)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Inserts a key-entity pair into a hash index.
+    ///
+    /// Args:
+    ///     collection: The collection the index belongs to.
+    ///     index_name: The name of the index.
+    ///     key: The key bytes.
+    ///     entity_id: The entity to associate with the key.
+    fn hash_index_insert(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .hash_index_insert(coll, index_name, key.to_vec(), entity_id.inner)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Inserts a key-entity pair into a BTree index.
+    ///
+    /// Args:
+    ///     collection: The collection the index belongs to.
+    ///     index_name: The name of the index.
+    ///     key: The key bytes (should use big-endian encoding for proper ordering).
+    ///     entity_id: The entity to associate with the key.
+    fn btree_index_insert(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .btree_index_insert(coll, index_name, key.to_vec(), entity_id.inner)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Removes a key-entity pair from a hash index.
+    fn hash_index_remove(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .hash_index_remove(coll, index_name, key, entity_id.inner)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Removes a key-entity pair from a BTree index.
+    fn btree_index_remove(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .btree_index_remove(coll, index_name, key, entity_id.inner)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Looks up entities by key in a hash index.
+    ///
+    /// Returns a list of EntityIds matching the key.
+    fn hash_index_lookup(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+    ) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .hash_index_lookup(coll, index_name, key)
+            .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Looks up entities by key in a BTree index.
+    ///
+    /// Returns a list of EntityIds matching the key.
+    fn btree_index_lookup(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+    ) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .btree_index_lookup(coll, index_name, key)
+            .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Performs a range query on a BTree index.
+    ///
+    /// Args:
+    ///     collection: The collection the index belongs to.
+    ///     index_name: The name of the index.
+    ///     min_key: Optional minimum key (inclusive). None for unbounded.
+    ///     max_key: Optional maximum key (inclusive). None for unbounded.
+    ///
+    /// Returns a list of EntityIds in the range.
+    #[pyo3(signature = (collection, index_name, min_key=None, max_key=None))]
+    fn btree_index_range(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        min_key: Option<&[u8]>,
+        max_key: Option<&[u8]>,
+    ) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .btree_index_range(coll, index_name, min_key, max_key)
+            .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of entries in a hash index.
+    fn hash_index_len(&self, collection: &Collection, index_name: &str) -> PyResult<usize> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .hash_index_len(coll, index_name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of entries in a BTree index.
+    fn btree_index_len(&self, collection: &Collection, index_name: &str) -> PyResult<usize> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .btree_index_len(coll, index_name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Drops a hash index.
+    ///
+    /// Returns True if the index existed and was dropped.
+    fn drop_hash_index(&self, collection: &Collection, index_name: &str) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .drop_hash_index(coll, index_name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Drops a BTree index.
+    ///
+    /// Returns True if the index existed and was dropped.
+    fn drop_btree_index(&self, collection: &Collection, index_name: &str) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .drop_btree_index(coll, index_name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }

@@ -6,6 +6,7 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 
 **Update (December 2024):** Phase 1 (Core Completeness) is now ✅ COMPLETE.
 **Update (December 2024):** Phase 2 (Binding Parity) is now ✅ COMPLETE.
+**Update (December 2024):** Phase 3 (Index APIs) is now ✅ COMPLETE.
 
 ---
 
@@ -54,11 +55,53 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 - Python: 11 new tests (39 total)
 - Dart: 15 new tests (47 total)
 
+### 5. **Index APIs in Bindings** - ✅ COMPLETE
+**Implementation (December 2024):**
+
+| Feature | Core | FFI | Dart | Python | WASM |
+|---------|:----:|:---:|:----:|:------:|:----:|
+| Hash Index | ✅ | ✅ | ✅ | ✅ | ❌ |
+| BTree Index | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Index Insert | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Index Remove | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Index Lookup | ✅ | ✅ | ✅ | ✅ | ❌ |
+| BTree Range Query | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Index Length | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Drop Index | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+**Core Database Methods:**
+- `create_hash_index(collection_id, name, unique)` - Creates a hash index
+- `create_btree_index(collection_id, name, unique)` - Creates a btree index
+- `hash_index_insert(collection_id, name, key, entity_id)` - Inserts into hash index
+- `btree_index_insert(collection_id, name, key, entity_id)` - Inserts into btree index
+- `hash_index_remove(collection_id, name, key, entity_id)` - Removes from hash index
+- `btree_index_remove(collection_id, name, key, entity_id)` - Removes from btree index
+- `hash_index_lookup(collection_id, name, key)` - Looks up in hash index
+- `btree_index_lookup(collection_id, name, key)` - Looks up in btree index
+- `btree_index_range(collection_id, name, min, max)` - Range query in btree index
+- `hash_index_len(collection_id, name)` - Gets hash index entry count
+- `btree_index_len(collection_id, name)` - Gets btree index entry count
+- `drop_hash_index(collection_id, name)` - Drops a hash index
+- `drop_btree_index(collection_id, name)` - Drops a btree index
+
+**Design Notes:**
+- Uses `Vec<u8>` as key type for FFI compatibility
+- Indexes keyed by `(collection_id, index_name)` tuple
+- Unique indexes enforce constraint on insert
+- Range queries support unbounded min/max
+- Entity IDs returned as contiguous 16-byte blocks
+
+**Tests Added:**
+- Core: 9 new tests (37 total)
+- FFI: 2 new tests (31 total)
+- Dart: 9 new tests (54 total)
+- Python: 8 new tests
+
 ---
 
 ## 🔴 Critical Missing Features
 
-### 5. **Change Feed Integration with Core** - MISSING
+### 6. **Change Feed Integration with Core** - MISSING
 **Current State:** `ChangeFeed` exists in `entidb_sync_protocol` but is **not wired** into `Database` or `TransactionManager`.
 
 **Impact:** No way to observe committed changes for sync, reactive UIs, or auditing.
@@ -66,18 +109,6 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 **Required:**
 - Hook in `TransactionManager::commit()` to emit `ChangeEvent`
 - Expose `db.subscribe()` or `db.changes()` API
-
----
-
-### 6. **Index APIs in Bindings** - MISSING
-**Current State:** Core has full index implementations (BTree, Hash), but FFI/Dart/Python expose **none**.
-
-| Feature | Core | FFI | Dart | Python | WASM |
-|---------|:----:|:---:|:----:|:------:|:----:|
-| Hash Index | ✅ | ❌ | ❌ | ❌ | ❌ |
-| BTree Index | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Index Query | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Encryption | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -145,9 +176,9 @@ The core database engine has solid foundations (storage, WAL, segments, transact
 5. ✅ **Checkpoint in FFI/bindings** - Manual durability control
 6. ✅ **Database properties (committed_seq, entity_count)** - Observability
 
-### Phase 3: Index APIs
-7. **Index creation in FFI/bindings** - Query efficiency
-8. **Index query APIs** - Fast lookups
+### Phase 3: Index APIs ✅ COMPLETE
+7. ✅ **Index creation in FFI/bindings** - Create hash and btree indexes
+8. ✅ **Index query APIs** - Insert, remove, lookup, range queries
 
 ### Phase 4: Observability
 9. **Change feed integration** - Sync prerequisite, reactive apps
