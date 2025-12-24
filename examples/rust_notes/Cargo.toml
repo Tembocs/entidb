@@ -3,12 +3,12 @@ name = "rust_notes"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "EntiDB Notes Example - demonstrates complex entities and filtering"
 
 [dependencies]
 entidb_core = { path = "../../crates/entidb_core" }
 entidb_codec = { path = "../../crates/entidb_codec" }
 entidb_storage = { path = "../../crates/entidb_storage" }
-tempfile = "3.9"
 
 [[bin]]
 name = "notes"

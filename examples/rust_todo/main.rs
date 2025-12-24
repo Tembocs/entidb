@@ -2,24 +2,17 @@
 //!
 //! This example demonstrates core EntiDB functionality:
 //! - Opening a database
-//! - Defining entities
+//! - Defining entities with CBOR encoding
 //! - CRUD operations within transactions
 //! - Filtering using native Rust iterators
+//!
+//! Run with: cargo run -p rust_todo
 
-use entidb_codec::{Encoder, Value};
-use entidb_core::{
-    collection::Collection,
-    database::{Database, DatabaseConfig},
-    entity::{Entity, EntityCodec, EntityId},
-    error::Error,
-    index::BTreeIndexDef,
-    transaction::Transaction,
-};
-use entidb_storage::file::FileBackend;
-use std::path::PathBuf;
-use tempfile::TempDir;
+use entidb_codec::{from_cbor, to_canonical_cbor, Value};
+use entidb_core::{Database, EntityId};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A simple Todo item entity
+/// A simple Todo item entity with CBOR encoding.
 #[derive(Debug, Clone)]
 struct Todo {
     id: EntityId,
@@ -29,54 +22,50 @@ struct Todo {
     created_at: u64,
 }
 
-impl Entity for Todo {
-    fn id(&self) -> EntityId {
-        self.id
-    }
-}
+impl Todo {
+    /// Creates a new Todo with a generated ID.
+    fn new(title: &str, priority: u8) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-impl EntityCodec for Todo {
-    fn encode(&self) -> Result<Vec<u8>, entidb_codec::Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_map_start(5)?;
-
-        // Encode in canonical order (sorted by key)
-        encoder.encode_string("completed")?;
-        encoder.encode_bool(self.completed)?;
-
-        encoder.encode_string("created_at")?;
-        encoder.encode_u64(self.created_at)?;
-
-        encoder.encode_string("id")?;
-        encoder.encode_bytes(self.id.as_bytes())?;
-
-        encoder.encode_string("priority")?;
-        encoder.encode_u64(self.priority as u64)?;
-
-        encoder.encode_string("title")?;
-        encoder.encode_string(&self.title)?;
-
-        Ok(encoder.finish())
+        Self {
+            id: EntityId::new(),
+            title: title.to_string(),
+            completed: false,
+            priority,
+            created_at: now,
+        }
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, entidb_codec::Error> {
-        let value = entidb_codec::Decoder::decode(bytes)?;
+    /// Encodes the todo to canonical CBOR bytes.
+    fn encode(&self) -> Vec<u8> {
+        // Build a map with sorted keys for canonical CBOR
+        let pairs = vec![
+            (Value::Text("completed".to_string()), Value::Bool(self.completed)),
+            (Value::Text("created_at".to_string()), Value::Integer(self.created_at as i64)),
+            (Value::Text("id".to_string()), Value::Bytes(self.id.as_bytes().to_vec())),
+            (Value::Text("priority".to_string()), Value::Integer(self.priority as i64)),
+            (Value::Text("title".to_string()), Value::Text(self.title.clone())),
+        ];
+        let value = Value::Map(pairs);
+        to_canonical_cbor(&value).expect("encoding should succeed")
+    }
+
+    /// Decodes a todo from CBOR bytes.
+    fn decode(id: EntityId, bytes: &[u8]) -> Result<Self, String> {
+        let value = from_cbor(bytes).map_err(|e| e.to_string())?;
 
         if let Value::Map(entries) = value {
-            let mut id = None;
             let mut title = None;
-            let mut completed = None;
-            let mut priority = None;
-            let mut created_at = None;
+            let mut completed = false;
+            let mut priority = 0u8;
+            let mut created_at = 0u64;
 
             for (key, val) in entries {
                 if let Value::Text(k) = key {
                     match k.as_str() {
-                        "id" => {
-                            if let Value::Bytes(b) = val {
-                                id = Some(EntityId::from_bytes(&b)?);
-                            }
-                        }
                         "title" => {
                             if let Value::Text(t) = val {
                                 title = Some(t);
@@ -84,17 +73,17 @@ impl EntityCodec for Todo {
                         }
                         "completed" => {
                             if let Value::Bool(c) = val {
-                                completed = Some(c);
+                                completed = c;
                             }
                         }
                         "priority" => {
                             if let Value::Integer(p) = val {
-                                priority = Some(p as u8);
+                                priority = p as u8;
                             }
                         }
                         "created_at" => {
                             if let Value::Integer(c) = val {
-                                created_at = Some(c as u64);
+                                created_at = c as u64;
                             }
                         }
                         _ => {}
@@ -103,50 +92,40 @@ impl EntityCodec for Todo {
             }
 
             Ok(Todo {
-                id: id.ok_or_else(|| entidb_codec::Error::InvalidData("missing id".into()))?,
-                title: title
-                    .ok_or_else(|| entidb_codec::Error::InvalidData("missing title".into()))?,
-                completed: completed.unwrap_or(false),
-                priority: priority.unwrap_or(0),
-                created_at: created_at.unwrap_or(0),
+                id,
+                title: title.ok_or("missing title")?,
+                completed,
+                priority,
+                created_at,
             })
         } else {
-            Err(entidb_codec::Error::InvalidData(
-                "expected map".to_string(),
-            ))
+            Err("expected CBOR map".to_string())
+        }
+    }
+
+    /// Creates a copy with completed set to true.
+    fn complete(self) -> Self {
+        Self {
+            completed: true,
+            ..self
         }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a temporary directory for the database
-    let temp_dir = TempDir::new()?;
-    let db_path = temp_dir.path().join("todo_db");
+    println!("📁 Creating in-memory database");
 
-    println!("📁 Creating database at: {:?}", db_path);
-
-    // Open the database
-    let config = DatabaseConfig::default();
-    let db = Database::open(&db_path, config)?;
-
+    // Open an in-memory database
+    let db = Database::open_in_memory()?;
     println!("✅ Database opened successfully");
+
+    // Get the todos collection
+    let todos_collection = db.collection("todos");
 
     // Create some todos
     let todos = vec![
-        Todo {
-            id: EntityId::new(),
-            title: "Learn EntiDB".to_string(),
-            completed: false,
-            priority: 1,
-            created_at: 1700000000,
-        },
-        Todo {
-            id: EntityId::new(),
-            title: "Build an app".to_string(),
-            completed: false,
-            priority: 2,
-            created_at: 1700000100,
-        },
+        Todo::new("Learn EntiDB", 1),
+        Todo::new("Build an app", 2),
         Todo {
             id: EntityId::new(),
             title: "Write tests".to_string(),
@@ -154,44 +133,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             priority: 1,
             created_at: 1700000200,
         },
-        Todo {
-            id: EntityId::new(),
-            title: "Deploy to production".to_string(),
-            completed: false,
-            priority: 3,
-            created_at: 1700000300,
-        },
+        Todo::new("Deploy to production", 3),
     ];
 
     // Insert todos in a transaction
     println!("\n📝 Inserting {} todos...", todos.len());
-    db.write(|tx| {
+    db.transaction(|txn| {
         for todo in &todos {
-            tx.put("todos", todo)?;
+            txn.put(todos_collection, todo.id, todo.encode())?;
         }
         Ok(())
     })?;
     println!("✅ Todos inserted");
 
-    // Read all todos
+    // Read all todos using list()
     println!("\n📋 All todos:");
-    let all_todos: Vec<Todo> = db.read(|tx| tx.scan::<Todo>("todos").collect())?;
+    let all_entries = db.list(todos_collection)?;
+    let all_todos: Vec<Todo> = all_entries
+        .iter()
+        .filter_map(|(id, bytes)| Todo::decode(*id, bytes).ok())
+        .collect();
 
     for todo in &all_todos {
         let status = if todo.completed { "✓" } else { "○" };
-        println!(
-            "  {} [P{}] {}",
-            status, todo.priority, todo.title
-        );
+        println!("  {} [P{}] {}", status, todo.priority, todo.title);
     }
 
     // Filter incomplete high-priority todos using native Rust iterators
     println!("\n⚡ High-priority incomplete todos:");
-    let urgent: Vec<Todo> = db.read(|tx| {
-        tx.scan::<Todo>("todos")
-            .filter(|t| !t.completed && t.priority == 1)
-            .collect()
-    })?;
+    let urgent: Vec<&Todo> = all_todos
+        .iter()
+        .filter(|t| !t.completed && t.priority == 1)
+        .collect();
 
     for todo in &urgent {
         println!("  ○ {}", todo.title);
@@ -199,27 +172,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Update a todo
     println!("\n✏️  Completing 'Learn EntiDB'...");
-    db.write(|tx| {
-        let mut updated: Vec<Todo> = tx
-            .scan::<Todo>("todos")
-            .filter(|t| t.title == "Learn EntiDB")
-            .collect();
-
-        if let Some(todo) = updated.first_mut() {
-            let completed_todo = Todo {
-                completed: true,
-                ..todo.clone()
-            };
-            tx.put("todos", &completed_todo)?;
+    db.transaction(|txn| {
+        if let Some(todo) = all_todos.iter().find(|t| t.title == "Learn EntiDB") {
+            let updated = todo.clone().complete();
+            txn.put(todos_collection, updated.id, updated.encode())?;
         }
         Ok(())
     })?;
 
     // Count completed vs incomplete
-    let (completed, incomplete): (Vec<_>, Vec<_>) = db.read(|tx| {
-        tx.scan::<Todo>("todos")
-            .partition(|t| t.completed)
-    })?;
+    let updated_entries = db.list(todos_collection)?;
+    let updated_todos: Vec<Todo> = updated_entries
+        .iter()
+        .filter_map(|(id, bytes)| Todo::decode(*id, bytes).ok())
+        .collect();
+
+    let (completed, incomplete): (Vec<_>, Vec<_>) =
+        updated_todos.iter().partition(|t| t.completed);
 
     println!("\n📊 Summary:");
     println!("  Completed: {}", completed.len());
@@ -227,20 +196,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Delete completed todos
     println!("\n🗑️  Deleting completed todos...");
-    db.write(|tx| {
-        let to_delete: Vec<EntityId> = tx
-            .scan::<Todo>("todos")
-            .filter(|t| t.completed)
-            .map(|t| t.id)
-            .collect();
-
-        for id in to_delete {
-            tx.delete("todos", id)?;
+    db.transaction(|txn| {
+        for todo in &completed {
+            txn.delete(todos_collection, todo.id)?;
         }
         Ok(())
     })?;
 
-    let remaining: Vec<Todo> = db.read(|tx| tx.scan::<Todo>("todos").collect())?;
+    let remaining = db.list(todos_collection)?;
     println!("✅ Remaining todos: {}", remaining.len());
 
     // Close the database

@@ -1,22 +1,17 @@
 //! Notes Application Example
 //!
 //! This example demonstrates:
-//! - Working with complex entities
-//! - Using indexes for efficient queries
-//! - Backup and restore functionality
-//! - Encryption at rest
+//! - Working with complex entities (arrays, nested structures)
+//! - Advanced filtering with Rust iterators
+//! - Entity updates within transactions
+//!
+//! Run with: cargo run -p rust_notes
 
-use entidb_codec::{Encoder, Value};
-use entidb_core::{
-    backup::BackupManager,
-    database::{Database, DatabaseConfig},
-    entity::{Entity, EntityCodec, EntityId},
-};
-use entidb_storage::file::FileBackend;
-use std::path::PathBuf;
-use tempfile::TempDir;
+use entidb_codec::{from_cbor, to_canonical_cbor, Value};
+use entidb_core::{Database, EntityId};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A note with tags and content
+/// A note with tags and content.
 #[derive(Debug, Clone)]
 struct Note {
     id: EntityId,
@@ -27,60 +22,58 @@ struct Note {
     updated_at: u64,
 }
 
-impl Entity for Note {
-    fn id(&self) -> EntityId {
-        self.id
-    }
-}
+impl Note {
+    /// Creates a new note with a generated ID.
+    fn new(title: &str, content: &str, tags: Vec<&str>) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-impl EntityCodec for Note {
-    fn encode(&self) -> Result<Vec<u8>, entidb_codec::Error> {
-        let mut encoder = Encoder::new();
-        encoder.encode_map_start(6)?;
-
-        encoder.encode_string("content")?;
-        encoder.encode_string(&self.content)?;
-
-        encoder.encode_string("created_at")?;
-        encoder.encode_u64(self.created_at)?;
-
-        encoder.encode_string("id")?;
-        encoder.encode_bytes(self.id.as_bytes())?;
-
-        encoder.encode_string("tags")?;
-        encoder.encode_array_start(self.tags.len())?;
-        for tag in &self.tags {
-            encoder.encode_string(tag)?;
+        Self {
+            id: EntityId::new(),
+            title: title.to_string(),
+            content: content.to_string(),
+            tags: tags.into_iter().map(String::from).collect(),
+            created_at: now,
+            updated_at: now,
         }
-
-        encoder.encode_string("title")?;
-        encoder.encode_string(&self.title)?;
-
-        encoder.encode_string("updated_at")?;
-        encoder.encode_u64(self.updated_at)?;
-
-        Ok(encoder.finish())
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, entidb_codec::Error> {
-        let value = entidb_codec::Decoder::decode(bytes)?;
+    /// Encodes the note to canonical CBOR bytes.
+    fn encode(&self) -> Vec<u8> {
+        // Build tags array
+        let tags_array: Vec<Value> = self.tags.iter()
+            .map(|t| Value::Text(t.clone()))
+            .collect();
+
+        // Build a map with sorted keys for canonical CBOR
+        let pairs = vec![
+            (Value::Text("content".to_string()), Value::Text(self.content.clone())),
+            (Value::Text("created_at".to_string()), Value::Integer(self.created_at as i64)),
+            (Value::Text("id".to_string()), Value::Bytes(self.id.as_bytes().to_vec())),
+            (Value::Text("tags".to_string()), Value::Array(tags_array)),
+            (Value::Text("title".to_string()), Value::Text(self.title.clone())),
+            (Value::Text("updated_at".to_string()), Value::Integer(self.updated_at as i64)),
+        ];
+        let value = Value::Map(pairs);
+        to_canonical_cbor(&value).expect("encoding should succeed")
+    }
+
+    /// Decodes a note from CBOR bytes.
+    fn decode(id: EntityId, bytes: &[u8]) -> Result<Self, String> {
+        let value = from_cbor(bytes).map_err(|e| e.to_string())?;
 
         if let Value::Map(entries) = value {
-            let mut id = None;
             let mut title = None;
-            let mut content = None;
+            let mut content = String::new();
             let mut tags = Vec::new();
-            let mut created_at = None;
-            let mut updated_at = None;
+            let mut created_at = 0u64;
+            let mut updated_at = 0u64;
 
             for (key, val) in entries {
                 if let Value::Text(k) = key {
                     match k.as_str() {
-                        "id" => {
-                            if let Value::Bytes(b) = val {
-                                id = Some(EntityId::from_bytes(&b)?);
-                            }
-                        }
                         "title" => {
                             if let Value::Text(t) = val {
                                 title = Some(t);
@@ -88,7 +81,7 @@ impl EntityCodec for Note {
                         }
                         "content" => {
                             if let Value::Text(c) = val {
-                                content = Some(c);
+                                content = c;
                             }
                         }
                         "tags" => {
@@ -102,12 +95,12 @@ impl EntityCodec for Note {
                         }
                         "created_at" => {
                             if let Value::Integer(c) = val {
-                                created_at = Some(c as u64);
+                                created_at = c as u64;
                             }
                         }
                         "updated_at" => {
                             if let Value::Integer(u) = val {
-                                updated_at = Some(u as u64);
+                                updated_at = u as u64;
                             }
                         }
                         _ => {}
@@ -116,94 +109,96 @@ impl EntityCodec for Note {
             }
 
             Ok(Note {
-                id: id.ok_or_else(|| entidb_codec::Error::InvalidData("missing id".into()))?,
-                title: title
-                    .ok_or_else(|| entidb_codec::Error::InvalidData("missing title".into()))?,
-                content: content.unwrap_or_default(),
+                id,
+                title: title.ok_or("missing title")?,
+                content,
                 tags,
-                created_at: created_at.unwrap_or(0),
-                updated_at: updated_at.unwrap_or(0),
+                created_at,
+                updated_at,
             })
         } else {
-            Err(entidb_codec::Error::InvalidData(
-                "expected map".to_string(),
-            ))
+            Err("expected CBOR map".to_string())
         }
+    }
+
+    /// Updates the content and timestamp.
+    fn update_content(self, new_content: &str) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Self {
+            content: new_content.to_string(),
+            updated_at: now,
+            ..self
+        }
+    }
+
+    /// Checks if the note has a specific tag.
+    fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let temp_dir = TempDir::new()?;
-    let db_path = temp_dir.path().join("notes_db");
-    let backup_path = temp_dir.path().join("notes_backup");
-
     println!("📝 Notes Application Example");
     println!("=============================\n");
 
-    // Open the database
-    let config = DatabaseConfig::default();
-    let db = Database::open(&db_path, config)?;
+    // Open an in-memory database
+    let db = Database::open_in_memory()?;
+
+    // Get the notes collection
+    let notes_collection = db.collection("notes");
 
     // Create sample notes
     let notes = vec![
-        Note {
-            id: EntityId::new(),
-            title: "Meeting Notes".to_string(),
-            content: "Discussed Q4 roadmap and priorities.".to_string(),
-            tags: vec!["work".to_string(), "meeting".to_string()],
-            created_at: 1700000000,
-            updated_at: 1700000000,
-        },
-        Note {
-            id: EntityId::new(),
-            title: "Recipe: Pasta".to_string(),
-            content: "Boil water, add pasta, cook for 10 minutes.".to_string(),
-            tags: vec!["cooking".to_string(), "recipe".to_string()],
-            created_at: 1700001000,
-            updated_at: 1700001000,
-        },
-        Note {
-            id: EntityId::new(),
-            title: "Book Ideas".to_string(),
-            content: "Write about embedded databases and their applications.".to_string(),
-            tags: vec!["writing".to_string(), "ideas".to_string()],
-            created_at: 1700002000,
-            updated_at: 1700002000,
-        },
-        Note {
-            id: EntityId::new(),
-            title: "Project Checklist".to_string(),
-            content: "1. Setup\n2. Implementation\n3. Testing\n4. Deploy".to_string(),
-            tags: vec!["work".to_string(), "project".to_string()],
-            created_at: 1700003000,
-            updated_at: 1700003000,
-        },
+        Note::new(
+            "Meeting Notes",
+            "Discussed Q4 roadmap and priorities.",
+            vec!["work", "meeting"],
+        ),
+        Note::new(
+            "Recipe: Pasta",
+            "Boil water, add pasta, cook for 10 minutes.",
+            vec!["cooking", "recipe"],
+        ),
+        Note::new(
+            "Book Ideas",
+            "Write about embedded databases and their applications.",
+            vec!["writing", "ideas"],
+        ),
+        Note::new(
+            "Project Checklist",
+            "1. Setup\n2. Implementation\n3. Testing\n4. Deploy",
+            vec!["work", "project"],
+        ),
     ];
 
-    // Insert notes
+    // Insert notes in a transaction
     println!("📥 Inserting {} notes...", notes.len());
-    db.write(|tx| {
+    db.transaction(|txn| {
         for note in &notes {
-            tx.put("notes", note)?;
+            txn.put(notes_collection, note.id, note.encode())?;
         }
         Ok(())
     })?;
 
     // Display all notes
     println!("\n📋 All Notes:");
-    let all_notes: Vec<Note> = db.read(|tx| tx.scan::<Note>("notes").collect())?;
+    let all_entries = db.list(notes_collection)?;
+    let all_notes: Vec<Note> = all_entries
+        .iter()
+        .filter_map(|(id, bytes)| Note::decode(*id, bytes).ok())
+        .collect();
 
     for note in &all_notes {
         println!("  📄 {} (tags: {})", note.title, note.tags.join(", "));
     }
 
-    // Filter by tag using native iterators
+    // Filter by tag using native Rust iterators
     println!("\n🔍 Notes tagged 'work':");
-    let work_notes: Vec<Note> = db.read(|tx| {
-        tx.scan::<Note>("notes")
-            .filter(|n| n.tags.contains(&"work".to_string()))
-            .collect()
-    })?;
+    let work_notes: Vec<&Note> = all_notes.iter().filter(|n| n.has_tag("work")).collect();
 
     for note in &work_notes {
         println!("  📄 {}", note.title);
@@ -211,62 +206,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Search in content
     println!("\n🔎 Notes containing 'database':");
-    let search_results: Vec<Note> = db.read(|tx| {
-        tx.scan::<Note>("notes")
-            .filter(|n| n.content.to_lowercase().contains("database"))
-            .collect()
-    })?;
+    let search_results: Vec<&Note> = all_notes
+        .iter()
+        .filter(|n| n.content.to_lowercase().contains("database"))
+        .collect();
 
     for note in &search_results {
-        println!("  📄 {} - {}", note.title, &note.content[..50.min(note.content.len())]);
+        let preview = &note.content[..50.min(note.content.len())];
+        println!("  📄 {} - {}", note.title, preview);
     }
 
-    // Create a backup
-    println!("\n💾 Creating backup...");
-    let backup_manager = BackupManager::new(&db);
-    let backup_info = backup_manager.create_backup(&backup_path)?;
-    println!(
-        "✅ Backup created: {} bytes, {} collections",
-        backup_info.size_bytes, backup_info.collection_count
-    );
-
-    // Simulate data modification
-    println!("\n✏️  Modifying data...");
-    db.write(|tx| {
-        // Update a note
-        let mut meeting_note: Vec<Note> = tx
-            .scan::<Note>("notes")
-            .filter(|n| n.title == "Meeting Notes")
-            .collect();
-
-        if let Some(note) = meeting_note.first() {
-            let updated = Note {
-                content: format!("{}\n\nUpdate: Action items assigned.", note.content),
-                updated_at: 1700010000,
-                ..note.clone()
-            };
-            tx.put("notes", &updated)?;
+    // Update a note
+    println!("\n✏️  Updating 'Meeting Notes'...");
+    db.transaction(|txn| {
+        if let Some(note) = all_notes.iter().find(|n| n.title == "Meeting Notes") {
+            let new_content =
+                format!("{}\n\nUpdate: Action items assigned.", note.content);
+            let updated = note.clone().update_content(&new_content);
+            txn.put(notes_collection, updated.id, updated.encode())?;
         }
         Ok(())
     })?;
 
-    // Verify backup integrity
-    println!("\n🔐 Validating backup...");
-    let is_valid = backup_manager.validate_backup(&backup_path)?;
-    println!("✅ Backup valid: {}", is_valid);
+    // Verify the update
+    let updated_entries = db.list(notes_collection)?;
+    let updated_notes: Vec<Note> = updated_entries
+        .iter()
+        .filter_map(|(id, bytes)| Note::decode(*id, bytes).ok())
+        .collect();
 
-    // Statistics
-    let note_count: usize = db.read(|tx| tx.scan::<Note>("notes").count())?;
-    let total_tags: usize = db.read(|tx| {
-        tx.scan::<Note>("notes")
-            .map(|n| n.tags.len())
-            .sum()
-    })?;
+    if let Some(meeting_note) = updated_notes.iter().find(|n| n.title == "Meeting Notes") {
+        println!("  Updated content: {}", meeting_note.content);
+    }
+
+    // Statistics using iterators
+    let total_tags: usize = all_notes.iter().map(|n| n.tags.len()).sum();
 
     println!("\n📊 Statistics:");
-    println!("  Total notes: {}", note_count);
+    println!("  Total notes: {}", all_notes.len());
     println!("  Total tags: {}", total_tags);
-    println!("  Avg tags/note: {:.1}", total_tags as f64 / note_count as f64);
+    println!(
+        "  Avg tags/note: {:.1}",
+        total_tags as f64 / all_notes.len() as f64
+    );
+
+    // Find notes with multiple tags
+    let multi_tagged: Vec<&Note> = all_notes.iter().filter(|n| n.tags.len() > 1).collect();
+    println!("  Notes with multiple tags: {}", multi_tagged.len());
+
+    // Delete notes by tag
+    println!("\n🗑️  Deleting 'cooking' notes...");
+    db.transaction(|txn| {
+        let to_delete: Vec<EntityId> = all_notes
+            .iter()
+            .filter(|n| n.has_tag("cooking"))
+            .map(|n| n.id)
+            .collect();
+
+        for id in to_delete {
+            txn.delete(notes_collection, id)?;
+        }
+        Ok(())
+    })?;
+
+    let remaining = db.list(notes_collection)?;
+    println!("✅ Remaining notes: {}", remaining.len());
 
     db.close()?;
     println!("\n👋 Database closed");

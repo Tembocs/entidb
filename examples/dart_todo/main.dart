@@ -3,13 +3,16 @@
 /// This example demonstrates:
 /// - Opening a database
 /// - Basic CRUD operations
-/// - Filtering with Dart `where` clause
-/// - Transaction usage
+/// - Filtering with Dart's `where` clause (no SQL!)
+/// - Transaction usage with context manager pattern
+///
+/// Run with: dart run main.dart
 
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:entidb_dart/entidb_dart.dart';
 
-/// A simple todo item entity
+/// A simple todo item entity.
 class Todo {
   final EntityId id;
   final String title;
@@ -25,27 +28,40 @@ class Todo {
     this.createdAt = 0,
   });
 
-  /// Create from database bytes (simple encoding for demo)
-  factory Todo.fromBytes(EntityId id, Uint8List bytes) {
-    // Simple decoding: title|completed|priority|createdAt
-    final str = String.fromCharCodes(bytes);
-    final parts = str.split('|');
+  /// Create a new todo with a generated ID.
+  factory Todo.create(String title, {int priority = 0}) {
     return Todo(
-      id: id,
-      title: parts.isNotEmpty ? parts[0] : '',
-      completed: parts.length > 1 && parts[1] == 'true',
-      priority: parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0,
-      createdAt: parts.length > 3 ? int.tryParse(parts[3]) ?? 0 : 0,
+      id: EntityId.generate(),
+      title: title,
+      priority: priority,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
   }
 
-  /// Convert to database bytes (simple encoding for demo)
-  Uint8List toBytes() {
-    final str = '$title|$completed|$priority|$createdAt';
-    return Uint8List.fromList(str.codeUnits);
+  /// Create from database bytes (JSON encoding for simplicity).
+  factory Todo.fromBytes(EntityId id, Uint8List bytes) {
+    final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    return Todo(
+      id: id,
+      title: json['title'] as String,
+      completed: json['completed'] as bool? ?? false,
+      priority: json['priority'] as int? ?? 0,
+      createdAt: json['created_at'] as int? ?? 0,
+    );
   }
 
-  /// Create a copy with modifications
+  /// Convert to database bytes (JSON encoding for simplicity).
+  Uint8List toBytes() {
+    final json = {
+      'title': title,
+      'completed': completed,
+      'priority': priority,
+      'created_at': createdAt,
+    };
+    return Uint8List.fromList(utf8.encode(jsonEncode(json)));
+  }
+
+  /// Create a copy with modifications.
   Todo copyWith({
     EntityId? id,
     String? title,
@@ -61,6 +77,12 @@ class Todo {
       createdAt: createdAt ?? this.createdAt,
     );
   }
+
+  @override
+  String toString() {
+    final status = completed ? '✓' : '○';
+    return '$status [P$priority] $title';
+  }
 }
 
 void main() {
@@ -69,26 +91,16 @@ void main() {
   // Open an in-memory database
   final db = Database.openMemory();
   print('✅ Database opened successfully');
+  print('   Version: ${Database.version}');
 
   // Get the todos collection
   final todosCollection = db.collection('todos');
+  print('   Collection: ${todosCollection.name} (id=${todosCollection.id})');
 
   // Create some todos
   final todos = [
-    Todo(
-      id: EntityId.generate(),
-      title: 'Learn EntiDB',
-      completed: false,
-      priority: 1,
-      createdAt: 1700000000,
-    ),
-    Todo(
-      id: EntityId.generate(),
-      title: 'Build an app',
-      completed: false,
-      priority: 2,
-      createdAt: 1700000100,
-    ),
+    Todo.create('Learn EntiDB', priority: 1),
+    Todo.create('Build an app', priority: 2),
     Todo(
       id: EntityId.generate(),
       title: 'Write tests',
@@ -96,13 +108,7 @@ void main() {
       priority: 1,
       createdAt: 1700000200,
     ),
-    Todo(
-      id: EntityId.generate(),
-      title: 'Deploy to production',
-      completed: false,
-      priority: 3,
-      createdAt: 1700000300,
-    ),
+    Todo.create('Deploy to production', priority: 3),
   ];
 
   // Insert todos in a transaction
@@ -123,17 +129,32 @@ void main() {
       .toList();
 
   for (final todo in allTodos) {
-    final status = todo.completed ? '✓' : '○';
-    print('  $status [P${todo.priority}] ${todo.title}');
+    print('  $todo');
   }
 
-  // Filter incomplete high-priority todos using Dart `where`
+  // Filter incomplete high-priority todos using Dart `where` (NO SQL!)
   print('\n⚡ High-priority incomplete todos:');
   final urgent = allTodos.where((t) => !t.completed && t.priority == 1);
 
   for (final todo in urgent) {
     print('  ○ ${todo.title}');
   }
+
+  // Demonstrate iterator usage (manual iteration)
+  print('\n🔄 Using iterator:');
+  final iterator = db.iter(todosCollection);
+  var count = 0;
+  try {
+    while (iterator.moveNext()) {
+      final (id, bytes) = iterator.current;
+      final todo = Todo.fromBytes(id, bytes);
+      count++;
+      print('  ${todo.title} (id: ${id.toHexString().substring(0, 8)}...)');
+    }
+  } finally {
+    iterator.dispose();
+  }
+  print('  Iterated $count todos');
 
   // Update a todo
   print("\n✏️  Completing 'Learn EntiDB'...");
@@ -157,6 +178,7 @@ void main() {
   print('\n📊 Summary:');
   print('  Completed: $completed');
   print('  Incomplete: $incomplete');
+  print('  Total count: ${db.count(todosCollection)}');
 
   // Delete completed todos
   print('\n🗑️  Deleting completed todos...');

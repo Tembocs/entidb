@@ -12,6 +12,8 @@ members = [
     "crates/entidb_testkit",
     "crates/entidb_bench",
     "bindings/python/entidb_py",
+    "examples/rust_todo",
+    "examples/rust_notes",
 ]
 
 [workspace.package]
