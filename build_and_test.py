@@ -62,16 +62,47 @@ import venv
 from pathlib import Path
 
 
+# Enable ANSI colors on Windows 10+
+def _enable_windows_ansi() -> bool:
+    """Enable ANSI escape codes on Windows."""
+    if platform.system() != "Windows":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        # Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        return True
+    except Exception:
+        return False
+
+
+# Detect if colors should be used
+def _should_use_colors() -> bool:
+    """Determine if ANSI colors should be used."""
+    # Disable colors if NO_COLOR env var is set (standard)
+    if os.environ.get("NO_COLOR"):
+        return False
+    # Disable colors if not a TTY (e.g., CI piped output)
+    if not sys.stdout.isatty():
+        return False
+    # Try to enable Windows ANSI support
+    return _enable_windows_ansi()
+
+
+_USE_COLORS = _should_use_colors()
+
+
 # ANSI colors for output
 class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    END = '\033[0m'
-    BOLD = '\033[1m'
+    HEADER = '\033[95m' if _USE_COLORS else ''
+    BLUE = '\033[94m' if _USE_COLORS else ''
+    CYAN = '\033[96m' if _USE_COLORS else ''
+    GREEN = '\033[92m' if _USE_COLORS else ''
+    WARNING = '\033[93m' if _USE_COLORS else ''
+    FAIL = '\033[91m' if _USE_COLORS else ''
+    END = '\033[0m' if _USE_COLORS else ''
+    BOLD = '\033[1m' if _USE_COLORS else ''
 
 
 def print_step(msg: str) -> None:
@@ -100,6 +131,7 @@ def run_command(
     env: dict | None = None,
     check: bool = True,
     verbose: bool = False,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command and handle errors."""
     if verbose:
@@ -119,8 +151,12 @@ def run_command(
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=timeout,
         )
         return result
+    except subprocess.TimeoutExpired:
+        print_error(f"Command timed out: {' '.join(cmd)}")
+        raise
     except subprocess.CalledProcessError as e:
         print_error(f"Command failed: {' '.join(cmd)}")
         if e.stdout:
@@ -140,6 +176,72 @@ def find_executable(name: str, alternatives: list[str] | None = None) -> str | N
     return None
 
 
+def check_dependencies(skip_rust: bool, skip_python: bool, skip_dart: bool, verbose: bool) -> bool:
+    """
+    Check that required build dependencies are available.
+    
+    Returns True if all required dependencies are found.
+    """
+    print_step("Checking dependencies")
+    all_ok = True
+    
+    # Always need cargo for Rust
+    if not skip_rust:
+        cargo = find_executable("cargo")
+        if cargo:
+            if verbose:
+                result = subprocess.run(
+                    [cargo, "--version"],
+                    capture_output=True,
+                    text=True
+                )
+                print_success(f"Found cargo: {result.stdout.strip()}")
+            else:
+                print_success("Found cargo")
+        else:
+            print_error("cargo not found - install Rust from https://rustup.rs/")
+            all_ok = False
+    
+    # Python checks
+    if not skip_python:
+        python = find_executable("python3", ["python"])
+        if python:
+            result = subprocess.run(
+                [python, "--version"],
+                capture_output=True,
+                text=True
+            )
+            print_success(f"Found Python: {result.stdout.strip()}")
+        else:
+            print_error("python3 not found")
+            all_ok = False
+        
+        # Check for maturin (will be installed in venv if missing, but good to note)
+        maturin = find_executable("maturin")
+        if maturin:
+            print_success("Found maturin (global)")
+        else:
+            print_warning("maturin not found globally (will install in venv)")
+    
+    # Dart checks
+    if not skip_dart:
+        dart = find_executable("dart")
+        if dart:
+            result = subprocess.run(
+                [dart, "--version"],
+                capture_output=True,
+                text=True
+            )
+            # Dart prints version to stderr
+            version = result.stderr.strip() or result.stdout.strip()
+            print_success(f"Found Dart: {version}")
+        else:
+            print_error("dart not found - install from https://dart.dev/get-dart")
+            all_ok = False
+    
+    return all_ok
+
+
 def get_venv_python(venv_dir: Path) -> Path:
     """Get the Python executable path inside a virtual environment."""
     if platform.system() == "Windows":
@@ -154,6 +256,22 @@ def get_venv_pip(venv_dir: Path) -> Path:
         return venv_dir / "Scripts" / "pip.exe"
     else:
         return venv_dir / "bin" / "pip"
+
+
+def validate_venv_has_entidb(venv_dir: Path) -> bool:
+    """Check if the virtual environment has entidb installed."""
+    venv_python = get_venv_python(venv_dir)
+    if not venv_python.exists():
+        return False
+    try:
+        result = subprocess.run(
+            [str(venv_python), "-c", "import entidb"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def setup_python_venv(root: Path, python_version: str, verbose: bool) -> Path:
@@ -555,10 +673,23 @@ def main() -> int:
     # Find project root (where this script is located)
     root = Path(__file__).parent.resolve()
     
+    # Handle clean-venv early (applies to all modes)
+    venv_path = root / ".venv-test"
+    if args.clean_venv and venv_path.exists():
+        print_step("Cleaning existing virtual environment")
+        shutil.rmtree(venv_path)
+        print_success("Removed old virtual environment")
+    
     # Determine mode
     examples_only = args.examples_only
     run_examples = args.run_examples or examples_only
     run_tests = not examples_only
+    
+    # Validate mode combinations
+    if examples_only and args.clean_venv and not args.skip_python:
+        print_error("Cannot use --clean-venv with --examples-only (no way to rebuild).")
+        print_error("Either remove --clean-venv or run a full build first.")
+        return 1
     
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("=" * 60)
@@ -573,6 +704,12 @@ def main() -> int:
     print(f"Project root: {root}")
     print(f"Build type: {'release' if args.release else 'debug'}")
     print(f"Python version: {args.python_version}")
+    
+    # Dependency check (skip in examples-only mode since we just run existing builds)
+    if not examples_only:
+        if not check_dependencies(args.skip_rust, args.skip_python, args.skip_dart, args.verbose):
+            print_error("Missing required dependencies. Install them and try again.")
+            return 1
     
     all_passed = True
     lib_path: Path | None = None
@@ -617,14 +754,7 @@ def main() -> int:
     # Build and test Python bindings
     if run_tests and not args.skip_python:
         try:
-            # Clean venv if requested
-            venv_path = root / ".venv-test"
-            if args.clean_venv and venv_path.exists():
-                print_step("Cleaning existing virtual environment")
-                shutil.rmtree(venv_path)
-                print_success("Removed old virtual environment")
-            
-            # Set up virtual environment
+            # Set up virtual environment (clean_venv already handled above)
             venv_dir = setup_python_venv(root, args.python_version, args.verbose)
             
             # Build and test
@@ -643,19 +773,22 @@ def main() -> int:
     if run_examples:
         print(f"\n{Colors.BOLD}{Colors.CYAN}--- Running Examples ---{Colors.END}\n")
         
-        # Rust examples
-        if not args.skip_rust:
-            if not run_rust_examples(root, args.verbose):
-                all_passed = False
+        # Rust examples (always available, they use workspace deps)
+        if not run_rust_examples(root, args.verbose):
+            all_passed = False
         
-        # Python examples (need venv)
+        # Python examples (need venv with entidb)
         if not args.skip_python and venv_dir is not None:
-            if not run_python_examples(root, venv_dir, args.verbose):
-                all_passed = False
+            if validate_venv_has_entidb(venv_dir):
+                if not run_python_examples(root, venv_dir, args.verbose):
+                    all_passed = False
+            else:
+                print_warning("Skipping Python examples (entidb not installed in venv)")
+                print_warning("Run without --examples-only to build Python bindings first.")
         elif not args.skip_python and venv_dir is None:
             print_warning("Skipping Python examples (no virtual environment)")
         
-        # Dart examples
+        # Dart examples (need native library)
         if not args.skip_dart:
             if not run_dart_examples(root, lib_path, args.verbose):
                 all_passed = False

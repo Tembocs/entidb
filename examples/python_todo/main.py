@@ -12,9 +12,15 @@ Run with: python main.py
 """
 
 import json
+import sys
+import io
 from dataclasses import dataclass
 from typing import Optional
 import time
+
+# Ensure stdout can handle UTF-8 on Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # Note: entidb must be built first with `maturin develop`
 import entidb
