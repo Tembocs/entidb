@@ -14,6 +14,7 @@ members = [
     "bindings/python/entidb_py",
     "examples/rust_todo",
     "examples/rust_notes",
+    "examples/rust_expenses",
 ]
 
 [workspace.package]

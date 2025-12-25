@@ -1,0 +1,15 @@
+[package]
+name = "rust_expenses"
+version = "2.0.0-alpha.1"
+edition = "2021"
+publish = false
+description = "Personal Expense Tracker example demonstrating multi-collection relationships"
+
+[dependencies]
+entidb_core = "2.0.0-alpha.1"
+entidb_codec = "2.0.0-alpha.1"
+entidb_storage = "2.0.0-alpha.1"
+
+[[bin]]
+name = "expenses"
+path = "main.rs"
