@@ -1,0 +1,42 @@
+name: entidb_flutter
+description: Flutter plugin for EntiDB - an embedded entity database with ACID transactions and CBOR storage. Bundles native libraries for all platforms.
+version: 2.0.0-alpha.1
+repository: https://github.com/Tembocs/entidb
+homepage: https://github.com/Tembocs/entidb
+documentation: https://github.com/Tembocs/entidb/tree/main/bindings/flutter/entidb_flutter
+
+topics:
+  - database
+  - embedded-database
+  - nosql
+  - cbor
+  - flutter
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Use path dependency during development
+  # Change to: entidb_dart: ^2.0.0-alpha.2 before publishing
+  entidb_dart:
+    path: ../../dart/entidb_dart
+
+dev_dependencies:
+  lints: ^3.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true

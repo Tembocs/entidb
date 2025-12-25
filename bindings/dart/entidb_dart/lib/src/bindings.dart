@@ -1215,48 +1215,102 @@ String _getLibraryName() {
   } else if (Platform.isAndroid) {
     return 'libentidb_ffi.so';
   } else if (Platform.isIOS) {
-    return 'libentidb_ffi.dylib';
+    // iOS uses static linking or framework embedding
+    return 'entidb_ffi.framework/entidb_ffi';
   } else {
     throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
 }
 
-/// Custom library path override for testing.
+/// Custom library path override for testing or development.
 String? _customLibraryPath;
 
 /// Sets a custom library path for testing or development.
+///
+/// Call this before any EntiDB operations to override the default
+/// library loading behavior. Useful for:
+/// - Testing with a locally built library
+/// - Development without installing the library system-wide
+///
+/// Example:
+/// ```dart
+/// setEntiDbLibraryPath('/path/to/libentidb_ffi.so');
+/// final db = Database.openMemory();
+/// ```
 void setEntiDbLibraryPath(String path) {
   _customLibraryPath = path;
+  _library = null;
   _bindings = null; // Force reload
 }
 
-/// Gets the library path, checking environment variables and custom overrides.
-String _getLibraryPath() {
-  // Check custom override first
-  if (_customLibraryPath != null) {
-    return _customLibraryPath!;
-  }
-
-  // Check environment variable ENTIDB_LIB_PATH
-  final envPath = Platform.environment['ENTIDB_LIB_PATH'];
-  if (envPath != null && envPath.isNotEmpty) {
-    return envPath;
-  }
-
-  // Fall back to default library name (relies on system library path)
-  return _getLibraryName();
+/// Resets the library loading to default behavior.
+///
+/// Clears any custom path set via [setEntiDbLibraryPath] or environment
+/// variable override. The next library access will reload using platform
+/// defaults.
+void resetEntiDbLibrary() {
+  _customLibraryPath = null;
+  _library = null;
+  _bindings = null;
 }
 
 /// The loaded dynamic library.
 DynamicLibrary? _library;
 
-/// Gets the dynamic library, loading it if necessary.
+/// Loads the native library using platform-appropriate method.
+///
+/// Loading priority:
+/// 1. Custom path set via [setEntiDbLibraryPath]
+/// 2. ENTIDB_LIB_PATH environment variable
+/// 3. Platform-specific loading:
+///    - iOS: DynamicLibrary.process() (statically linked)
+///    - Android: DynamicLibrary.open() (from jniLibs)
+///    - Desktop: DynamicLibrary.open() (from system path or bundled)
 DynamicLibrary get library {
   if (_library != null) return _library!;
-
-  final path = _getLibraryPath();
-  _library = DynamicLibrary.open(path);
+  _library = _loadLibrary();
   return _library!;
+}
+
+DynamicLibrary _loadLibrary() {
+  // 1. Check custom override first
+  if (_customLibraryPath != null) {
+    return DynamicLibrary.open(_customLibraryPath!);
+  }
+
+  // 2. Check environment variable ENTIDB_LIB_PATH
+  final envPath = Platform.environment['ENTIDB_LIB_PATH'];
+  if (envPath != null && envPath.isNotEmpty) {
+    return DynamicLibrary.open(envPath);
+  }
+
+  // 3. Platform-specific loading
+  if (Platform.isIOS) {
+    // iOS: Library is statically linked into the app binary
+    // when using Flutter's ffiPlugin or CocoaPods
+    return DynamicLibrary.process();
+  }
+
+  if (Platform.isMacOS) {
+    // macOS: Try executable first (for statically linked), then dynamic
+    try {
+      return DynamicLibrary.process();
+    } catch (_) {
+      return DynamicLibrary.open(_getLibraryName());
+    }
+  }
+
+  if (Platform.isAndroid) {
+    // Android: Flutter plugin bundles .so in jniLibs, loaded by name
+    return DynamicLibrary.open(_getLibraryName());
+  }
+
+  if (Platform.isWindows || Platform.isLinux) {
+    // Desktop: Load from bundled location or system path
+    return DynamicLibrary.open(_getLibraryName());
+  }
+
+  throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
 }
 
 // ============================================================================
