@@ -32,6 +32,7 @@ sealed class EntiDbError implements Exception {
       EntiDbResult.outOfMemory => EntiDbError._generic(msg),
       EntiDbResult.invalidFormat => EntiDbCorruptionError(msg),
       EntiDbResult.codecError => EntiDbInvalidError(msg),
+      EntiDbResult.notSupported => EntiDbNotSupportedError(msg),
       _ => EntiDbError._generic(msg),
     };
   }
@@ -73,6 +74,25 @@ final class EntiDbCorruptionError extends EntiDbError {
 final class EntiDbTransactionError extends EntiDbError {
   /// Creates a transaction error.
   const EntiDbTransactionError(super.message);
+}
+
+/// Error thrown when a feature is not supported.
+final class EntiDbNotSupportedError extends EntiDbError {
+  /// Creates a not supported error.
+  const EntiDbNotSupportedError(super.message);
+}
+
+/// Exception thrown by EntiDB operations.
+///
+/// This is an alias for [EntiDbError] for API convenience.
+typedef EntiDbException = EntiDbError;
+
+/// Extension to create exceptions from error codes.
+extension EntiDbExceptionFromCode on EntiDbException {
+  /// Creates an exception from an FFI result code.
+  static EntiDbException fromCode(int code) {
+    return EntiDbError.fromResult(code);
+  }
 }
 
 /// Gets the last error message from the native library.

@@ -33,6 +33,8 @@ pub enum EntiDbResult {
     CodecError = 11,
     /// Null pointer.
     NullPointer = 12,
+    /// Feature not supported.
+    NotSupported = 13,
 }
 
 impl EntiDbResult {
@@ -72,6 +74,7 @@ impl From<ErrorCode> for EntiDbResult {
             10 => EntiDbResult::InvalidFormat,
             11 => EntiDbResult::CodecError,
             12 => EntiDbResult::NullPointer,
+            13 => EntiDbResult::NotSupported,
             _ => EntiDbResult::Error,
         }
     }

@@ -182,6 +182,7 @@ abstract final class EntiDbResult {
   static const int invalidFormat = 10;
   static const int codecError = 11;
   static const int nullPointer = 12;
+  static const int notSupported = 13;
 }
 
 // ============================================================================
@@ -785,6 +786,289 @@ typedef EntiDbDropBTreeIndexDart = int Function(
 );
 
 // ============================================================================
+// FTS (Full-Text Search) Index Types
+// ============================================================================
+
+// Create FTS index
+typedef EntiDbCreateFtsIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+typedef EntiDbCreateFtsIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+
+// Create FTS index with config
+typedef EntiDbCreateFtsIndexWithConfigNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  IntPtr minTokenLength,
+  IntPtr maxTokenLength,
+  Bool caseSensitive,
+);
+typedef EntiDbCreateFtsIndexWithConfigDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  int minTokenLength,
+  int maxTokenLength,
+  bool caseSensitive,
+);
+
+// FTS index text
+typedef EntiDbFtsIndexTextNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  EntiDbEntityId entityId,
+  Pointer<Utf8> text,
+);
+typedef EntiDbFtsIndexTextDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  EntiDbEntityId entityId,
+  Pointer<Utf8> text,
+);
+
+// FTS remove entity
+typedef EntiDbFtsRemoveEntityNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  EntiDbEntityId entityId,
+);
+typedef EntiDbFtsRemoveEntityDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  EntiDbEntityId entityId,
+);
+
+// FTS search (AND semantics)
+typedef EntiDbFtsSearchNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> query,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbFtsSearchDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> query,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// FTS search any (OR semantics)
+typedef EntiDbFtsSearchAnyNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> query,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbFtsSearchAnyDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> query,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// FTS search prefix
+typedef EntiDbFtsSearchPrefixNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> prefix,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbFtsSearchPrefixDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<Utf8> prefix,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// FTS index len
+typedef EntiDbFtsIndexLenNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+typedef EntiDbFtsIndexLenDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+
+// FTS unique token count
+typedef EntiDbFtsUniqueTokenCountNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+typedef EntiDbFtsUniqueTokenCountDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+  Pointer<IntPtr> outCount,
+);
+
+// FTS clear
+typedef EntiDbFtsClearNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+typedef EntiDbFtsClearDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+
+// Drop FTS index
+typedef EntiDbDropFtsIndexNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+typedef EntiDbDropFtsIndexDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  EntiDbCollectionId collectionId,
+  Pointer<Utf8> name,
+);
+
+// ============================================================================
+// Encryption Types
+// ============================================================================
+
+/// Opaque crypto handle.
+final class EntiDbCryptoHandle extends Opaque {}
+
+// Check if encryption is available
+typedef EntiDbCryptoAvailableNative = Bool Function();
+typedef EntiDbCryptoAvailableDart = bool Function();
+
+// Create crypto handle with generated key
+typedef EntiDbCryptoCreateNative = Int32 Function(
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+  Pointer<Uint8> outKey,
+);
+typedef EntiDbCryptoCreateDart = int Function(
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+  Pointer<Uint8> outKey,
+);
+
+// Create crypto handle with existing key
+typedef EntiDbCryptoCreateWithKeyNative = Int32 Function(
+  Pointer<Uint8> keyPtr,
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+);
+typedef EntiDbCryptoCreateWithKeyDart = int Function(
+  Pointer<Uint8> keyPtr,
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+);
+
+// Create crypto handle from password
+typedef EntiDbCryptoCreateFromPasswordNative = Int32 Function(
+  Pointer<Uint8> passwordPtr,
+  IntPtr passwordLen,
+  Pointer<Uint8> saltPtr,
+  IntPtr saltLen,
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+);
+typedef EntiDbCryptoCreateFromPasswordDart = int Function(
+  Pointer<Uint8> passwordPtr,
+  int passwordLen,
+  Pointer<Uint8> saltPtr,
+  int saltLen,
+  Pointer<Pointer<EntiDbCryptoHandle>> outHandle,
+);
+
+// Encrypt data
+typedef EntiDbCryptoEncryptNative = Int32 Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  IntPtr dataLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbCryptoEncryptDart = int Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  int dataLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Decrypt data
+typedef EntiDbCryptoDecryptNative = Int32 Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  IntPtr dataLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbCryptoDecryptDart = int Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  int dataLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Encrypt data with AAD
+typedef EntiDbCryptoEncryptWithAadNative = Int32 Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  IntPtr dataLen,
+  Pointer<Uint8> aadPtr,
+  IntPtr aadLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbCryptoEncryptWithAadDart = int Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  int dataLen,
+  Pointer<Uint8> aadPtr,
+  int aadLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Decrypt data with AAD
+typedef EntiDbCryptoDecryptWithAadNative = Int32 Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  IntPtr dataLen,
+  Pointer<Uint8> aadPtr,
+  IntPtr aadLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+typedef EntiDbCryptoDecryptWithAadDart = int Function(
+  Pointer<EntiDbCryptoHandle> handle,
+  Pointer<Uint8> dataPtr,
+  int dataLen,
+  Pointer<Uint8> aadPtr,
+  int aadLen,
+  Pointer<EntiDbBuffer> outBuffer,
+);
+
+// Free crypto handle
+typedef EntiDbCryptoFreeNative = Void Function(
+  Pointer<EntiDbCryptoHandle> handle,
+);
+typedef EntiDbCryptoFreeDart = void Function(
+  Pointer<EntiDbCryptoHandle> handle,
+);
+
+// ============================================================================
 // Change Feed Types
 // ============================================================================
 
@@ -1170,6 +1454,52 @@ class EntiDbBindings {
       _lib.lookupFunction<EntiDbDropBTreeIndexNative, EntiDbDropBTreeIndexDart>(
           'entidb_drop_btree_index');
 
+  // FTS (Full-Text Search) index functions
+  late final entidbCreateFtsIndex =
+      _lib.lookupFunction<EntiDbCreateFtsIndexNative, EntiDbCreateFtsIndexDart>(
+          'entidb_create_fts_index');
+
+  late final entidbCreateFtsIndexWithConfig = _lib.lookupFunction<
+          EntiDbCreateFtsIndexWithConfigNative,
+          EntiDbCreateFtsIndexWithConfigDart>(
+      'entidb_create_fts_index_with_config');
+
+  late final entidbFtsIndexText =
+      _lib.lookupFunction<EntiDbFtsIndexTextNative, EntiDbFtsIndexTextDart>(
+          'entidb_fts_index_text');
+
+  late final entidbFtsRemoveEntity = _lib.lookupFunction<
+      EntiDbFtsRemoveEntityNative,
+      EntiDbFtsRemoveEntityDart>('entidb_fts_remove_entity');
+
+  late final entidbFtsSearch =
+      _lib.lookupFunction<EntiDbFtsSearchNative, EntiDbFtsSearchDart>(
+          'entidb_fts_search');
+
+  late final entidbFtsSearchAny =
+      _lib.lookupFunction<EntiDbFtsSearchAnyNative, EntiDbFtsSearchAnyDart>(
+          'entidb_fts_search_any');
+
+  late final entidbFtsSearchPrefix = _lib.lookupFunction<
+      EntiDbFtsSearchPrefixNative,
+      EntiDbFtsSearchPrefixDart>('entidb_fts_search_prefix');
+
+  late final entidbFtsIndexLen =
+      _lib.lookupFunction<EntiDbFtsIndexLenNative, EntiDbFtsIndexLenDart>(
+          'entidb_fts_index_len');
+
+  late final entidbFtsUniqueTokenCount = _lib.lookupFunction<
+      EntiDbFtsUniqueTokenCountNative,
+      EntiDbFtsUniqueTokenCountDart>('entidb_fts_unique_token_count');
+
+  late final entidbFtsClear =
+      _lib.lookupFunction<EntiDbFtsClearNative, EntiDbFtsClearDart>(
+          'entidb_fts_clear');
+
+  late final entidbDropFtsIndex =
+      _lib.lookupFunction<EntiDbDropFtsIndexNative, EntiDbDropFtsIndexDart>(
+          'entidb_drop_fts_index');
+
   // Change feed functions
   late final entidbPollChanges =
       _lib.lookupFunction<EntiDbPollChangesNative, EntiDbPollChangesDart>(
@@ -1191,6 +1521,43 @@ class EntiDbBindings {
   late final entidbSetSchemaVersion = _lib.lookupFunction<
       EntiDbSetSchemaVersionNative,
       EntiDbSetSchemaVersionDart>('entidb_set_schema_version');
+
+  // Encryption functions
+  late final entidbCryptoAvailable = _lib.lookupFunction<
+      EntiDbCryptoAvailableNative,
+      EntiDbCryptoAvailableDart>('entidb_crypto_available');
+
+  late final entidbCryptoCreate =
+      _lib.lookupFunction<EntiDbCryptoCreateNative, EntiDbCryptoCreateDart>(
+          'entidb_crypto_create');
+
+  late final entidbCryptoCreateWithKey = _lib.lookupFunction<
+      EntiDbCryptoCreateWithKeyNative,
+      EntiDbCryptoCreateWithKeyDart>('entidb_crypto_create_with_key');
+
+  late final entidbCryptoCreateFromPassword = _lib.lookupFunction<
+      EntiDbCryptoCreateFromPasswordNative,
+      EntiDbCryptoCreateFromPasswordDart>('entidb_crypto_create_from_password');
+
+  late final entidbCryptoEncrypt =
+      _lib.lookupFunction<EntiDbCryptoEncryptNative, EntiDbCryptoEncryptDart>(
+          'entidb_crypto_encrypt');
+
+  late final entidbCryptoDecrypt =
+      _lib.lookupFunction<EntiDbCryptoDecryptNative, EntiDbCryptoDecryptDart>(
+          'entidb_crypto_decrypt');
+
+  late final entidbCryptoEncryptWithAad = _lib.lookupFunction<
+      EntiDbCryptoEncryptWithAadNative,
+      EntiDbCryptoEncryptWithAadDart>('entidb_crypto_encrypt_with_aad');
+
+  late final entidbCryptoDecryptWithAad = _lib.lookupFunction<
+      EntiDbCryptoDecryptWithAadNative,
+      EntiDbCryptoDecryptWithAadDart>('entidb_crypto_decrypt_with_aad');
+
+  late final entidbCryptoFree =
+      _lib.lookupFunction<EntiDbCryptoFreeNative, EntiDbCryptoFreeDart>(
+          'entidb_crypto_free');
 }
 
 /// Cached bindings instance.

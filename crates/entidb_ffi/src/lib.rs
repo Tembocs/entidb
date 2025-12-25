@@ -34,10 +34,16 @@
 //!
 //! Use `entidb_checkpoint`, `entidb_backup`, `entidb_restore`,
 //! `entidb_validate_backup` for backup and restore operations.
+//!
+//! ## Encryption API
+//!
+//! Use `entidb_crypto_create`, `entidb_crypto_encrypt`, `entidb_crypto_decrypt`
+//! for encryption operations. Requires the `encryption` feature.
 
 #![warn(missing_docs)]
 
 mod buffer;
+mod crypto;
 mod database;
 mod error;
 mod iterator;
@@ -45,6 +51,7 @@ mod transaction;
 mod types;
 
 pub use buffer::{EntiDbBuffer, EntiDbString};
+pub use crypto::*;
 pub use database::*;
 pub use error::{EntiDbResult, ErrorCode};
 pub use iterator::*;

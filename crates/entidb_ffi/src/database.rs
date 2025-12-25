@@ -1725,6 +1725,670 @@ pub unsafe extern "C" fn entidb_drop_btree_index(
     }
 }
 
+// ==================== FTS Index FFI Functions ====================
+
+/// Creates a Full-Text Search (FTS) index with default configuration.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_create_fts_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    match db.create_fts_index(coll_id, name_str) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Creates an FTS index with custom configuration.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `min_token_length` - Minimum token length (tokens shorter are ignored)
+/// * `max_token_length` - Maximum token length (tokens longer are truncated)
+/// * `case_sensitive` - If true, searches are case-sensitive
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_create_fts_index_with_config(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    min_token_length: usize,
+    max_token_length: usize,
+    case_sensitive: bool,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    match db.create_fts_index_with_config(
+        coll_id,
+        name_str,
+        min_token_length,
+        max_token_length,
+        case_sensitive,
+    ) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Indexes text content for an entity in an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `entity_id` - The entity ID to associate with the text
+/// * `text` - Null-terminated text content to index
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `text` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_index_text(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    entity_id: EntiDbEntityId,
+    text: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || text.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let text_cstr = CStr::from_ptr(text);
+    let text_str = match text_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in text");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.fts_index_text(coll_id, name_str, ent_id, text_str) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Removes an entity from an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `entity_id` - The entity ID to remove
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_remove_entity(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    entity_id: EntiDbEntityId,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+    let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
+
+    match db.fts_remove_entity(coll_id, name_str, ent_id) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Searches an FTS index using AND semantics (all terms must match).
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `query` - Null-terminated search query (space-separated terms)
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `query` must be a valid null-terminated UTF-8 string
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_search(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    query: *const std::ffi::c_char,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || query.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let query_cstr = CStr::from_ptr(query);
+    let query_str = match query_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in query");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_search(coll_id, name_str, query_str) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Searches an FTS index using OR semantics (any term may match).
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `query` - Null-terminated search query (space-separated terms)
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `query` must be a valid null-terminated UTF-8 string
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_search_any(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    query: *const std::ffi::c_char,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || query.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let query_cstr = CStr::from_ptr(query);
+    let query_str = match query_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in query");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_search_any(coll_id, name_str, query_str) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Searches an FTS index using prefix matching.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `prefix` - Null-terminated prefix to search for
+/// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `prefix` must be a valid null-terminated UTF-8 string
+/// - `out_buffer` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_search_prefix(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    prefix: *const std::ffi::c_char,
+    out_buffer: *mut EntiDbBuffer,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || prefix.is_null() || out_buffer.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let prefix_cstr = CStr::from_ptr(prefix);
+    let prefix_str = match prefix_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in prefix");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_search_prefix(coll_id, name_str, prefix_str) {
+        Ok(entity_ids) => {
+            // Serialize entity IDs as contiguous 16-byte blocks
+            let mut result = Vec::with_capacity(entity_ids.len() * 16);
+            for id in entity_ids {
+                result.extend_from_slice(id.as_bytes());
+            }
+            *out_buffer = EntiDbBuffer::from_vec(result);
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            *out_buffer = EntiDbBuffer::empty();
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Gets the number of entities in an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `out_count` - Output pointer for the count
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `out_count` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_index_len(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    out_count: *mut usize,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_count.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_index_len(coll_id, name_str) {
+        Ok(count) => {
+            *out_count = count;
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Gets the number of unique tokens in an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+/// * `out_count` - Output pointer for the count
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+/// - `out_count` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_unique_token_count(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+    out_count: *mut usize,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() || out_count.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_unique_token_count(coll_id, name_str) {
+        Ok(count) => {
+            *out_count = count;
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Clears all entries from an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_fts_clear(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.fts_clear(coll_id, name_str) {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Drops an FTS index.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `collection_id` - The collection ID
+/// * `name` - Null-terminated index name
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn entidb_drop_fts_index(
+    handle: *mut EntiDbHandle,
+    collection_id: EntiDbCollectionId,
+    name: *const std::ffi::c_char,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || name.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let name_cstr = CStr::from_ptr(name);
+    let name_str = match name_cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("invalid UTF-8 in index name");
+            return EntiDbResult::InvalidArgument;
+        }
+    };
+
+    let coll_id = entidb_core::CollectionId::new(collection_id.id);
+
+    match db.drop_fts_index(coll_id, name_str) {
+        Ok(_) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2547,6 +3211,7 @@ pub unsafe extern "C" fn entidb_set_schema_version(
 #[cfg(test)]
 mod change_feed_tests {
     use super::*;
+    use crate::buffer::entidb_free_buffer;
 
     #[test]
     fn test_poll_changes() {
@@ -2630,6 +3295,404 @@ mod change_feed_tests {
             let result = entidb_get_schema_version(handle, &mut version);
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(version, 5);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_index_operations() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            // Get collection
+            let name = std::ffi::CString::new("documents").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            // Create FTS index
+            let index_name = std::ffi::CString::new("content").unwrap();
+            let result = entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Generate entity IDs
+            let mut entity1 = EntiDbEntityId::zero();
+            let mut entity2 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity1);
+            entidb_generate_id(&mut entity2);
+
+            // Index text
+            let text1 = std::ffi::CString::new("Hello world from Rust").unwrap();
+            let result = entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity1,
+                text1.as_ptr(),
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+
+            let text2 = std::ffi::CString::new("Hello Python programming").unwrap();
+            let result = entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity2,
+                text2.as_ptr(),
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Check index length
+            let mut count: usize = 0;
+            let result = entidb_fts_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(count, 2);
+
+            // Search for "hello" - should find both
+            let query = std::ffi::CString::new("hello").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            let result =
+                entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 32); // Two entity IDs (16 bytes each)
+            entidb_free_buffer(buffer);
+
+            // Search for "rust" - should find only one
+            let query = std::ffi::CString::new("rust").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            let result =
+                entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 16); // One entity ID
+            entidb_free_buffer(buffer);
+
+            // Drop index
+            let result = entidb_drop_fts_index(handle, coll_id, index_name.as_ptr());
+            assert_eq!(result, EntiDbResult::Ok);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_search_and_or_semantics() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("content").unwrap();
+            entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+
+            // Index documents
+            let mut entity1 = EntiDbEntityId::zero();
+            let mut entity2 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity1);
+            entidb_generate_id(&mut entity2);
+
+            let text1 = std::ffi::CString::new("apple orange").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+
+            let text2 = std::ffi::CString::new("banana orange").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+
+            // AND search: "apple orange" - only entity1 has both
+            let query = std::ffi::CString::new("apple orange").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 16); // One match
+            entidb_free_buffer(buffer);
+
+            // OR search: "apple banana" - both match
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search_any(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            // "apple orange" with OR - entity1 has apple and orange, entity2 has orange
+            // Actually this query is "apple orange" so OR should match both (both have "orange")
+            assert!(buffer.len >= 16);
+            entidb_free_buffer(buffer);
+
+            // Search for "apple banana" with OR - should find both
+            let query2 = std::ffi::CString::new("apple banana").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search_any(handle, coll_id, index_name.as_ptr(), query2.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 32); // Both match (entity1 has apple, entity2 has banana)
+            entidb_free_buffer(buffer);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_prefix_search() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("content").unwrap();
+            entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+
+            let mut entity1 = EntiDbEntityId::zero();
+            let mut entity2 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity1);
+            entidb_generate_id(&mut entity2);
+
+            let text1 = std::ffi::CString::new("programming in Rust").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+
+            let text2 = std::ffi::CString::new("program management").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+
+            // Prefix search for "prog" - should find both
+            let prefix = std::ffi::CString::new("prog").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_fts_search_prefix(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                prefix.as_ptr(),
+                &mut buffer,
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(buffer.len, 32); // Both entities
+            entidb_free_buffer(buffer);
+
+            // Prefix search for "rust" - should find one
+            let prefix = std::ffi::CString::new("rust").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search_prefix(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                prefix.as_ptr(),
+                &mut buffer,
+            );
+            assert_eq!(buffer.len, 16); // One entity
+            entidb_free_buffer(buffer);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_with_custom_config() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            // Create with custom config: min token length 3, case-sensitive
+            let index_name = std::ffi::CString::new("content").unwrap();
+            let result = entidb_create_fts_index_with_config(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                3,   // min token length
+                256, // max token length
+                true, // case sensitive
+            );
+            assert_eq!(result, EntiDbResult::Ok);
+
+            let mut entity = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity);
+
+            let text = std::ffi::CString::new("I am a Rust Developer").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity, text.as_ptr());
+
+            // Short tokens ("I", "am", "a") should be ignored
+            let query = std::ffi::CString::new("am").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 0); // No match - "am" too short
+            entidb_free_buffer(buffer);
+
+            // "Rust" should match (case-sensitive)
+            let query = std::ffi::CString::new("Rust").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 16);
+            entidb_free_buffer(buffer);
+
+            // "rust" (lowercase) should NOT match in case-sensitive mode
+            let query = std::ffi::CString::new("rust").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 0);
+            entidb_free_buffer(buffer);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_remove_entity() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("content").unwrap();
+            entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+
+            let mut entity1 = EntiDbEntityId::zero();
+            let mut entity2 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity1);
+            entidb_generate_id(&mut entity2);
+
+            let text1 = std::ffi::CString::new("hello world").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+
+            let text2 = std::ffi::CString::new("hello rust").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+
+            // Both match "hello"
+            let query = std::ffi::CString::new("hello").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 32);
+            entidb_free_buffer(buffer);
+
+            // Remove entity1
+            let result = entidb_fts_remove_entity(handle, coll_id, index_name.as_ptr(), entity1);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Now only entity2 matches "hello"
+            let mut buffer = EntiDbBuffer::empty();
+            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(buffer.len, 16);
+            entidb_free_buffer(buffer);
+
+            // Check index length
+            let mut count: usize = 0;
+            entidb_fts_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(count, 1);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_clear_index() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("content").unwrap();
+            entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+
+            // Add some entities
+            for i in 0..5 {
+                let mut entity = EntiDbEntityId::zero();
+                entidb_generate_id(&mut entity);
+                let text = std::ffi::CString::new(format!("document number {}", i)).unwrap();
+                entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity, text.as_ptr());
+            }
+
+            // Verify count
+            let mut count: usize = 0;
+            entidb_fts_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(count, 5);
+
+            // Clear index
+            let result = entidb_fts_clear(handle, coll_id, index_name.as_ptr());
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Verify count is 0
+            entidb_fts_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(count, 0);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_unique_token_count() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("content").unwrap();
+            entidb_create_fts_index(handle, coll_id, index_name.as_ptr());
+
+            let mut entity1 = EntiDbEntityId::zero();
+            let mut entity2 = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity1);
+            entidb_generate_id(&mut entity2);
+
+            // "hello world hello" - unique tokens: hello, world
+            let text1 = std::ffi::CString::new("hello world hello").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+
+            // "hello rust" - unique tokens overall: hello, world, rust
+            let text2 = std::ffi::CString::new("hello rust").unwrap();
+            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+
+            let mut count: usize = 0;
+            let result = entidb_fts_unique_token_count(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(count, 3); // hello, world, rust
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn fts_nonexistent_index_errors() {
+        let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+
+        unsafe {
+            entidb_open_memory(&mut handle);
+
+            let name = std::ffi::CString::new("docs").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, name.as_ptr(), &mut coll_id);
+
+            let index_name = std::ffi::CString::new("nonexistent").unwrap();
+
+            // Operations on non-existent index should fail
+            let mut entity = EntiDbEntityId::zero();
+            entidb_generate_id(&mut entity);
+
+            let text = std::ffi::CString::new("test").unwrap();
+            let result = entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity, text.as_ptr());
+            assert_eq!(result, EntiDbResult::Error);
+
+            let query = std::ffi::CString::new("test").unwrap();
+            let mut buffer = EntiDbBuffer::empty();
+            let result = entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            assert_eq!(result, EntiDbResult::Error);
+
+            let mut count: usize = 0;
+            let result = entidb_fts_index_len(handle, coll_id, index_name.as_ptr(), &mut count);
+            assert_eq!(result, EntiDbResult::Error);
 
             entidb_close(handle);
         }

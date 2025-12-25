@@ -7,6 +7,10 @@ edition = "2021"
 name = "entidb"
 crate-type = ["cdylib"]
 
+[features]
+default = ["encryption"]
+encryption = ["entidb_core/encryption"]
+
 [dependencies]
 entidb_core.workspace = true
 entidb_storage.workspace = true

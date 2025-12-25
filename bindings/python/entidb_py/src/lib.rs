@@ -2,9 +2,9 @@
 //!
 //! This crate provides Python bindings using PyO3.
 
-use entidb_core::{
-    CollectionId, Config, Database as CoreDatabase, EntityId as CoreEntityId,
-};
+#[cfg(feature = "encryption")]
+use entidb_core::crypto::{CryptoManager as CoreCryptoManager, EncryptionKey};
+use entidb_core::{CollectionId, Config, Database as CoreDatabase, EntityId as CoreEntityId};
 use entidb_storage::FileBackend;
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyStopIteration, PyValueError};
 use pyo3::prelude::*;
@@ -887,6 +887,215 @@ impl Database {
     }
 
     // ========================================================================
+    // FTS (Full-Text Search) Index
+    // ========================================================================
+
+    /// Creates a full-text search index for text searching.
+    ///
+    /// The index uses default settings: case-insensitive, min token length 1,
+    /// max token length 256.
+    ///
+    /// Args:
+    ///     collection: The collection to create the index on.
+    ///     name: The index name.
+    ///
+    /// Example:
+    /// ```python
+    /// db.create_fts_index(documents, "content")
+    /// ```
+    fn create_fts_index(&self, collection: &Collection, name: &str) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .create_fts_index(coll, name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Creates a full-text search index with custom configuration.
+    ///
+    /// Args:
+    ///     collection: The collection to create the index on.
+    ///     name: The index name.
+    ///     min_token_length: Minimum token length (default 1).
+    ///     max_token_length: Maximum token length (default 256).
+    ///     case_sensitive: If True, matching is case-sensitive (default False).
+    ///
+    /// Example:
+    /// ```python
+    /// db.create_fts_index_with_config(documents, "content",
+    ///     min_token_length=2, case_sensitive=True)
+    /// ```
+    #[pyo3(signature = (collection, name, min_token_length=1, max_token_length=256, case_sensitive=false))]
+    fn create_fts_index_with_config(
+        &self,
+        collection: &Collection,
+        name: &str,
+        min_token_length: usize,
+        max_token_length: usize,
+        case_sensitive: bool,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .create_fts_index_with_config(coll, name, min_token_length, max_token_length, !case_sensitive)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Indexes text for an entity in an FTS index.
+    ///
+    /// If the entity was previously indexed, its old tokens are replaced.
+    ///
+    /// Args:
+    ///     collection: The collection.
+    ///     name: The FTS index name.
+    ///     entity_id: The entity to index.
+    ///     text: The text content to index.
+    ///
+    /// Example:
+    /// ```python
+    /// db.fts_index_text(documents, "content", doc_id, "Hello world")
+    /// ```
+    fn fts_index_text(
+        &self,
+        collection: &Collection,
+        name: &str,
+        entity_id: &EntityId,
+        text: &str,
+    ) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_index_text(coll, name, entity_id.inner, text)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Removes an entity from an FTS index.
+    ///
+    /// Returns True if the entity was found and removed.
+    ///
+    /// Args:
+    ///     collection: The collection.
+    ///     name: The FTS index name.
+    ///     entity_id: The entity to remove.
+    fn fts_remove_entity(
+        &self,
+        collection: &Collection,
+        name: &str,
+        entity_id: &EntityId,
+    ) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_remove_entity(coll, name, entity_id.inner)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Searches the FTS index with AND semantics.
+    ///
+    /// All query tokens must be present in an entity for it to match.
+    ///
+    /// Args:
+    ///     collection: The collection.
+    ///     name: The FTS index name.
+    ///     query: The search query (whitespace-separated terms).
+    ///
+    /// Returns:
+    ///     A list of EntityId objects that match all query terms.
+    ///
+    /// Example:
+    /// ```python
+    /// results = db.fts_search(documents, "content", "hello world")
+    /// # Returns entities containing both "hello" AND "world"
+    /// ```
+    fn fts_search(&self, collection: &Collection, name: &str, query: &str) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_search(coll, name, query)
+            .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Searches the FTS index with OR semantics.
+    ///
+    /// An entity matches if it contains ANY of the query tokens.
+    ///
+    /// Args:
+    ///     collection: The collection.
+    ///     name: The FTS index name.
+    ///     query: The search query (whitespace-separated terms).
+    ///
+    /// Returns:
+    ///     A list of EntityId objects that match at least one query term.
+    ///
+    /// Example:
+    /// ```python
+    /// results = db.fts_search_any(documents, "content", "hello world")
+    /// # Returns entities containing "hello" OR "world" (or both)
+    /// ```
+    fn fts_search_any(&self, collection: &Collection, name: &str, query: &str) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_search_any(coll, name, query)
+            .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Searches the FTS index with prefix matching.
+    ///
+    /// Finds entities where any indexed token starts with the given prefix.
+    ///
+    /// Args:
+    ///     collection: The collection.
+    ///     name: The FTS index name.
+    ///     prefix: The prefix to search for.
+    ///
+    /// Returns:
+    ///     A list of EntityId objects with tokens starting with the prefix.
+    ///
+    /// Example:
+    /// ```python
+    /// results = db.fts_search_prefix(documents, "content", "prog")
+    /// # Returns entities with words like "program", "programming", etc.
+    /// ```
+    fn fts_search_prefix(&self, collection: &Collection, name: &str, prefix: &str) -> PyResult<Vec<EntityId>> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_search_prefix(coll, name, prefix)
+            .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of entities indexed in the FTS index.
+    fn fts_index_len(&self, collection: &Collection, name: &str) -> PyResult<usize> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_index_len(coll, name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Returns the number of unique tokens in the FTS index.
+    fn fts_unique_token_count(&self, collection: &Collection, name: &str) -> PyResult<usize> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_unique_token_count(coll, name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Clears all entries from an FTS index.
+    fn fts_clear(&self, collection: &Collection, name: &str) -> PyResult<()> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .fts_clear(coll, name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Drops an FTS index.
+    ///
+    /// Returns True if the index existed and was dropped.
+    fn drop_fts_index(&self, collection: &Collection, name: &str) -> PyResult<bool> {
+        let coll = CollectionId::new(collection.id);
+        self.inner
+            .drop_fts_index(coll, name)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    // ========================================================================
     // Change Feed
     // ========================================================================
 
@@ -958,15 +1167,15 @@ impl Database {
     /// ```
     #[getter]
     fn schema_version(&self) -> PyResult<u64> {
-        // Read from the metadata collection
-        let meta_coll_id = CollectionId::from_name("__entidb_meta__");
+        // Read from the metadata collection (collection id 0 is reserved for metadata)
+        let meta_coll_id = CollectionId::new(0);
         let key_id = CoreEntityId::from_bytes([
             0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
             0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
         ]);
 
         match self.inner.get(meta_coll_id, key_id) {
-            Some(bytes) => {
+            Ok(Some(bytes)) => {
                 if bytes.len() >= 8 {
                     let arr: [u8; 8] = bytes[0..8].try_into().unwrap();
                     Ok(u64::from_le_bytes(arr))
@@ -974,7 +1183,8 @@ impl Database {
                     Ok(0)
                 }
             }
-            None => Ok(0),
+            Ok(None) => Ok(0),
+            Err(e) => Err(PyIOError::new_err(e.to_string())),
         }
     }
 
@@ -984,14 +1194,16 @@ impl Database {
     #[setter]
     fn set_schema_version(&self, version: u64) -> PyResult<()> {
         // Write to the metadata collection
-        let meta_coll_id = CollectionId::from_name("__entidb_meta__");
+        let meta_coll_id = CollectionId::new(0);
         let key_id = CoreEntityId::from_bytes([
             0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
             0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
         ]);
 
         self.inner
-            .put(&meta_coll_id, key_id, version.to_le_bytes().to_vec())
+            .transaction(|txn| {
+                txn.put(meta_coll_id, key_id, version.to_le_bytes().to_vec())
+            })
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -1189,8 +1401,8 @@ impl CompactionStats {
 }
 
 /// Type of change event.
-#[pyclass]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeType {
     /// Entity was inserted (no previous version existed).
     Insert,
@@ -1252,6 +1464,217 @@ impl ChangeEvent {
     }
 }
 
+// ============================================================================
+// Crypto Manager
+// ============================================================================
+
+/// Encryption manager for AES-256-GCM encryption.
+///
+/// Provides encryption and decryption capabilities using AES-256-GCM.
+/// Keys are 32 bytes (256 bits) and are zeroized when the manager is closed.
+///
+/// Example:
+///     ```python
+///     from entidb import CryptoManager
+///
+///     # Create with a generated key
+///     crypto = CryptoManager.create()
+///     key = crypto.get_key()  # Save this key securely!
+///
+///     # Encrypt data
+///     encrypted = crypto.encrypt(b"secret message")
+///
+///     # Decrypt data
+///     decrypted = crypto.decrypt(encrypted)
+///
+///     # Close when done
+///     crypto.close()
+///     ```
+#[cfg(feature = "encryption")]
+#[pyclass]
+pub struct CryptoManager {
+    inner: Option<CoreCryptoManager>,
+    key: [u8; 32],
+}
+
+#[cfg(feature = "encryption")]
+#[pymethods]
+impl CryptoManager {
+    /// Returns True if encryption is available.
+    #[staticmethod]
+    fn is_available() -> bool {
+        true
+    }
+
+    /// Creates a new CryptoManager with a generated random key.
+    ///
+    /// The generated key can be accessed via get_key() and should be
+    /// stored securely for future use.
+    #[staticmethod]
+    fn create() -> PyResult<Self> {
+        let key = EncryptionKey::generate();
+        let key_bytes = *key.as_bytes();
+        let manager = CoreCryptoManager::new(key);
+        Ok(Self {
+            inner: Some(manager),
+            key: key_bytes,
+        })
+    }
+
+    /// Creates a CryptoManager from an existing key.
+    ///
+    /// The key must be exactly 32 bytes (256 bits).
+    #[staticmethod]
+    fn from_key(key: &[u8]) -> PyResult<Self> {
+        if key.len() != 32 {
+            return Err(PyValueError::new_err(format!(
+                "Key must be exactly 32 bytes, got {}",
+                key.len()
+            )));
+        }
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(key);
+        let enc_key = EncryptionKey::from_bytes(&key_bytes)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let manager = CoreCryptoManager::new(enc_key);
+        Ok(Self {
+            inner: Some(manager),
+            key: key_bytes,
+        })
+    }
+
+    /// Creates a CryptoManager from a password and salt.
+    ///
+    /// The password and salt are used to derive a key.
+    /// The same password and salt will always produce the same key.
+    #[staticmethod]
+    fn from_password(password: &[u8], salt: &[u8]) -> PyResult<Self> {
+        let key = EncryptionKey::derive_from_password(password, salt)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let key_bytes = *key.as_bytes();
+        let manager = CoreCryptoManager::new(key);
+        Ok(Self {
+            inner: Some(manager),
+            key: key_bytes,
+        })
+    }
+
+    /// Returns the encryption key (32 bytes).
+    ///
+    /// This key should be stored securely if you need to decrypt data later.
+    fn get_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.key)
+    }
+
+    /// Encrypts data using AES-256-GCM.
+    ///
+    /// Returns the encrypted data with nonce prepended:
+    /// nonce (12 bytes) || ciphertext || tag (16 bytes)
+    fn encrypt<'py>(&self, py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        let manager = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CryptoManager has been closed"))?;
+
+        manager
+            .encrypt(data)
+            .map(|encrypted| PyBytes::new(py, &encrypted))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Decrypts data that was encrypted with encrypt().
+    ///
+    /// Raises an exception if decryption fails (wrong key, corrupted data, etc.).
+    fn decrypt<'py>(&self, py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        let manager = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CryptoManager has been closed"))?;
+
+        manager
+            .decrypt(data)
+            .map(|decrypted| PyBytes::new(py, &decrypted))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Encrypts data with associated authenticated data (AAD).
+    ///
+    /// The AAD is authenticated but not encrypted. This is useful for binding
+    /// the ciphertext to metadata (e.g., entity ID, collection name).
+    fn encrypt_with_aad<'py>(
+        &self,
+        py: Python<'py>,
+        data: &[u8],
+        aad: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let manager = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CryptoManager has been closed"))?;
+
+        manager
+            .encrypt_with_aad(data, aad)
+            .map(|encrypted| PyBytes::new(py, &encrypted))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Decrypts data with associated authenticated data (AAD).
+    ///
+    /// The same AAD that was used during encryption must be provided.
+    fn decrypt_with_aad<'py>(
+        &self,
+        py: Python<'py>,
+        data: &[u8],
+        aad: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let manager = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("CryptoManager has been closed"))?;
+
+        manager
+            .decrypt_with_aad(data, aad)
+            .map(|decrypted| PyBytes::new(py, &decrypted))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Closes the crypto manager and releases resources.
+    ///
+    /// The manager should not be used after calling this method.
+    fn close(&mut self) {
+        self.inner = None;
+    }
+
+    /// Returns True if the manager has been closed.
+    #[getter]
+    fn is_closed(&self) -> bool {
+        self.inner.is_none()
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<PyObject>,
+        _exc_val: Option<PyObject>,
+        _exc_tb: Option<PyObject>,
+    ) -> bool {
+        self.close();
+        false
+    }
+
+    fn __repr__(&self) -> String {
+        if self.inner.is_some() {
+            "CryptoManager(active)".to_string()
+        } else {
+            "CryptoManager(closed)".to_string()
+        }
+    }
+}
+
 /// Python module initialization.
 #[pymodule]
 fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1266,7 +1689,11 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompactionStats>()?;
     m.add_class::<ChangeType>()?;
     m.add_class::<ChangeEvent>()?;
+    #[cfg(feature = "encryption")]
+    m.add_class::<CryptoManager>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    #[cfg(feature = "encryption")]
+    m.add_function(wrap_pyfunction!(crypto_available, m)?)?;
     Ok(())
 }
 
@@ -1274,4 +1701,11 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction]
 fn version() -> &'static str {
     VERSION
+}
+
+/// Returns True if encryption support is available.
+#[cfg(feature = "encryption")]
+#[pyfunction]
+fn crypto_available() -> bool {
+    true
 }

@@ -579,3 +579,294 @@ class TestBTreeIndex:
             # Lookup on dropped index should fail
             with pytest.raises(IOError):
                 db.btree_index_lookup(users, "age", (25).to_bytes(8, 'big'))
+
+
+@pytest.mark.skipif(not ENTIDB_AVAILABLE, reason="entidb not built")
+class TestFtsIndex:
+    """Tests for Full-Text Search (FTS) index functionality."""
+
+    def test_create_fts_index(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            # Index should exist and be empty
+            assert db.fts_index_len(docs, "content") == 0
+
+    def test_create_fts_index_with_config(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index_with_config(
+                docs, "content",
+                min_token_length=2,
+                max_token_length=100,
+                case_sensitive=True
+            )
+
+            assert db.fts_index_len(docs, "content") == 0
+
+    def test_index_and_search_text(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            db.fts_index_text(docs, "content", id1, "Hello world from Rust")
+            db.fts_index_text(docs, "content", id2, "Hello Python programming")
+
+            # Search for "hello" - should find both
+            results = db.fts_search(docs, "content", "hello")
+            assert len(results) == 2
+            assert id1 in results
+            assert id2 in results
+
+            # Search for "rust" - should find only id1
+            rust_results = db.fts_search(docs, "content", "rust")
+            assert len(rust_results) == 1
+            assert id1 in rust_results
+
+            # Search for "python" - should find only id2
+            python_results = db.fts_search(docs, "content", "python")
+            assert len(python_results) == 1
+            assert id2 in python_results
+
+    def test_search_and_semantics(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            db.fts_index_text(docs, "content", id1, "Hello world")
+            db.fts_index_text(docs, "content", id2, "Hello Rust")
+
+            # "hello world" - only id1 has both
+            results = db.fts_search(docs, "content", "hello world")
+            assert len(results) == 1
+            assert id1 in results
+
+            # "hello rust" - only id2 has both
+            rust_results = db.fts_search(docs, "content", "hello rust")
+            assert len(rust_results) == 1
+            assert id2 in rust_results
+
+            # "world rust" - neither has both
+            none_results = db.fts_search(docs, "content", "world rust")
+            assert len(none_results) == 0
+
+    def test_search_or_semantics(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            db.fts_index_text(docs, "content", id1, "apple orange")
+            db.fts_index_text(docs, "content", id2, "banana orange")
+
+            # "apple banana" with OR - both should match
+            results = db.fts_search_any(docs, "content", "apple banana")
+            assert len(results) == 2
+            assert id1 in results
+            assert id2 in results
+
+            # "grape" - neither should match
+            no_results = db.fts_search_any(docs, "content", "grape")
+            assert len(no_results) == 0
+
+    def test_prefix_search(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            db.fts_index_text(docs, "content", id1, "programming in Rust")
+            db.fts_index_text(docs, "content", id2, "program management")
+
+            # "prog" prefix - should find both
+            results = db.fts_search_prefix(docs, "content", "prog")
+            assert len(results) == 2
+            assert id1 in results
+            assert id2 in results
+
+            # "rust" prefix - should find only id1
+            rust_results = db.fts_search_prefix(docs, "content", "rust")
+            assert len(rust_results) == 1
+            assert id1 in rust_results
+
+            # "xyz" prefix - no matches
+            no_results = db.fts_search_prefix(docs, "content", "xyz")
+            assert len(no_results) == 0
+
+    def test_remove_entity(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            db.fts_index_text(docs, "content", id1, "hello world")
+            db.fts_index_text(docs, "content", id2, "hello rust")
+
+            # Both should be found
+            assert len(db.fts_search(docs, "content", "hello")) == 2
+
+            # Remove id1
+            db.fts_remove_entity(docs, "content", id1)
+
+            # Now only id2 should be found
+            results = db.fts_search(docs, "content", "hello")
+            assert len(results) == 1
+            assert id2 in results
+
+            # "world" should find nothing
+            assert len(db.fts_search(docs, "content", "world")) == 0
+
+    def test_reindex_entity(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            entity_id = EntityId()
+
+            # Index initial text
+            db.fts_index_text(docs, "content", entity_id, "Hello world")
+            assert len(db.fts_search(docs, "content", "hello")) == 1
+            assert len(db.fts_search(docs, "content", "world")) == 1
+
+            # Reindex with different text
+            db.fts_index_text(docs, "content", entity_id, "Goodbye Rust")
+
+            # Old terms should not match
+            assert len(db.fts_search(docs, "content", "hello")) == 0
+            assert len(db.fts_search(docs, "content", "world")) == 0
+
+            # New terms should match
+            assert len(db.fts_search(docs, "content", "goodbye")) == 1
+            assert len(db.fts_search(docs, "content", "rust")) == 1
+
+    def test_case_insensitivity(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            entity_id = EntityId()
+            db.fts_index_text(docs, "content", entity_id, "HELLO World RuSt")
+
+            # All variations should match
+            assert len(db.fts_search(docs, "content", "hello")) == 1
+            assert len(db.fts_search(docs, "content", "HELLO")) == 1
+            assert len(db.fts_search(docs, "content", "Hello")) == 1
+            assert len(db.fts_search(docs, "content", "rust")) == 1
+            assert len(db.fts_search(docs, "content", "RUST")) == 1
+
+    def test_case_sensitivity(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index_with_config(
+                docs, "content", case_sensitive=True
+            )
+
+            entity_id = EntityId()
+            db.fts_index_text(docs, "content", entity_id, "Hello World")
+
+            # Exact case should match
+            assert len(db.fts_search(docs, "content", "Hello")) == 1
+
+            # Different case should NOT match
+            assert len(db.fts_search(docs, "content", "hello")) == 0
+            assert len(db.fts_search(docs, "content", "HELLO")) == 0
+
+    def test_unique_token_count(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            id1 = EntityId()
+            id2 = EntityId()
+
+            # "hello world hello" - unique: hello, world
+            db.fts_index_text(docs, "content", id1, "hello world hello")
+            # "hello rust" - adds rust
+            db.fts_index_text(docs, "content", id2, "hello rust")
+
+            # Total unique tokens: hello, world, rust = 3
+            assert db.fts_unique_token_count(docs, "content") == 3
+
+    def test_clear_index(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            for i in range(5):
+                entity_id = EntityId()
+                db.fts_index_text(docs, "content", entity_id, f"document {i}")
+
+            assert db.fts_index_len(docs, "content") == 5
+
+            db.fts_clear(docs, "content")
+
+            assert db.fts_index_len(docs, "content") == 0
+            assert len(db.fts_search(docs, "content", "document")) == 0
+
+    def test_drop_index(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            entity_id = EntityId()
+            db.fts_index_text(docs, "content", entity_id, "hello world")
+
+            assert db.drop_fts_index(docs, "content") is True
+
+            # Operations on dropped index should raise error
+            with pytest.raises(IOError):
+                db.fts_search(docs, "content", "hello")
+
+    def test_nonexistent_index_error(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            entity_id = EntityId()
+
+            with pytest.raises(IOError):
+                db.fts_index_text(docs, "nonexistent", entity_id, "text")
+
+            with pytest.raises(IOError):
+                db.fts_search(docs, "nonexistent", "query")
+
+    def test_empty_query(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "content")
+
+            entity_id = EntityId()
+            db.fts_index_text(docs, "content", entity_id, "Hello world")
+
+            # Empty query should return empty results
+            assert len(db.fts_search(docs, "content", "")) == 0
+            assert len(db.fts_search_any(docs, "content", "")) == 0
+
+    def test_multiple_indexes_per_collection(self):
+        with Database.open_memory() as db:
+            docs = db.collection("documents")
+            db.create_fts_index(docs, "title")
+            db.create_fts_index(docs, "body")
+
+            entity_id = EntityId()
+            db.fts_index_text(docs, "title", entity_id, "Rust Programming Guide")
+            db.fts_index_text(docs, "body", entity_id, "Learn Rust today with examples")
+
+            # "guide" in title, not in body
+            assert len(db.fts_search(docs, "title", "guide")) == 1
+            assert len(db.fts_search(docs, "body", "guide")) == 0
+
+            # "examples" in body, not in title
+            assert len(db.fts_search(docs, "body", "examples")) == 1
+            assert len(db.fts_search(docs, "title", "examples")) == 0

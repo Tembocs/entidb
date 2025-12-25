@@ -11,6 +11,10 @@ authors.workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+[features]
+default = ["encryption"]
+encryption = ["entidb_core/encryption"]
+
 [dependencies]
 entidb_core.workspace = true
 entidb_storage.workspace = true

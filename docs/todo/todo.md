@@ -383,13 +383,27 @@ The core database functionality is **complete and tested**. This document identi
 
 ### 5.3 Low Priority (Post v1.0)
 
-#### 5.3.1 FTS Index in FFI/Bindings
+#### 5.3.1 FTS Index in FFI/Bindings ✅ COMPLETE
 **Gap:** Full-text search only in Rust core  
-**Solution:** Add after v1.0 based on demand
+**Solution:** ✅ Implemented FTS in Database API, FFI layer, Dart, and Python bindings  
+**Status:** COMPLETE (December 2024)
+- ✅ Added 10+ FTS methods to `Database` in `entidb_core`
+- ✅ Added 11 FFI functions (`entidb_create_fts_index`, `entidb_fts_search`, etc.)
+- ✅ Added FTS bindings in Dart (`createFtsIndex`, `ftsSearch`, `ftsSearchAny`, `ftsSearchPrefix`, etc.)
+- ✅ Added FTS bindings in Python (`create_fts_index`, `fts_search`, `fts_search_any`, `fts_search_prefix`, etc.)
+- ✅ 25 FTS tests in core, 8 FFI tests, 16 Dart tests, 17 Python tests
 
-#### 5.3.2 Encryption in Bindings
+#### 5.3.2 Encryption in Bindings ✅ COMPLETE
 **Gap:** Encryption APIs not exposed  
-**Solution:** Design secure key management for bindings
+**Solution:** ✅ Exposed CryptoManager through FFI and bindings for secure encryption/decryption  
+**Status:** COMPLETE (December 2024)
+- ✅ Added `encryption` feature to `entidb_ffi` (default enabled, backed by `entidb_core/encryption`)
+- ✅ Added 8 FFI crypto functions (`entidb_crypto_create`, `entidb_crypto_encrypt`, `entidb_crypto_decrypt`, etc.)
+- ✅ Added `EntiDbCryptoHandle` opaque handle with proper resource management
+- ✅ Added `NotSupported` error code for graceful feature detection
+- ✅ Added `CryptoManager` class in Dart with full API (create, fromKey, fromPassword, encrypt, decrypt, withAad variants)
+- ✅ Added `CryptoManager` class in Python with context manager support
+- ✅ 5 FFI tests, 21 Dart tests, 22 Python tests (all passing)
 
 #### 5.3.3 Async/Streaming APIs
 **Gap:** All operations are synchronous  

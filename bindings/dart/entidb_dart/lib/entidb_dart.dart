@@ -62,8 +62,10 @@ export 'src/error.dart'
         EntiDbInvalidError,
         EntiDbIoError,
         EntiDbCorruptionError,
-        EntiDbTransactionError;
+        EntiDbTransactionError,
+        EntiDbNotSupportedError;
 export 'src/codec.dart' show Codec, FunctionCodec, BytesCodec, StringCodec;
 export 'src/typed_collection.dart'
     show TypedCollection, TypedCollectionExtension;
 export 'src/bindings.dart' show setEntiDbLibraryPath;
+export 'src/crypto.dart' show CryptoManager;

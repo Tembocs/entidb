@@ -954,4 +954,385 @@ void main() {
       }
     });
   });
+
+  // ==========================================================================
+  // FTS (Full-Text Search) Index Tests
+  // ==========================================================================
+  group('FTS Index', () {
+    test('create FTS index', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        // Index should exist and be empty
+        expect(db.ftsIndexLen(docs, 'content'), equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('create FTS index with custom config', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndexWithConfig(
+          docs,
+          'content',
+          minTokenLength: 2,
+          maxTokenLength: 100,
+          caseSensitive: true,
+        );
+
+        expect(db.ftsIndexLen(docs, 'content'), equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('index and search text', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        db.ftsIndexText(docs, 'content', id1, 'Hello world from Rust');
+        db.ftsIndexText(docs, 'content', id2, 'Hello Python programming');
+
+        // Search for "hello" - should find both
+        final results = db.ftsSearch(docs, 'content', 'hello');
+        expect(results.length, equals(2));
+        expect(results, contains(id1));
+        expect(results, contains(id2));
+
+        // Search for "rust" - should find only id1
+        final rustResults = db.ftsSearch(docs, 'content', 'rust');
+        expect(rustResults.length, equals(1));
+        expect(rustResults, contains(id1));
+
+        // Search for "python" - should find only id2
+        final pythonResults = db.ftsSearch(docs, 'content', 'python');
+        expect(pythonResults.length, equals(1));
+        expect(pythonResults, contains(id2));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('search with AND semantics', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        db.ftsIndexText(docs, 'content', id1, 'Hello world');
+        db.ftsIndexText(docs, 'content', id2, 'Hello Rust');
+
+        // "hello world" - only id1 has both
+        final results = db.ftsSearch(docs, 'content', 'hello world');
+        expect(results.length, equals(1));
+        expect(results, contains(id1));
+
+        // "hello rust" - only id2 has both
+        final rustResults = db.ftsSearch(docs, 'content', 'hello rust');
+        expect(rustResults.length, equals(1));
+        expect(rustResults, contains(id2));
+
+        // "world rust" - neither has both
+        final noneResults = db.ftsSearch(docs, 'content', 'world rust');
+        expect(noneResults.length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('search with OR semantics', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        db.ftsIndexText(docs, 'content', id1, 'apple orange');
+        db.ftsIndexText(docs, 'content', id2, 'banana orange');
+
+        // "apple banana" with OR - both should match (id1 has apple, id2 has banana)
+        final results = db.ftsSearchAny(docs, 'content', 'apple banana');
+        expect(results.length, equals(2));
+        expect(results, contains(id1));
+        expect(results, contains(id2));
+
+        // "grape" - neither should match
+        final noResults = db.ftsSearchAny(docs, 'content', 'grape');
+        expect(noResults.length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('prefix search', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        db.ftsIndexText(docs, 'content', id1, 'programming in Rust');
+        db.ftsIndexText(docs, 'content', id2, 'program management');
+
+        // "prog" prefix - should find both
+        final results = db.ftsSearchPrefix(docs, 'content', 'prog');
+        expect(results.length, equals(2));
+        expect(results, contains(id1));
+        expect(results, contains(id2));
+
+        // "rust" prefix - should find only id1
+        final rustResults = db.ftsSearchPrefix(docs, 'content', 'rust');
+        expect(rustResults.length, equals(1));
+        expect(rustResults, contains(id1));
+
+        // "xyz" prefix - no matches
+        final noResults = db.ftsSearchPrefix(docs, 'content', 'xyz');
+        expect(noResults.length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('remove entity from FTS index', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        db.ftsIndexText(docs, 'content', id1, 'hello world');
+        db.ftsIndexText(docs, 'content', id2, 'hello rust');
+
+        // Both should be found
+        expect(db.ftsSearch(docs, 'content', 'hello').length, equals(2));
+
+        // Remove id1
+        db.ftsRemoveEntity(docs, 'content', id1);
+
+        // Now only id2 should be found
+        final results = db.ftsSearch(docs, 'content', 'hello');
+        expect(results.length, equals(1));
+        expect(results, contains(id2));
+
+        // "world" should find nothing
+        expect(db.ftsSearch(docs, 'content', 'world').length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('reindex entity replaces old content', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id = EntityId.generate();
+
+        // Index initial text
+        db.ftsIndexText(docs, 'content', id, 'Hello world');
+        expect(db.ftsSearch(docs, 'content', 'hello').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'world').length, equals(1));
+
+        // Reindex with different text
+        db.ftsIndexText(docs, 'content', id, 'Goodbye Rust');
+
+        // Old terms should not match
+        expect(db.ftsSearch(docs, 'content', 'hello').length, equals(0));
+        expect(db.ftsSearch(docs, 'content', 'world').length, equals(0));
+
+        // New terms should match
+        expect(db.ftsSearch(docs, 'content', 'goodbye').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'rust').length, equals(1));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('case insensitivity (default)', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id = EntityId.generate();
+        db.ftsIndexText(docs, 'content', id, 'HELLO World RuSt');
+
+        // All variations should match
+        expect(db.ftsSearch(docs, 'content', 'hello').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'HELLO').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'Hello').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'rust').length, equals(1));
+        expect(db.ftsSearch(docs, 'content', 'RUST').length, equals(1));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('case sensitivity with config', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndexWithConfig(
+          docs,
+          'content',
+          caseSensitive: true,
+        );
+
+        final id = EntityId.generate();
+        db.ftsIndexText(docs, 'content', id, 'Hello World');
+
+        // Exact case should match
+        expect(db.ftsSearch(docs, 'content', 'Hello').length, equals(1));
+
+        // Different case should NOT match
+        expect(db.ftsSearch(docs, 'content', 'hello').length, equals(0));
+        expect(db.ftsSearch(docs, 'content', 'HELLO').length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('unique token count', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id1 = EntityId.generate();
+        final id2 = EntityId.generate();
+
+        // "hello world hello" - unique: hello, world
+        db.ftsIndexText(docs, 'content', id1, 'hello world hello');
+        // "hello rust" - adds rust
+        db.ftsIndexText(docs, 'content', id2, 'hello rust');
+
+        // Total unique tokens: hello, world, rust = 3
+        expect(db.ftsUniqueTokenCount(docs, 'content'), equals(3));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('clear FTS index', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        for (var i = 0; i < 5; i++) {
+          final id = EntityId.generate();
+          db.ftsIndexText(docs, 'content', id, 'document $i');
+        }
+
+        expect(db.ftsIndexLen(docs, 'content'), equals(5));
+
+        db.ftsClear(docs, 'content');
+
+        expect(db.ftsIndexLen(docs, 'content'), equals(0));
+        expect(db.ftsSearch(docs, 'content', 'document').length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('drop FTS index', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id = EntityId.generate();
+        db.ftsIndexText(docs, 'content', id, 'hello world');
+
+        db.dropFtsIndex(docs, 'content');
+
+        // Operations on dropped index should throw
+        expect(
+          () => db.ftsSearch(docs, 'content', 'hello'),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    test('nonexistent index throws error', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        final id = EntityId.generate();
+
+        expect(
+          () => db.ftsIndexText(docs, 'nonexistent', id, 'text'),
+          throwsA(isA<EntiDbError>()),
+        );
+
+        expect(
+          () => db.ftsSearch(docs, 'nonexistent', 'query'),
+          throwsA(isA<EntiDbError>()),
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    test('empty query returns empty results', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'content');
+
+        final id = EntityId.generate();
+        db.ftsIndexText(docs, 'content', id, 'Hello world');
+
+        // Empty query should return empty results
+        expect(db.ftsSearch(docs, 'content', '').length, equals(0));
+        expect(db.ftsSearchAny(docs, 'content', '').length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+
+    test('multiple indexes per collection', () {
+      final db = Database.openMemory();
+      try {
+        final docs = db.collection('documents');
+        db.createFtsIndex(docs, 'title');
+        db.createFtsIndex(docs, 'body');
+
+        final id = EntityId.generate();
+        db.ftsIndexText(docs, 'title', id, 'Rust Programming Guide');
+        db.ftsIndexText(docs, 'body', id, 'Learn Rust today with examples');
+
+        // "guide" in title, not in body
+        expect(db.ftsSearch(docs, 'title', 'guide').length, equals(1));
+        expect(db.ftsSearch(docs, 'body', 'guide').length, equals(0));
+
+        // "examples" in body, not in title
+        expect(db.ftsSearch(docs, 'body', 'examples').length, equals(1));
+        expect(db.ftsSearch(docs, 'title', 'examples').length, equals(0));
+      } finally {
+        db.close();
+      }
+    });
+  });
 }

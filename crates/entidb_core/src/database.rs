@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::dir::DatabaseDir;
 use crate::entity::{EntityId, EntityStore};
 use crate::error::{CoreError, CoreResult};
-use crate::index::{BTreeIndex, HashIndex, Index, IndexSpec};
+use crate::index::{BTreeIndex, FtsIndex, FtsIndexSpec, HashIndex, Index, IndexSpec, TokenizerConfig};
 use crate::manifest::Manifest;
 use crate::segment::{SegmentManager, SegmentRecord};
 use crate::transaction::{Transaction, TransactionManager};
@@ -93,6 +93,8 @@ pub struct Database {
     hash_indexes: RwLock<HashMap<(u32, String), HashIndex<Vec<u8>>>>,
     /// BTree indexes keyed by (collection_id, index_name).
     btree_indexes: RwLock<HashMap<(u32, String), BTreeIndex<Vec<u8>>>>,
+    /// FTS indexes keyed by (collection_id, index_name).
+    fts_indexes: RwLock<HashMap<(u32, String), FtsIndex>>,
     /// Change feed for observing committed operations.
     change_feed: Arc<crate::change_feed::ChangeFeed>,
     /// Database statistics.
@@ -229,6 +231,7 @@ impl Database {
             is_open: RwLock::new(true),
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
+            fts_indexes: RwLock::new(HashMap::new()),
             change_feed: Arc::new(crate::change_feed::ChangeFeed::new()),
             stats: Arc::new(crate::stats::DatabaseStats::new()),
         })
@@ -274,6 +277,7 @@ impl Database {
             is_open: RwLock::new(true),
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
+            fts_indexes: RwLock::new(HashMap::new()),
             change_feed: Arc::new(crate::change_feed::ChangeFeed::new()),
             stats: Arc::new(crate::stats::DatabaseStats::new()),
         })
@@ -1290,6 +1294,339 @@ impl Database {
 
         Ok(indexes.remove(&idx_key).is_some())
     }
+
+    // ========================================================================
+    // Full-Text Search (FTS) Index Operations
+    // ========================================================================
+
+    /// Creates a full-text search (FTS) index for token-based text search.
+    ///
+    /// FTS indexes support:
+    /// - Tokenization (whitespace, punctuation splitting)
+    /// - Case-insensitive matching (configurable)
+    /// - Prefix matching
+    /// - Multi-token queries (AND/OR semantics)
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection to index
+    /// * `name` - A unique name for this index within the collection
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let articles = db.collection("articles");
+    /// db.create_fts_index(articles, "content_fts")?;
+    /// ```
+    pub fn create_fts_index(
+        &self,
+        collection_id: CollectionId,
+        name: &str,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let key = (collection_id.as_u32(), name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        if indexes.contains_key(&key) {
+            return Err(CoreError::invalid_format(format!(
+                "FTS index '{}' already exists on collection {}",
+                name,
+                collection_id.as_u32()
+            )));
+        }
+
+        let spec = FtsIndexSpec::new(collection_id, name);
+        indexes.insert(key, FtsIndex::new(spec));
+        Ok(())
+    }
+
+    /// Creates a full-text search index with custom tokenizer configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection to index
+    /// * `name` - A unique name for this index within the collection
+    /// * `min_token_length` - Minimum token length to index
+    /// * `max_token_length` - Maximum token length to index
+    /// * `case_sensitive` - Whether to perform case-sensitive matching
+    pub fn create_fts_index_with_config(
+        &self,
+        collection_id: CollectionId,
+        name: &str,
+        min_token_length: usize,
+        max_token_length: usize,
+        case_sensitive: bool,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let key = (collection_id.as_u32(), name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        if indexes.contains_key(&key) {
+            return Err(CoreError::invalid_format(format!(
+                "FTS index '{}' already exists on collection {}",
+                name,
+                collection_id.as_u32()
+            )));
+        }
+
+        let mut tokenizer = TokenizerConfig::new()
+            .min_length(min_token_length)
+            .max_length(max_token_length);
+        if case_sensitive {
+            tokenizer = tokenizer.case_sensitive();
+        }
+
+        let spec = FtsIndexSpec::new(collection_id, name).with_tokenizer(tokenizer);
+        indexes.insert(key, FtsIndex::new(spec));
+        Ok(())
+    }
+
+    /// Indexes text for an entity in an FTS index.
+    ///
+    /// This replaces any previously indexed text for the entity.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the FTS index
+    /// * `entity_id` - The entity to index
+    /// * `text` - The text to index
+    pub fn fts_index_text(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        entity_id: EntityId,
+        text: &str,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.index_text(entity_id, text)?;
+        self.stats.record_write(text.len() as u64);
+        Ok(())
+    }
+
+    /// Removes an entity from an FTS index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the FTS index
+    /// * `entity_id` - The entity to remove
+    ///
+    /// # Returns
+    ///
+    /// True if the entity was indexed and removed, false if it wasn't indexed.
+    pub fn fts_remove_entity(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        entity_id: EntityId,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.remove_entity(entity_id)
+    }
+
+    /// Searches an FTS index with AND semantics.
+    ///
+    /// Returns entities that contain ALL tokens in the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the FTS index
+    /// * `query` - The search query (tokenized the same way as indexed text)
+    pub fn fts_search(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        query: &str,
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.fts_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        self.stats.record_index_lookup();
+        index.search(query)
+    }
+
+    /// Searches an FTS index with OR semantics.
+    ///
+    /// Returns entities that contain ANY token in the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the FTS index
+    /// * `query` - The search query (tokenized the same way as indexed text)
+    pub fn fts_search_any(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        query: &str,
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.fts_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        self.stats.record_index_lookup();
+        index.search_any(query)
+    }
+
+    /// Searches an FTS index for a prefix.
+    ///
+    /// Returns entities containing any token that starts with the given prefix.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `index_name` - The name of the FTS index
+    /// * `prefix` - The prefix to search for
+    pub fn fts_search_prefix(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+        prefix: &str,
+    ) -> CoreResult<Vec<EntityId>> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.fts_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        self.stats.record_index_lookup();
+        index.search_prefix(prefix)
+    }
+
+    /// Returns the number of indexed entities in an FTS index.
+    pub fn fts_index_len(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<usize> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.fts_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        Ok(index.entity_count())
+    }
+
+    /// Returns the number of unique tokens in an FTS index.
+    pub fn fts_unique_token_count(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<usize> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let indexes = self.fts_indexes.read();
+
+        let index = indexes.get(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        Ok(index.unique_token_count())
+    }
+
+    /// Clears an FTS index.
+    pub fn fts_clear(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<()> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
+            CoreError::invalid_operation(format!(
+                "FTS index '{}' not found on collection {}",
+                index_name,
+                collection_id.as_u32()
+            ))
+        })?;
+
+        index.clear();
+        Ok(())
+    }
+
+    /// Drops an FTS index.
+    pub fn drop_fts_index(
+        &self,
+        collection_id: CollectionId,
+        index_name: &str,
+    ) -> CoreResult<bool> {
+        self.ensure_open()?;
+
+        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let mut indexes = self.fts_indexes.write();
+
+        Ok(indexes.remove(&idx_key).is_some())
+    }
 }
 
 /// Statistics from a restore operation.
@@ -1696,6 +2033,7 @@ mod persistence_tests {
     }
 }
 
+/// Encrypted database tests.
 /// Index tests.
 #[cfg(test)]
 mod index_tests {
@@ -2081,5 +2419,684 @@ mod observability_tests {
 
         let stats = db.stats();
         assert_eq!(stats.index_lookups, 1);
+    }
+
+    // ==================== FTS Index Tests ====================
+
+    #[test]
+    fn fts_create_index() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Create a basic FTS index
+        db.create_fts_index(collection, "content").unwrap();
+
+        // Verify index exists by trying to get its length
+        let len = db.fts_index_len(collection, "content").unwrap();
+        assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn fts_create_index_with_custom_config() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Create with custom config: case-sensitive, min token length 2, max 100
+        db.create_fts_index_with_config(collection, "content", 2, 100, true)
+            .unwrap();
+
+        // Verify index exists
+        let len = db.fts_index_len(collection, "content").unwrap();
+        assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn fts_create_duplicate_index_fails() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        // Creating same index again should fail
+        let result = db.create_fts_index(collection, "content");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fts_index_and_search_basic() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+        let entity3 = EntityId::new();
+
+        // Index some text
+        db.fts_index_text(collection, "content", entity1, "Hello world")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Hello Rust programming")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity3, "Goodbye world")
+            .unwrap();
+
+        // Search for "hello" - should find entity1 and entity2
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&entity1));
+        assert!(results.contains(&entity2));
+
+        // Search for "world" - should find entity1 and entity3
+        let results = db.fts_search(collection, "content", "world").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&entity1));
+        assert!(results.contains(&entity3));
+
+        // Search for "rust" - should find only entity2
+        let results = db.fts_search(collection, "content", "rust").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity2));
+    }
+
+    #[test]
+    fn fts_search_and_semantics() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "Hello world from Rust")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Hello world from Python")
+            .unwrap();
+
+        // Search for "hello world" - both should match (AND semantics - all terms must match)
+        let results = db.fts_search(collection, "content", "hello world").unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search for "rust world" - only entity1 should match
+        let results = db.fts_search(collection, "content", "rust world").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity1));
+
+        // Search for "python rust" - neither should match (no doc has both)
+        let results = db.fts_search(collection, "content", "python rust").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_search_any_or_semantics() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+        let entity3 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "Hello world")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Goodbye world")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity3, "Rust programming")
+            .unwrap();
+
+        // Search any "hello goodbye" - entity1 and entity2 should match (OR semantics)
+        let results = db.fts_search_any(collection, "content", "hello goodbye").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&entity1));
+        assert!(results.contains(&entity2));
+
+        // Search any "rust python" - only entity3 should match
+        let results = db.fts_search_any(collection, "content", "rust python").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity3));
+
+        // Search any with one matching term
+        let results = db.fts_search_any(collection, "content", "notexist rust")
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity3));
+    }
+
+    #[test]
+    fn fts_search_prefix() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+        let entity3 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "programming in Rust")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "program management")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity3, "something else")
+            .unwrap();
+
+        // Prefix search for "prog" - should find entity1 and entity2
+        let results = db.fts_search_prefix(collection, "content", "prog").unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&entity1));
+        assert!(results.contains(&entity2));
+
+        // Prefix search for "rust" - should find entity1
+        let results = db.fts_search_prefix(collection, "content", "rust").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity1));
+
+        // Prefix search for "xyz" - should find nothing
+        let results = db.fts_search_prefix(collection, "content", "xyz").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_case_insensitivity() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Default is case-insensitive
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "HELLO World RuSt")
+            .unwrap();
+
+        // All variations should find the entity
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "HELLO").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "HeLLo").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "rust").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "WORLD").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn fts_case_sensitivity() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Create case-sensitive index
+        db.create_fts_index_with_config(collection, "content", 1, 256, true)
+            .unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "Hello World")
+            .unwrap();
+
+        // Exact case should match
+        let results = db.fts_search(collection, "content", "Hello").unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Different case should NOT match in case-sensitive mode
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search(collection, "content", "HELLO").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_remove_entity() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "Hello world")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Hello Rust")
+            .unwrap();
+
+        // Both should be found
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Remove entity1
+        db.fts_remove_entity(collection, "content", entity1).unwrap();
+
+        // Now only entity2 should be found
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity2));
+
+        // Searching for "world" should find nothing
+        let results = db.fts_search(collection, "content", "world").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_reindex_entity() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+
+        // Index initial text
+        db.fts_index_text(collection, "content", entity, "Hello world")
+            .unwrap();
+
+        // Verify initial state
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 1);
+        let results = db.fts_search(collection, "content", "world").unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Re-index with different text (should replace)
+        db.fts_index_text(collection, "content", entity, "Goodbye Rust")
+            .unwrap();
+
+        // Old terms should no longer match
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 0);
+        let results = db.fts_search(collection, "content", "world").unwrap();
+        assert_eq!(results.len(), 0);
+
+        // New terms should match
+        let results = db.fts_search(collection, "content", "goodbye").unwrap();
+        assert_eq!(results.len(), 1);
+        let results = db.fts_search(collection, "content", "rust").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn fts_clear_index() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "Hello world")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Hello Rust")
+            .unwrap();
+
+        assert_eq!(db.fts_index_len(collection, "content").unwrap(), 2);
+
+        // Clear the index
+        db.fts_clear(collection, "content").unwrap();
+
+        assert_eq!(db.fts_index_len(collection, "content").unwrap(), 0);
+
+        // Search should return nothing
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_drop_index() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "Hello world")
+            .unwrap();
+
+        // Drop the index
+        db.drop_fts_index(collection, "content").unwrap();
+
+        // Operations on dropped index should fail
+        let result = db.fts_search(collection, "content", "hello");
+        assert!(result.is_err());
+
+        let result = db.fts_index_len(collection, "content");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fts_nonexistent_index_errors() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        let entity = EntityId::new();
+
+        // All operations on non-existent index should fail
+        let result = db.fts_index_text(collection, "nonexistent", entity, "text");
+        assert!(result.is_err());
+
+        let result = db.fts_search(collection, "nonexistent", "query");
+        assert!(result.is_err());
+
+        let result = db.fts_search_any(collection, "nonexistent", "query");
+        assert!(result.is_err());
+
+        let result = db.fts_search_prefix(collection, "nonexistent", "pre");
+        assert!(result.is_err());
+
+        let result = db.fts_remove_entity(collection, "nonexistent", entity);
+        assert!(result.is_err());
+
+        let result = db.fts_index_len(collection, "nonexistent");
+        assert!(result.is_err());
+
+        let result = db.fts_unique_token_count(collection, "nonexistent");
+        assert!(result.is_err());
+
+        let result = db.fts_clear(collection, "nonexistent");
+        assert!(result.is_err());
+
+        // drop_fts_index returns Ok(false) for non-existent index (not an error)
+        let result = db.drop_fts_index(collection, "nonexistent").unwrap();
+        assert!(!result); // false = nothing was dropped
+    }
+
+    #[test]
+    fn fts_empty_query() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "Hello world")
+            .unwrap();
+
+        // Empty query should return empty results (no tokens to match)
+        let results = db.fts_search(collection, "content", "").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search_any(collection, "content", "").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_whitespace_only_query() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "Hello world")
+            .unwrap();
+
+        // Whitespace-only query should return empty results
+        let results = db.fts_search(collection, "content", "   ").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search(collection, "content", "\t\n").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_special_characters() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(
+            collection,
+            "content",
+            entity,
+            "Hello, world! How's it going?",
+        )
+        .unwrap();
+
+        // Punctuation should be treated as separators, words should still be found
+        let results = db.fts_search(collection, "content", "hello").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "world").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "going").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn fts_unicode_text() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "日本語 テスト")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "Привет мир")
+            .unwrap();
+
+        // Search for Japanese text
+        let results = db.fts_search(collection, "content", "日本語").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity1));
+
+        // Search for Russian text
+        let results = db.fts_search(collection, "content", "привет").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity2));
+    }
+
+    #[test]
+    fn fts_min_token_length() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Create index with min token length of 3
+        db.create_fts_index_with_config(collection, "content", 3, 256, false)
+            .unwrap();
+
+        let entity = EntityId::new();
+        db.fts_index_text(collection, "content", entity, "I am a Rust programmer")
+            .unwrap();
+
+        // Short tokens (length < 3) should be ignored
+        let results = db.fts_search(collection, "content", "I").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search(collection, "content", "am").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search(collection, "content", "a").unwrap();
+        assert_eq!(results.len(), 0);
+
+        // Longer tokens should work
+        let results = db.fts_search(collection, "content", "rust").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "programmer").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn fts_unique_token_count() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection, "content", entity1, "hello world hello")
+            .unwrap();
+        db.fts_index_text(collection, "content", entity2, "hello rust")
+            .unwrap();
+
+        // Unique tokens: hello, world, rust = 3
+        let unique_count = db.fts_unique_token_count(collection, "content").unwrap();
+        assert_eq!(unique_count, 3);
+    }
+
+    #[test]
+    fn fts_multiple_indexes_per_collection() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        // Create two different indexes
+        db.create_fts_index(collection, "title").unwrap();
+        db.create_fts_index(collection, "body").unwrap();
+
+        let entity = EntityId::new();
+
+        // Index different content in each
+        db.fts_index_text(collection, "title", entity, "Rust Programming Guide")
+            .unwrap();
+        db.fts_index_text(collection, "body", entity, "Learn Rust today with examples")
+            .unwrap();
+
+        // Search title - "guide" should be found
+        let results = db.fts_search(collection, "title", "guide").unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search body - "guide" should NOT be found
+        let results = db.fts_search(collection, "body", "guide").unwrap();
+        assert_eq!(results.len(), 0);
+
+        // Search body - "examples" should be found
+        let results = db.fts_search(collection, "body", "examples").unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search title - "examples" should NOT be found
+        let results = db.fts_search(collection, "title", "examples").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_different_collections_independent() {
+        let db = create_db();
+        let collection1 = db.collection("documents");
+        let collection2 = db.collection("articles");
+
+        // Create same-named index in both collections
+        db.create_fts_index(collection1, "content").unwrap();
+        db.create_fts_index(collection2, "content").unwrap();
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        db.fts_index_text(collection1, "content", entity1, "Hello from documents")
+            .unwrap();
+        db.fts_index_text(collection2, "content", entity2, "Hello from articles")
+            .unwrap();
+
+        // Search in collection1
+        let results = db.fts_search(collection1, "content", "documents").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity1));
+
+        // Search in collection2
+        let results = db.fts_search(collection2, "content", "articles").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entity2));
+
+        // Cross-collection searches should not mix
+        let results = db.fts_search(collection1, "content", "articles").unwrap();
+        assert_eq!(results.len(), 0);
+
+        let results = db.fts_search(collection2, "content", "documents").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_empty_text_indexing() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+
+        // Indexing empty text should succeed but add no tokens
+        db.fts_index_text(collection, "content", entity, "").unwrap();
+
+        // Entity count should still increase (entity is tracked even without tokens)
+        // But search for anything should return nothing
+        let results = db.fts_search(collection, "content", "anything").unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn fts_very_long_text() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        let entity = EntityId::new();
+
+        // Create a long text with many words
+        let long_text: String = (0..1000)
+            .map(|i| format!("word{}", i))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        db.fts_index_text(collection, "content", entity, &long_text)
+            .unwrap();
+
+        // Search for various words
+        let results = db.fts_search(collection, "content", "word0").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "word999").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = db.fts_search(collection, "content", "word500").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn fts_many_entities() {
+        let db = create_db();
+        let collection = db.collection("documents");
+
+        db.create_fts_index(collection, "content").unwrap();
+
+        // Index 100 entities with common and unique terms
+        let mut entities = Vec::new();
+        for i in 0..100 {
+            let entity = EntityId::new();
+            entities.push(entity);
+            db.fts_index_text(
+                collection,
+                "content",
+                entity,
+                &format!("common term unique{}", i),
+            )
+            .unwrap();
+        }
+
+        // All should match "common"
+        let results = db.fts_search(collection, "content", "common").unwrap();
+        assert_eq!(results.len(), 100);
+
+        // All should match "term"
+        let results = db.fts_search(collection, "content", "term").unwrap();
+        assert_eq!(results.len(), 100);
+
+        // Only one should match specific unique term
+        let results = db.fts_search(collection, "content", "unique50").unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&entities[50]));
     }
 }

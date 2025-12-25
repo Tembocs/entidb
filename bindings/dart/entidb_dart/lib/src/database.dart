@@ -1194,6 +1194,415 @@ final class Database {
     }
   }
 
+  // ==========================================================================
+  // Full-Text Search (FTS) Index Operations
+  // ==========================================================================
+
+  /// Creates an FTS (Full-Text Search) index with default configuration.
+  ///
+  /// FTS indexes allow you to search text content for matching terms.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to create the index on.
+  /// - [name]: The index name.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final docs = db.collection('documents');
+  /// db.createFtsIndex(docs, 'content');
+  /// ```
+  void createFtsIndex(Collection collection, String name) {
+    _ensureOpen();
+
+    final namePtr = name.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result =
+          bindings.entidbCreateFtsIndex(_handle!, collId.ref, namePtr);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Creates an FTS index with custom configuration.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to create the index on.
+  /// - [name]: The index name.
+  /// - [minTokenLength]: Minimum token length (shorter tokens are ignored).
+  /// - [maxTokenLength]: Maximum token length (longer tokens are truncated).
+  /// - [caseSensitive]: If true, searches are case-sensitive.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final docs = db.collection('documents');
+  /// // Case-sensitive search, ignore words shorter than 2 chars
+  /// db.createFtsIndexWithConfig(docs, 'content',
+  ///     minTokenLength: 2, caseSensitive: true);
+  /// ```
+  void createFtsIndexWithConfig(
+    Collection collection,
+    String name, {
+    int minTokenLength = 1,
+    int maxTokenLength = 256,
+    bool caseSensitive = false,
+  }) {
+    _ensureOpen();
+
+    final namePtr = name.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result = bindings.entidbCreateFtsIndexWithConfig(
+        _handle!,
+        collId.ref,
+        namePtr,
+        minTokenLength,
+        maxTokenLength,
+        caseSensitive,
+      );
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Indexes text content for an entity.
+  ///
+  /// This extracts tokens from the text and associates them with the entity.
+  /// If the entity was previously indexed, the old text is replaced.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection containing the entity.
+  /// - [indexName]: The name of the FTS index.
+  /// - [entityId]: The entity ID to associate with the text.
+  /// - [text]: The text content to index.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final docs = db.collection('documents');
+  /// db.createFtsIndex(docs, 'content');
+  /// db.ftsIndexText(docs, 'content', docId, 'Hello world from Rust');
+  /// ```
+  void ftsIndexText(
+    Collection collection,
+    String indexName,
+    EntityId entityId,
+    String text,
+  ) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final textPtr = text.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      final result = bindings.entidbFtsIndexText(
+        _handle!,
+        collId.ref,
+        namePtr,
+        entityIdPtr.ref,
+        textPtr,
+      );
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(textPtr);
+      calloc.free(collId);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Removes an entity from an FTS index.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection containing the entity.
+  /// - [indexName]: The name of the FTS index.
+  /// - [entityId]: The entity ID to remove.
+  void ftsRemoveEntity(
+    Collection collection,
+    String indexName,
+    EntityId entityId,
+  ) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
+
+    try {
+      final result = bindings.entidbFtsRemoveEntity(
+        _handle!,
+        collId.ref,
+        namePtr,
+        entityIdPtr.ref,
+      );
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(entityIdPtr);
+    }
+  }
+
+  /// Searches an FTS index using AND semantics.
+  ///
+  /// All query terms must match for an entity to be returned.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to search.
+  /// - [indexName]: The name of the FTS index.
+  /// - [query]: Space-separated search terms.
+  ///
+  /// ## Returns
+  ///
+  /// A list of entity IDs that match all terms in the query.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// // Find documents containing both "hello" AND "world"
+  /// final results = db.ftsSearch(docs, 'content', 'hello world');
+  /// ```
+  List<EntityId> ftsSearch(
+    Collection collection,
+    String indexName,
+    String query,
+  ) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final queryPtr = query.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      final result = bindings.entidbFtsSearch(
+        _handle!,
+        collId.ref,
+        namePtr,
+        queryPtr,
+        bufferPtr,
+      );
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      if (bufferPtr.ref.data != nullptr) {
+        bindings.entidbFreeBuffer(bufferPtr.ref);
+      }
+      calloc.free(namePtr);
+      calloc.free(queryPtr);
+      calloc.free(collId);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Searches an FTS index using OR semantics.
+  ///
+  /// Any query term may match for an entity to be returned.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to search.
+  /// - [indexName]: The name of the FTS index.
+  /// - [query]: Space-separated search terms.
+  ///
+  /// ## Returns
+  ///
+  /// A list of entity IDs that match any term in the query.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// // Find documents containing "hello" OR "world" (or both)
+  /// final results = db.ftsSearchAny(docs, 'content', 'hello world');
+  /// ```
+  List<EntityId> ftsSearchAny(
+    Collection collection,
+    String indexName,
+    String query,
+  ) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final queryPtr = query.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      final result = bindings.entidbFtsSearchAny(
+        _handle!,
+        collId.ref,
+        namePtr,
+        queryPtr,
+        bufferPtr,
+      );
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      if (bufferPtr.ref.data != nullptr) {
+        bindings.entidbFreeBuffer(bufferPtr.ref);
+      }
+      calloc.free(namePtr);
+      calloc.free(queryPtr);
+      calloc.free(collId);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Searches an FTS index using prefix matching.
+  ///
+  /// Returns entities containing tokens that start with the given prefix.
+  ///
+  /// ## Parameters
+  ///
+  /// - [collection]: The collection to search.
+  /// - [indexName]: The name of the FTS index.
+  /// - [prefix]: The prefix to search for.
+  ///
+  /// ## Returns
+  ///
+  /// A list of entity IDs with tokens starting with the prefix.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// // Find documents with words starting with "prog" (program, programming, etc.)
+  /// final results = db.ftsSearchPrefix(docs, 'content', 'prog');
+  /// ```
+  List<EntityId> ftsSearchPrefix(
+    Collection collection,
+    String indexName,
+    String prefix,
+  ) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final prefixPtr = prefix.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final bufferPtr = calloc<EntiDbBuffer>();
+
+    try {
+      final result = bindings.entidbFtsSearchPrefix(
+        _handle!,
+        collId.ref,
+        namePtr,
+        prefixPtr,
+        bufferPtr,
+      );
+      checkResult(result);
+
+      return _parseEntityIds(bufferPtr);
+    } finally {
+      if (bufferPtr.ref.data != nullptr) {
+        bindings.entidbFreeBuffer(bufferPtr.ref);
+      }
+      calloc.free(namePtr);
+      calloc.free(prefixPtr);
+      calloc.free(collId);
+      calloc.free(bufferPtr);
+    }
+  }
+
+  /// Gets the number of entities indexed in an FTS index.
+  int ftsIndexLen(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final countPtr = calloc<IntPtr>();
+
+    try {
+      final result = bindings.entidbFtsIndexLen(
+        _handle!,
+        collId.ref,
+        namePtr,
+        countPtr,
+      );
+      checkResult(result);
+
+      return countPtr.value;
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(countPtr);
+    }
+  }
+
+  /// Gets the number of unique tokens in an FTS index.
+  int ftsUniqueTokenCount(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+    final countPtr = calloc<IntPtr>();
+
+    try {
+      final result = bindings.entidbFtsUniqueTokenCount(
+        _handle!,
+        collId.ref,
+        namePtr,
+        countPtr,
+      );
+      checkResult(result);
+
+      return countPtr.value;
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+      calloc.free(countPtr);
+    }
+  }
+
+  /// Clears all entries from an FTS index.
+  ///
+  /// The index structure remains but all indexed content is removed.
+  void ftsClear(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result = bindings.entidbFtsClear(_handle!, collId.ref, namePtr);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
+  /// Drops an FTS index.
+  void dropFtsIndex(Collection collection, String indexName) {
+    _ensureOpen();
+
+    final namePtr = indexName.toNativeUtf8();
+    final collId = EntiDbCollectionId.allocate(collection.id);
+
+    try {
+      final result = bindings.entidbDropFtsIndex(_handle!, collId.ref, namePtr);
+      checkResult(result);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(collId);
+    }
+  }
+
   /// Helper to parse entity IDs from a buffer (16 bytes each).
   List<EntityId> _parseEntityIds(Pointer<EntiDbBuffer> bufferPtr) {
     final length = bufferPtr.ref.len;
