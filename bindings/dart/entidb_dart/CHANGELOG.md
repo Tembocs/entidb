@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.2] - 2025-12-25
+
+### Changed
+
+- **Library Loading**: Improved native library loading for Flutter compatibility
+  - iOS now uses `DynamicLibrary.process()` for static linking
+  - macOS tries `process()` first, falls back to dynamic loading
+  - Better platform detection and error messages
+
+### Added
+
+- `resetEntiDbLibrary()` function to reset library loading state
+- Improved documentation for `setEntiDbLibraryPath()`
+
 ## [2.0.0-alpha.1] - 2025-12-25
 
 ### Added
