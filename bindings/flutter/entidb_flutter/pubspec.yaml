@@ -19,10 +19,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # Use path dependency during development
-  # Change to: entidb_dart: ^2.0.0-alpha.2 before publishing
-  entidb_dart:
-    path: ../../dart/entidb_dart
+  entidb_dart: ^2.0.0-alpha.2
 
 dev_dependencies:
   lints: ^3.0.0

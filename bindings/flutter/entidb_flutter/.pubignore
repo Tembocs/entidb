@@ -1,0 +1,19 @@
+# .pubignore for entidb_flutter
+# This file specifies what should be excluded when publishing to pub.dev
+# Unlike .gitignore, we WANT to include the native binaries
+
+# Standard excludes
+.dart_tool/
+.packages
+build/
+*.iml
+
+# Test files (not needed in published package)
+test/
+
+# Development files
+.idea/
+*.log
+
+# NOTE: We explicitly do NOT exclude native libraries (*.dll, *.so, *.dylib, *.a, *.xcframework)
+# because they need to be bundled with the package for end users

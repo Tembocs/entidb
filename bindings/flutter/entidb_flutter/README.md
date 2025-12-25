@@ -2,7 +2,22 @@
 
 Flutter plugin for [EntiDB](https://github.com/Tembocs/entidb) - an embedded entity database with ACID transactions and CBOR storage.
 
-This package bundles the native EntiDB libraries for all supported platforms, so you don't need to manually install anything.
+> **⚠️ Alpha Release Notice**
+> 
+> This is an early alpha release. The plugin scaffold is complete, but native libraries for mobile platforms are still being cross-compiled and integrated. **Currently only Windows is fully supported.**
+>
+> For production use, consider using [`entidb_dart`](https://pub.dev/packages/entidb_dart) directly with your own native library builds.
+
+## Platform Support (Alpha)
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Windows  | ✅ Working | Native library bundled |
+| Android  | 🚧 Scaffold | Native library pending |
+| iOS      | 🚧 Scaffold | Native library pending |
+| macOS    | 🚧 Scaffold | Native library pending |
+| Linux    | 🚧 Scaffold | Native library pending |
+| Web      | ❌ | Use `entidb_web` instead |
 
 ## Installation
 
@@ -48,17 +63,6 @@ void main() async {
   db.close();
 }
 ```
-
-## Platform Support
-
-| Platform | Architecture | Status |
-|----------|-------------|--------|
-| Android  | arm64-v8a, armeabi-v7a, x86_64 | ✅ |
-| iOS      | arm64, arm64-simulator, x86_64-simulator | ✅ |
-| macOS    | arm64, x86_64 | ✅ |
-| Windows  | x86_64 | ✅ |
-| Linux    | x86_64 | ✅ |
-| Web      | - | ❌ (use `entidb_web`) |
 
 ## Minimum Requirements
 
