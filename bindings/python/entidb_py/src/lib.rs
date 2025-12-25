@@ -544,6 +544,39 @@ impl Database {
         }
     }
 
+    /// Compacts the database, removing obsolete versions and optionally tombstones.
+    ///
+    /// Compaction merges segment records to:
+    /// - Remove obsolete entity versions (keeping only the latest)
+    /// - Optionally remove tombstones (deleted entity markers)
+    /// - Reclaim disk space
+    ///
+    /// Args:
+    ///     remove_tombstones: If True, removes tombstone records. Default is False.
+    ///
+    /// Returns:
+    ///     CompactionStats with details about the compaction operation.
+    ///
+    /// Example:
+    /// ```python
+    /// stats = db.compact(remove_tombstones=True)
+    /// print(f"Removed {stats.tombstones_removed} tombstones")
+    /// print(f"Saved {stats.bytes_saved} bytes")
+    /// ```
+    #[pyo3(signature = (remove_tombstones=false))]
+    fn compact(&self, remove_tombstones: bool) -> PyResult<CompactionStats> {
+        self.inner
+            .compact(remove_tombstones)
+            .map(|s| CompactionStats {
+                input_records: s.input_records,
+                output_records: s.output_records,
+                tombstones_removed: s.tombstones_removed,
+                obsolete_versions_removed: s.obsolete_versions_removed,
+                bytes_saved: s.bytes_saved,
+            })
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
     /// Creates a backup of the database.
     ///
     /// Returns the backup data as bytes that can be saved to a file.
@@ -1007,6 +1040,45 @@ impl DatabaseStats {
     }
 }
 
+/// Statistics from a compaction operation.
+///
+/// Contains information about what was removed during compaction
+/// and how much space was saved.
+#[pyclass]
+#[derive(Clone)]
+pub struct CompactionStats {
+    /// Number of records in the input.
+    #[pyo3(get)]
+    pub input_records: usize,
+    /// Number of records in the output.
+    #[pyo3(get)]
+    pub output_records: usize,
+    /// Number of tombstones removed.
+    #[pyo3(get)]
+    pub tombstones_removed: usize,
+    /// Number of obsolete versions removed.
+    #[pyo3(get)]
+    pub obsolete_versions_removed: usize,
+    /// Bytes saved (estimated).
+    #[pyo3(get)]
+    pub bytes_saved: usize,
+}
+
+#[pymethods]
+impl CompactionStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "CompactionStats(input_records={}, output_records={}, tombstones_removed={}, \
+             obsolete_versions_removed={}, bytes_saved={})",
+            self.input_records,
+            self.output_records,
+            self.tombstones_removed,
+            self.obsolete_versions_removed,
+            self.bytes_saved
+        )
+    }
+}
+
 /// Python module initialization.
 #[pymodule]
 fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1018,6 +1090,7 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RestoreStats>()?;
     m.add_class::<BackupInfo>()?;
     m.add_class::<DatabaseStats>()?;
+    m.add_class::<CompactionStats>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     Ok(())
 }

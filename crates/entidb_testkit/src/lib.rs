@@ -10,6 +10,7 @@
 //! - Fuzz testing harnesses
 //! - Stress testing utilities
 //! - Cross-language test vectors
+//! - Crash recovery testing harness
 //!
 //! ## Usage
 //!
@@ -24,10 +25,21 @@
 //!     });
 //! }
 //! ```
+//!
+//! ## Crash Recovery Testing
+//!
+//! ```rust,ignore
+//! use entidb_testkit::crash::CrashRecoveryHarness;
+//!
+//! let mut harness = CrashRecoveryHarness::with_temp_dir().unwrap();
+//! let results = harness.run_all_tests();
+//! assert!(harness.all_passed());
+//! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod crash;
 pub mod fixtures;
 pub mod fuzz;
 pub mod generators;
@@ -38,6 +50,7 @@ pub mod vectors;
 
 /// Prelude module for convenient imports
 pub mod prelude {
+    pub use crate::crash::*;
     pub use crate::fixtures::*;
     pub use crate::fuzz::*;
     pub use crate::generators::*;
@@ -46,6 +59,7 @@ pub mod prelude {
     pub use crate::vectors::*;
 }
 
+pub use crash::*;
 pub use fixtures::*;
 pub use fuzz::*;
 pub use generators::*;

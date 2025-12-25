@@ -311,35 +311,33 @@ The core database functionality is **complete and tested**. This document identi
 
 ### 5.1 High Priority (Required for v1.0)
 
-#### 5.1.1 Crash Recovery Testing
-**Gap:** No automated crash injection tests  
-**Risk:** AC-02 not fully verified  
-**Solution:** 
-- Create crash injection harness using process termination
-- Test crashes during WAL write, commit, compaction
-- Verify recovery produces correct state
+#### 5.1.1 Crash Recovery Testing ✅ IMPLEMENTED
+**Status:** Implemented in `crates/entidb_testkit/src/crash.rs`  
+**Implementation:**
+- Created `CrashableBackend` wrapper for crash simulation
+- Created `CrashRecoveryHarness` with comprehensive tests
+- Tests: committed data survives, uncommitted discarded, compaction recovery, WAL replay idempotency
 
-#### 5.1.2 WASM Index APIs
-**Gap:** Indexes not exposed in WASM  
-**Risk:** Web apps cannot use indexes for performance  
-**Solution:**
-- Add `createHashIndex()`, `createBTreeIndex()` to WASM Database
-- Add `indexInsert()`, `indexLookup()`, `indexRange()`
-- Add `dropIndex()`
+#### 5.1.2 WASM Index APIs ✅ IMPLEMENTED
+**Status:** Implemented in `web/entidb_wasm/src/database.rs`  
+**Implementation:**
+- Added `createHashIndex()`, `createBTreeIndex()` to WASM Database
+- Added `hashIndexInsert()`, `btreeIndexInsert()`, `hashIndexRemove()`, `btreeIndexRemove()`
+- Added `hashIndexLookup()`, `btreeIndexLookup()`, `btreeIndexRange()`
+- Added `hashIndexLen()`, `btreeIndexLen()`, `dropHashIndex()`, `dropBTreeIndex()`
 
-#### 5.1.3 Compaction in Bindings
-**Gap:** Dart and Python don't expose `compact()`  
-**Risk:** Users cannot reclaim disk space  
-**Solution:**
-- Add `compact()` to Dart Database class
-- Add `compact()` to Python Database class
+#### 5.1.3 Compaction in Bindings ✅ IMPLEMENTED
+**Status:** Implemented in both Dart and Python bindings  
+**Implementation:**
+- Added `compact()` method to Dart Database class with `CompactionStats` return type
+- Added `compact()` method to Python Database class with `CompactionStats` return type
+- Both return statistics: input_records, output_records, tombstones_removed, obsolete_versions_removed, bytes_saved
 
-#### 5.1.4 Stats in WASM
-**Gap:** Statistics not exposed in WASM  
-**Risk:** Web apps cannot monitor performance  
-**Solution:**
-- Add `stats()` method to WASM Database
-- Return JavaScript object with counters
+#### 5.1.4 Stats in WASM ✅ IMPLEMENTED
+**Status:** Implemented in `web/entidb_wasm/src/database.rs`  
+**Implementation:**
+- Added `stats()` method to WASM Database
+- Returns JavaScript object with all counters: reads, writes, deletes, scans, indexLookups, transactionsStarted, transactionsCommitted, transactionsAborted, bytesRead, bytesWritten, checkpoints, errors, entityCount
 
 ### 5.2 Medium Priority (Recommended for v1.0)
 

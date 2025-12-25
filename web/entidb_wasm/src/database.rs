@@ -539,6 +539,358 @@ impl Database {
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
     }
+
+    // =========================================================================
+    // Statistics API
+    // =========================================================================
+
+    /// Returns database statistics.
+    ///
+    /// Returns an object with:
+    /// - `reads`: Number of read operations
+    /// - `writes`: Number of write operations
+    /// - `deletes`: Number of delete operations
+    /// - `scans`: Number of scan operations
+    /// - `indexLookups`: Number of index lookups
+    /// - `transactionsStarted`: Number of transactions started
+    /// - `transactionsCommitted`: Number of transactions committed
+    /// - `transactionsAborted`: Number of transactions aborted
+    /// - `bytesRead`: Total bytes read
+    /// - `bytesWritten`: Total bytes written
+    /// - `checkpoints`: Number of checkpoints
+    /// - `errors`: Number of errors
+    /// - `entityCount`: Total entity count
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const stats = db.stats();
+    /// console.log(`Reads: ${stats.reads}, Writes: ${stats.writes}`);
+    /// ```
+    #[wasm_bindgen]
+    pub fn stats(&self) -> Result<JsValue, JsValue> {
+        let db = self.inner.borrow();
+        let s = db.stats();
+
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"reads".into(), &JsValue::from(s.reads as u32))?;
+        js_sys::Reflect::set(&obj, &"writes".into(), &JsValue::from(s.writes as u32))?;
+        js_sys::Reflect::set(&obj, &"deletes".into(), &JsValue::from(s.deletes as u32))?;
+        js_sys::Reflect::set(&obj, &"scans".into(), &JsValue::from(s.scans as u32))?;
+        js_sys::Reflect::set(&obj, &"indexLookups".into(), &JsValue::from(s.index_lookups as u32))?;
+        js_sys::Reflect::set(&obj, &"transactionsStarted".into(), &JsValue::from(s.transactions_started as u32))?;
+        js_sys::Reflect::set(&obj, &"transactionsCommitted".into(), &JsValue::from(s.transactions_committed as u32))?;
+        js_sys::Reflect::set(&obj, &"transactionsAborted".into(), &JsValue::from(s.transactions_aborted as u32))?;
+        js_sys::Reflect::set(&obj, &"bytesRead".into(), &JsValue::from(s.bytes_read as f64))?;
+        js_sys::Reflect::set(&obj, &"bytesWritten".into(), &JsValue::from(s.bytes_written as f64))?;
+        js_sys::Reflect::set(&obj, &"checkpoints".into(), &JsValue::from(s.checkpoints as u32))?;
+        js_sys::Reflect::set(&obj, &"errors".into(), &JsValue::from(s.errors as u32))?;
+        js_sys::Reflect::set(&obj, &"entityCount".into(), &JsValue::from(s.entity_count as u32))?;
+        Ok(obj.into())
+    }
+
+    // =========================================================================
+    // Index Management API
+    // =========================================================================
+
+    /// Creates a hash index for O(1) equality lookups.
+    ///
+    /// Hash indexes are ideal for exact-match queries like looking up
+    /// entities by email, username, or any unique identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to create the index on
+    /// * `name` - The index name (unique within the collection)
+    /// * `unique` - Whether the index should enforce unique keys
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const users = db.collection("users");
+    /// db.createHashIndex(users, "email", true); // unique email index
+    /// ```
+    #[wasm_bindgen(js_name = createHashIndex)]
+    pub fn create_hash_index(
+        &self,
+        collection: &Collection,
+        name: &str,
+        unique: bool,
+    ) -> Result<(), JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.create_hash_index(collection_id, name, unique)
+            .map_err(|e| JsValue::from_str(&format!("Failed to create hash index: {}", e)))
+    }
+
+    /// Creates a BTree index for range queries and ordered traversal.
+    ///
+    /// BTree indexes support:
+    /// - Exact-match queries
+    /// - Range queries (greater than, less than, between)
+    /// - Ordered iteration
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to create the index on
+    /// * `name` - The index name (unique within the collection)
+    /// * `unique` - Whether the index should enforce unique keys
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// const users = db.collection("users");
+    /// db.createBTreeIndex(users, "age", false); // non-unique age index
+    /// ```
+    #[wasm_bindgen(js_name = createBTreeIndex)]
+    pub fn create_btree_index(
+        &self,
+        collection: &Collection,
+        name: &str,
+        unique: bool,
+    ) -> Result<(), JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.create_btree_index(collection_id, name, unique)
+            .map_err(|e| JsValue::from_str(&format!("Failed to create btree index: {}", e)))
+    }
+
+    /// Inserts a key-entity pair into a hash index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection the index belongs to
+    /// * `index_name` - The name of the hash index
+    /// * `key` - The key bytes
+    /// * `entity_id` - The entity to associate with the key
+    #[wasm_bindgen(js_name = hashIndexInsert)]
+    pub fn hash_index_insert(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> Result<(), JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ent_id: entidb_core::EntityId = (*entity_id).into();
+        db.hash_index_insert(collection_id, index_name, key.to_vec(), ent_id)
+            .map_err(|e| JsValue::from_str(&format!("Failed to insert into hash index: {}", e)))
+    }
+
+    /// Inserts a key-entity pair into a BTree index.
+    ///
+    /// Note: For proper ordering, use big-endian encoding for numeric keys.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection the index belongs to
+    /// * `index_name` - The name of the BTree index
+    /// * `key` - The key bytes
+    /// * `entity_id` - The entity to associate with the key
+    #[wasm_bindgen(js_name = btreeIndexInsert)]
+    pub fn btree_index_insert(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> Result<(), JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ent_id: entidb_core::EntityId = (*entity_id).into();
+        db.btree_index_insert(collection_id, index_name, key.to_vec(), ent_id)
+            .map_err(|e| JsValue::from_str(&format!("Failed to insert into btree index: {}", e)))
+    }
+
+    /// Removes a key-entity pair from a hash index.
+    ///
+    /// Returns true if the entry was found and removed.
+    #[wasm_bindgen(js_name = hashIndexRemove)]
+    pub fn hash_index_remove(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> Result<bool, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ent_id: entidb_core::EntityId = (*entity_id).into();
+        db.hash_index_remove(collection_id, index_name, key, ent_id)
+            .map_err(|e| JsValue::from_str(&format!("Failed to remove from hash index: {}", e)))
+    }
+
+    /// Removes a key-entity pair from a BTree index.
+    ///
+    /// Returns true if the entry was found and removed.
+    #[wasm_bindgen(js_name = btreeIndexRemove)]
+    pub fn btree_index_remove(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+        entity_id: &EntityId,
+    ) -> Result<bool, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ent_id: entidb_core::EntityId = (*entity_id).into();
+        db.btree_index_remove(collection_id, index_name, key, ent_id)
+            .map_err(|e| JsValue::from_str(&format!("Failed to remove from btree index: {}", e)))
+    }
+
+    /// Looks up entities by key in a hash index.
+    ///
+    /// Returns an array of EntityIds matching the key.
+    #[wasm_bindgen(js_name = hashIndexLookup)]
+    pub fn hash_index_lookup(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+    ) -> Result<Array, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ids = db
+            .hash_index_lookup(collection_id, index_name, key)
+            .map_err(|e| JsValue::from_str(&format!("Failed to lookup in hash index: {}", e)))?;
+
+        let result = Array::new();
+        for id in ids {
+            let wasm_id: EntityId = id.into();
+            result.push(&wasm_id.into());
+        }
+        Ok(result)
+    }
+
+    /// Looks up entities by key in a BTree index.
+    ///
+    /// Returns an array of EntityIds matching the key.
+    #[wasm_bindgen(js_name = btreeIndexLookup)]
+    pub fn btree_index_lookup(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        key: &[u8],
+    ) -> Result<Array, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ids = db
+            .btree_index_lookup(collection_id, index_name, key)
+            .map_err(|e| JsValue::from_str(&format!("Failed to lookup in btree index: {}", e)))?;
+
+        let result = Array::new();
+        for id in ids {
+            let wasm_id: EntityId = id.into();
+            result.push(&wasm_id.into());
+        }
+        Ok(result)
+    }
+
+    /// Performs a range query on a BTree index.
+    ///
+    /// Returns all entities whose key is >= minKey and <= maxKey.
+    /// Pass null/undefined for unbounded ends.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection the index belongs to
+    /// * `index_name` - The name of the BTree index
+    /// * `min_key` - The minimum key (inclusive), or null for unbounded
+    /// * `max_key` - The maximum key (inclusive), or null for unbounded
+    ///
+    /// # Example
+    ///
+    /// ```javascript
+    /// // Find all users with age between 18 and 65
+    /// const ageMin = new Uint8Array([0, 0, 0, 18]); // big-endian
+    /// const ageMax = new Uint8Array([0, 0, 0, 65]);
+    /// const ids = db.btreeIndexRange(users, "age", ageMin, ageMax);
+    /// ```
+    #[wasm_bindgen(js_name = btreeIndexRange)]
+    pub fn btree_index_range(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+        min_key: Option<Vec<u8>>,
+        max_key: Option<Vec<u8>>,
+    ) -> Result<Array, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        let ids = db
+            .btree_index_range(
+                collection_id,
+                index_name,
+                min_key.as_deref(),
+                max_key.as_deref(),
+            )
+            .map_err(|e| JsValue::from_str(&format!("Failed to perform range query: {}", e)))?;
+
+        let result = Array::new();
+        for id in ids {
+            let wasm_id: EntityId = id.into();
+            result.push(&wasm_id.into());
+        }
+        Ok(result)
+    }
+
+    /// Returns the number of entries in a hash index.
+    #[wasm_bindgen(js_name = hashIndexLen)]
+    pub fn hash_index_len(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+    ) -> Result<u32, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.hash_index_len(collection_id, index_name)
+            .map(|len| len as u32)
+            .map_err(|e| JsValue::from_str(&format!("Failed to get hash index length: {}", e)))
+    }
+
+    /// Returns the number of entries in a BTree index.
+    #[wasm_bindgen(js_name = btreeIndexLen)]
+    pub fn btree_index_len(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+    ) -> Result<u32, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.btree_index_len(collection_id, index_name)
+            .map(|len| len as u32)
+            .map_err(|e| JsValue::from_str(&format!("Failed to get btree index length: {}", e)))
+    }
+
+    /// Drops a hash index.
+    ///
+    /// Returns true if the index existed and was dropped.
+    #[wasm_bindgen(js_name = dropHashIndex)]
+    pub fn drop_hash_index(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+    ) -> Result<bool, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.drop_hash_index(collection_id, index_name)
+            .map_err(|e| JsValue::from_str(&format!("Failed to drop hash index: {}", e)))
+    }
+
+    /// Drops a BTree index.
+    ///
+    /// Returns true if the index existed and was dropped.
+    #[wasm_bindgen(js_name = dropBTreeIndex)]
+    pub fn drop_btree_index(
+        &self,
+        collection: &Collection,
+        index_name: &str,
+    ) -> Result<bool, JsValue> {
+        let db = self.inner.borrow();
+        let collection_id = entidb_core::CollectionId(collection.id());
+        db.drop_btree_index(collection_id, index_name)
+            .map_err(|e| JsValue::from_str(&format!("Failed to drop btree index: {}", e)))
+    }
 }
 
 /// A transaction for atomic operations.

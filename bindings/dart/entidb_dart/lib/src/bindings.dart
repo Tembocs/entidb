@@ -413,6 +413,41 @@ typedef EntiDbCheckpointDart = int Function(
   Pointer<EntiDbHandle> handle,
 );
 
+// Compaction stats structure
+final class EntiDbCompactionStats extends Struct {
+  @Uint64()
+  external int inputRecords;
+
+  @Uint64()
+  external int outputRecords;
+
+  @Uint64()
+  external int tombstonesRemoved;
+
+  @Uint64()
+  external int obsoleteVersionsRemoved;
+
+  @Uint64()
+  external int bytesSaved;
+
+  /// Allocates an empty compaction stats struct.
+  static Pointer<EntiDbCompactionStats> allocate() {
+    return calloc<EntiDbCompactionStats>();
+  }
+}
+
+// Compact function
+typedef EntiDbCompactNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Bool removeTombstones,
+  Pointer<EntiDbCompactionStats> outStats,
+);
+typedef EntiDbCompactDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  bool removeTombstones,
+  Pointer<EntiDbCompactionStats> outStats,
+);
+
 // Stats function
 typedef EntiDbStatsNative = Int32 Function(
   Pointer<EntiDbHandle> handle,
@@ -914,6 +949,10 @@ class EntiDbBindings {
   late final entidbCheckpoint =
       _lib.lookupFunction<EntiDbCheckpointNative, EntiDbCheckpointDart>(
           'entidb_checkpoint');
+
+  // Compact function
+  late final entidbCompact = _lib
+      .lookupFunction<EntiDbCompactNative, EntiDbCompactDart>('entidb_compact');
 
   // Stats function
   late final entidbStats =

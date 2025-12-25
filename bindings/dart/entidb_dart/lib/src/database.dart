@@ -510,7 +510,7 @@ final class Database {
   }
 
   // =========================================================================
-  // Checkpoint, Backup, and Restore
+  // Checkpoint, Compaction, Backup, and Restore
   // =========================================================================
 
   /// Creates a checkpoint.
@@ -533,6 +533,46 @@ final class Database {
 
     final result = bindings.entidbCheckpoint(_handle!);
     checkResult(result);
+  }
+
+  /// Compacts the database, removing obsolete versions and optionally tombstones.
+  ///
+  /// Compaction:
+  /// - Removes obsolete entity versions (keeping only the latest)
+  /// - Optionally removes tombstones (deleted entities)
+  /// - Reclaims storage space
+  ///
+  /// ## Parameters
+  ///
+  /// - [removeTombstones]: If true, tombstones are removed; if false, preserved.
+  ///
+  /// ## Returns
+  ///
+  /// A [CompactionStats] object with information about the compaction.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final stats = db.compact(removeTombstones: true);
+  /// print('Removed ${stats.obsoleteVersionsRemoved} obsolete versions');
+  /// print('Saved ${stats.bytesSaved} bytes');
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  CompactionStats compact({bool removeTombstones = false}) {
+    _ensureOpen();
+
+    final statsPtr = EntiDbCompactionStats.allocate();
+
+    try {
+      final result =
+          bindings.entidbCompact(_handle!, removeTombstones, statsPtr);
+      checkResult(result);
+
+      return CompactionStats._(statsPtr.ref);
+    } finally {
+      calloc.free(statsPtr);
+    }
   }
 
   /// Returns a snapshot of database statistics.
@@ -1226,6 +1266,39 @@ final class BackupInfo {
   @override
   String toString() =>
       'BackupInfo(valid: $valid, timestamp: $timestamp, sequence: $sequence, recordCount: $recordCount, size: $size)';
+}
+
+/// Statistics from a compaction operation.
+///
+/// Contains information about what was removed during compaction.
+final class CompactionStats {
+  /// Number of records in the input before compaction.
+  final int inputRecords;
+
+  /// Number of records in the output after compaction.
+  final int outputRecords;
+
+  /// Number of tombstones (deleted entities) removed.
+  final int tombstonesRemoved;
+
+  /// Number of obsolete entity versions removed.
+  final int obsoleteVersionsRemoved;
+
+  /// Estimated bytes saved by compaction.
+  final int bytesSaved;
+
+  CompactionStats._(EntiDbCompactionStats ref)
+      : inputRecords = ref.inputRecords,
+        outputRecords = ref.outputRecords,
+        tombstonesRemoved = ref.tombstonesRemoved,
+        obsoleteVersionsRemoved = ref.obsoleteVersionsRemoved,
+        bytesSaved = ref.bytesSaved;
+
+  @override
+  String toString() =>
+      'CompactionStats(inputRecords: $inputRecords, outputRecords: $outputRecords, '
+      'tombstonesRemoved: $tombstonesRemoved, obsoleteVersionsRemoved: $obsoleteVersionsRemoved, '
+      'bytesSaved: $bytesSaved)';
 }
 
 /// A snapshot of database statistics.
