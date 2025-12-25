@@ -6,9 +6,9 @@ publish = false
 description = "EntiDB Todo Example - demonstrates core functionality"
 
 [dependencies]
-entidb_core = { path = "../../crates/entidb_core" }
-entidb_codec = { path = "../../crates/entidb_codec" }
-entidb_storage = { path = "../../crates/entidb_storage" }
+entidb_core = "2.0.0-alpha.1"
+entidb_codec = "2.0.0-alpha.1"
+entidb_storage = "2.0.0-alpha.1"
 
 [[bin]]
 name = "todo"

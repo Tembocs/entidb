@@ -142,8 +142,8 @@ impl Note {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("📝 Notes Application Example");
-    println!("=============================\n");
+    println!("Notes Application Example");
+    println!("=========================\n");
 
     // Open an in-memory database
     let db = Database::open_in_memory()?;
@@ -176,7 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     // Insert notes in a transaction
-    println!("📥 Inserting {} notes...", notes.len());
+    println!("[+] Inserting {} notes...", notes.len());
     db.transaction(|txn| {
         for note in &notes {
             txn.put(notes_collection, note.id, note.encode())?;
@@ -185,7 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // Display all notes
-    println!("\n📋 All Notes:");
+    println!("\n[*] All Notes:");
     let all_entries = db.list(notes_collection)?;
     let all_notes: Vec<Note> = all_entries
         .iter()
@@ -193,19 +193,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     for note in &all_notes {
-        println!("  📄 {} (tags: {})", note.title, note.tags.join(", "));
+        println!("  - {} (tags: {})", note.title, note.tags.join(", "));
     }
 
     // Filter by tag using native Rust iterators
-    println!("\n🔍 Notes tagged 'work':");
+    println!("\n[?] Notes tagged 'work':");
     let work_notes: Vec<&Note> = all_notes.iter().filter(|n| n.has_tag("work")).collect();
 
     for note in &work_notes {
-        println!("  📄 {}", note.title);
+        println!("  - {}", note.title);
     }
 
     // Search in content
-    println!("\n🔎 Notes containing 'database':");
+    println!("\n[?] Notes containing 'database':");
     let search_results: Vec<&Note> = all_notes
         .iter()
         .filter(|n| n.content.to_lowercase().contains("database"))
@@ -213,11 +213,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for note in &search_results {
         let preview = &note.content[..50.min(note.content.len())];
-        println!("  📄 {} - {}", note.title, preview);
+        println!("  - {} - {}", note.title, preview);
     }
 
     // Update a note
-    println!("\n✏️  Updating 'Meeting Notes'...");
+    println!("\n[~] Updating 'Meeting Notes'...");
     db.transaction(|txn| {
         if let Some(note) = all_notes.iter().find(|n| n.title == "Meeting Notes") {
             let new_content =
@@ -242,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Statistics using iterators
     let total_tags: usize = all_notes.iter().map(|n| n.tags.len()).sum();
 
-    println!("\n📊 Statistics:");
+    println!("\n[#] Statistics:");
     println!("  Total notes: {}", all_notes.len());
     println!("  Total tags: {}", total_tags);
     println!(
@@ -255,7 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Notes with multiple tags: {}", multi_tagged.len());
 
     // Delete notes by tag
-    println!("\n🗑️  Deleting 'cooking' notes...");
+    println!("\n[-] Deleting 'cooking' notes...");
     db.transaction(|txn| {
         let to_delete: Vec<EntityId> = all_notes
             .iter()
@@ -270,10 +270,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let remaining = db.list(notes_collection)?;
-    println!("✅ Remaining notes: {}", remaining.len());
+    println!("[OK] Remaining notes: {}", remaining.len());
 
     db.close()?;
-    println!("\n👋 Database closed");
+    println!("\n[*] Database closed");
 
     Ok(())
 }

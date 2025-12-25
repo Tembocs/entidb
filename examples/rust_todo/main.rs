@@ -113,11 +113,12 @@ impl Todo {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("📁 Creating in-memory database");
+    println!("Todo Application Example");
+    println!("========================\n");
 
     // Open an in-memory database
     let db = Database::open_in_memory()?;
-    println!("✅ Database opened successfully");
+    println!("[OK] Database opened successfully");
 
     // Get the todos collection
     let todos_collection = db.collection("todos");
@@ -137,17 +138,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     // Insert todos in a transaction
-    println!("\n📝 Inserting {} todos...", todos.len());
+    println!("\n[+] Inserting {} todos...", todos.len());
     db.transaction(|txn| {
         for todo in &todos {
             txn.put(todos_collection, todo.id, todo.encode())?;
         }
         Ok(())
     })?;
-    println!("✅ Todos inserted");
+    println!("[OK] Todos inserted");
 
     // Read all todos using list()
-    println!("\n📋 All todos:");
+    println!("\n[*] All todos:");
     let all_entries = db.list(todos_collection)?;
     let all_todos: Vec<Todo> = all_entries
         .iter()
@@ -160,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Filter incomplete high-priority todos using native Rust iterators
-    println!("\n⚡ High-priority incomplete todos:");
+    println!("\n[!] High-priority incomplete todos:");
     let urgent: Vec<&Todo> = all_todos
         .iter()
         .filter(|t| !t.completed && t.priority == 1)
@@ -171,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Update a todo
-    println!("\n✏️  Completing 'Learn EntiDB'...");
+    println!("\n[~] Completing 'Learn EntiDB'...");
     db.transaction(|txn| {
         if let Some(todo) = all_todos.iter().find(|t| t.title == "Learn EntiDB") {
             let updated = todo.clone().complete();
@@ -190,12 +191,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (completed, incomplete): (Vec<_>, Vec<_>) =
         updated_todos.iter().partition(|t| t.completed);
 
-    println!("\n📊 Summary:");
+    println!("\n[#] Summary:");
     println!("  Completed: {}", completed.len());
     println!("  Incomplete: {}", incomplete.len());
 
     // Delete completed todos
-    println!("\n🗑️  Deleting completed todos...");
+    println!("\n[-] Deleting completed todos...");
     db.transaction(|txn| {
         for todo in &completed {
             txn.delete(todos_collection, todo.id)?;
@@ -204,11 +205,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let remaining = db.list(todos_collection)?;
-    println!("✅ Remaining todos: {}", remaining.len());
+    println!("[OK] Remaining todos: {}", remaining.len());
 
     // Close the database
     db.close()?;
-    println!("\n👋 Database closed");
+    println!("\n[*] Database closed");
 
     Ok(())
 }
