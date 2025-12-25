@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords = ["database", "testing", "test-utilities", "fuzzing", "property-testing"]
+categories = ["development-tools::testing", "database-implementations"]
 
 [dependencies]
 entidb_storage.workspace = true
