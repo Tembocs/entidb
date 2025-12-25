@@ -1212,6 +1212,130 @@ final class Database {
 
     return result;
   }
+
+  // ==========================================================================
+  // Change Feed
+  // ==========================================================================
+
+  /// Polls for changes since the given cursor.
+  ///
+  /// Returns a list of [ChangeEvent]s that occurred after the cursor position.
+  /// Use [latestSequence] to get the current cursor position.
+  ///
+  /// ## Parameters
+  ///
+  /// - [cursor]: The sequence number to start from (exclusive).
+  /// - [limit]: Maximum number of events to return (default 100).
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// var cursor = 0;
+  /// final events = db.pollChanges(cursor, limit: 50);
+  /// for (final event in events) {
+  ///   print('Change: ${event.changeType} on ${event.collectionId}');
+  ///   cursor = event.sequence;
+  /// }
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  List<ChangeEvent> pollChanges(int cursor, {int limit = 100}) {
+    _ensureOpen();
+
+    final eventsPtr = calloc<EntiDbChangeEventList>();
+
+    try {
+      final result =
+          bindings.entidbPollChanges(_handle!, cursor, limit, eventsPtr);
+      checkResult(result);
+
+      final eventList = eventsPtr.ref;
+      final events = <ChangeEvent>[];
+
+      for (var i = 0; i < eventList.count; i++) {
+        events.add(ChangeEvent._(eventList[i]));
+      }
+
+      bindings.entidbFreeChangeEvents(eventList);
+      return events;
+    } finally {
+      calloc.free(eventsPtr);
+    }
+  }
+
+  /// Returns the latest sequence number in the change feed.
+  ///
+  /// This can be used as a starting cursor for [pollChanges].
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final latest = db.latestSequence;
+  /// print('Latest sequence: $latest');
+  /// ```
+  int get latestSequence {
+    _ensureOpen();
+
+    final seqPtr = calloc<Uint64>();
+
+    try {
+      final result = bindings.entidbLatestSequence(_handle!, seqPtr);
+      checkResult(result);
+      return seqPtr.value;
+    } finally {
+      calloc.free(seqPtr);
+    }
+  }
+
+  // ==========================================================================
+  // Schema Version
+  // ==========================================================================
+
+  /// Gets the current schema version of the database.
+  ///
+  /// The schema version is user-managed and can be used for migrations.
+  /// Returns 0 if no schema version has been set.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final version = db.schemaVersion;
+  /// if (version < 2) {
+  ///   // Run migration
+  ///   db.schemaVersion = 2;
+  /// }
+  /// ```
+  int get schemaVersion {
+    _ensureOpen();
+
+    final versionPtr = calloc<Uint64>();
+
+    try {
+      final result = bindings.entidbGetSchemaVersion(_handle!, versionPtr);
+      checkResult(result);
+      return versionPtr.value;
+    } finally {
+      calloc.free(versionPtr);
+    }
+  }
+
+  /// Sets the schema version of the database.
+  ///
+  /// The schema version is user-managed and can be used for migrations.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// db.schemaVersion = 2;
+  /// ```
+  ///
+  /// Throws [EntiDbError] on failure.
+  set schemaVersion(int version) {
+    _ensureOpen();
+
+    final result = bindings.entidbSetSchemaVersion(_handle!, version);
+    checkResult(result);
+  }
 }
 
 /// Statistics from a restore operation.
@@ -1367,4 +1491,66 @@ final class DatabaseStats {
       'transactionsStarted: $transactionsStarted, transactionsCommitted: $transactionsCommitted, '
       'transactionsAborted: $transactionsAborted, bytesRead: $bytesRead, bytesWritten: $bytesWritten, '
       'checkpoints: $checkpoints, errors: $errors, entityCount: $entityCount)';
+}
+
+/// The type of a change event.
+enum ChangeType {
+  /// An entity was inserted.
+  insert,
+
+  /// An entity was updated.
+  update,
+
+  /// An entity was deleted.
+  delete,
+}
+
+/// Represents a change event from the change feed.
+///
+/// Change events are emitted when entities are created, updated, or deleted.
+final class ChangeEvent {
+  /// The sequence number of this change.
+  final int sequence;
+
+  /// The collection ID where the change occurred.
+  final int collectionId;
+
+  /// The entity ID that was changed.
+  final EntityId entityId;
+
+  /// The type of change (insert, update, or delete).
+  final ChangeType changeType;
+
+  /// The payload bytes (CBOR-encoded entity data).
+  /// Empty for delete events.
+  final Uint8List payload;
+
+  ChangeEvent._(EntiDbChangeEvent ref)
+      : sequence = ref.sequence,
+        collectionId = ref.collectionId,
+        entityId = EntityId.fromBytes(
+            Uint8List.fromList(List.generate(16, (i) => ref.entityId[i]))),
+        changeType = _parseChangeType(ref.changeType),
+        payload = ref.payloadLen > 0
+            ? Uint8List.fromList(
+                List.generate(ref.payloadLen, (i) => ref.payload[i]))
+            : Uint8List(0);
+
+  static ChangeType _parseChangeType(int type) {
+    switch (type) {
+      case EntiDbChangeType.insert:
+        return ChangeType.insert;
+      case EntiDbChangeType.update:
+        return ChangeType.update;
+      case EntiDbChangeType.delete:
+        return ChangeType.delete;
+      default:
+        return ChangeType.update;
+    }
+  }
+
+  @override
+  String toString() =>
+      'ChangeEvent(sequence: $sequence, collectionId: $collectionId, '
+      'entityId: $entityId, changeType: $changeType, payloadLen: ${payload.length})';
 }

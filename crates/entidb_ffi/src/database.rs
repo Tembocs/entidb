@@ -2301,3 +2301,337 @@ mod stats_tests {
         }
     }
 }
+
+// ============================================================================
+// Change Feed
+// ============================================================================
+
+/// Polls the change feed for events since a given sequence number.
+///
+/// Returns up to `limit` events with sequence > `cursor`.
+/// This is the recommended way for bindings to access the change feed.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `cursor` - Return events after this sequence number (0 = from beginning)
+/// * `limit` - Maximum number of events to return
+/// * `out_events` - Output pointer for the event list
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+///
+/// # Safety
+///
+/// - `handle` must be a valid database handle
+/// - `out_events` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn entidb_poll_changes(
+    handle: *mut EntiDbHandle,
+    cursor: u64,
+    limit: usize,
+    out_events: *mut crate::types::EntiDbChangeEventList,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || out_events.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    let events = db.change_feed().poll(cursor, limit);
+
+    if events.is_empty() {
+        *out_events = crate::types::EntiDbChangeEventList::empty();
+        return EntiDbResult::Ok;
+    }
+
+    // Allocate event array
+    let mut ffi_events: Vec<crate::types::EntiDbChangeEvent> = Vec::with_capacity(events.len());
+
+    for event in &events {
+        // Allocate payload if present
+        let (payload_ptr, payload_len) = if let Some(ref data) = event.payload {
+            let boxed_data = data.clone().into_boxed_slice();
+            let len = boxed_data.len();
+            let ptr = Box::into_raw(boxed_data) as *const u8;
+            (ptr, len)
+        } else {
+            (std::ptr::null(), 0)
+        };
+
+        ffi_events.push(crate::types::EntiDbChangeEvent {
+            sequence: event.sequence,
+            collection_id: event.collection_id,
+            entity_id: event.entity_id,
+            change_type: event.change_type.into(),
+            payload: payload_ptr,
+            payload_len,
+        });
+    }
+
+    let count = ffi_events.len();
+    let capacity = ffi_events.capacity();
+    let events_ptr = ffi_events.as_mut_ptr();
+    std::mem::forget(ffi_events);
+
+    *out_events = crate::types::EntiDbChangeEventList {
+        events: events_ptr,
+        count,
+        capacity,
+    };
+
+    EntiDbResult::Ok
+}
+
+/// Returns the latest sequence number in the change feed history.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `out_sequence` - Output pointer for the sequence number
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn entidb_latest_sequence(
+    handle: *mut EntiDbHandle,
+    out_sequence: *mut u64,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || out_sequence.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+    *out_sequence = db.change_feed().latest_sequence();
+    EntiDbResult::Ok
+}
+
+/// Frees a change event list returned by `entidb_poll_changes`.
+///
+/// # Safety
+///
+/// The event list must have been returned by `entidb_poll_changes`.
+#[no_mangle]
+pub unsafe extern "C" fn entidb_free_change_events(events: crate::types::EntiDbChangeEventList) {
+    if events.events.is_null() {
+        return;
+    }
+
+    // Free each event's payload
+    let slice = std::slice::from_raw_parts_mut(events.events, events.count);
+    for event in slice.iter() {
+        if !event.payload.is_null() && event.payload_len > 0 {
+            let _ = Box::from_raw(std::slice::from_raw_parts_mut(
+                event.payload as *mut u8,
+                event.payload_len,
+            ));
+        }
+    }
+
+    // Free the events array
+    let _ = Vec::from_raw_parts(events.events, events.count, events.capacity);
+}
+
+// ============================================================================
+// Schema Version / Migration State
+// ============================================================================
+
+/// Gets the current schema version.
+///
+/// Schema version is stored in database metadata and can be used
+/// by bindings to track migration state.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `out_version` - Output pointer for the version number
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn entidb_get_schema_version(
+    handle: *mut EntiDbHandle,
+    out_version: *mut u64,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() || out_version.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+
+    // Use a special metadata collection for schema version
+    let meta_collection = db.collection("__entidb_meta__");
+    let version_key = entidb_core::EntityId::from_bytes([
+        0x5c, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, // "schema_ve"
+        0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, 0x00, // "rsion\0\0\0"
+    ]);
+
+    match db.get(meta_collection, version_key) {
+        Ok(Some(data)) if data.len() >= 8 => {
+            *out_version = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]);
+            EntiDbResult::Ok
+        }
+        Ok(_) => {
+            *out_version = 0; // No version set
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+/// Sets the schema version.
+///
+/// This should be called after running migrations to record the new version.
+///
+/// # Arguments
+///
+/// * `handle` - The database handle
+/// * `version` - The new schema version
+///
+/// # Returns
+///
+/// `EntiDbResult::Ok` on success, error code otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn entidb_set_schema_version(
+    handle: *mut EntiDbHandle,
+    version: u64,
+) -> EntiDbResult {
+    clear_last_error();
+
+    if handle.is_null() {
+        set_last_error("null pointer argument");
+        return EntiDbResult::NullPointer;
+    }
+
+    let db = &*(handle as *mut entidb_core::Database);
+
+    // Use a special metadata collection for schema version
+    let meta_collection = db.collection("__entidb_meta__");
+    let version_key = entidb_core::EntityId::from_bytes([
+        0x5c, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, // "schema_ve"
+        0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, 0x00, // "rsion\0\0\0"
+    ]);
+
+    let version_bytes = version.to_le_bytes().to_vec();
+
+    let result = db.transaction(|txn| {
+        txn.put(meta_collection, version_key, version_bytes)?;
+        Ok(())
+    });
+
+    match result {
+        Ok(()) => EntiDbResult::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
+}
+
+#[cfg(test)]
+mod change_feed_tests {
+    use super::*;
+
+    #[test]
+    fn test_poll_changes() {
+        unsafe {
+            let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+            let result = entidb_open_memory(&mut handle);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Initial poll should return empty
+            let mut events = crate::types::EntiDbChangeEventList::empty();
+            let result = entidb_poll_changes(handle, 0, 100, &mut events);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(events.count, 0);
+
+            // Perform a write
+            let coll_name = std::ffi::CString::new("test").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, coll_name.as_ptr(), &mut coll_id);
+
+            let entity_id = EntiDbEntityId::from_bytes([1u8; 16]);
+            let payload = vec![10u8, 20, 30];
+            entidb_put(handle, coll_id, entity_id, payload.as_ptr(), payload.len());
+
+            // Poll should now return the change
+            let result = entidb_poll_changes(handle, 0, 100, &mut events);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert!(events.count >= 1);
+
+            // Free events
+            entidb_free_change_events(events);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn test_latest_sequence() {
+        unsafe {
+            let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+            entidb_open_memory(&mut handle);
+
+            let mut seq: u64 = 0;
+            let result = entidb_latest_sequence(handle, &mut seq);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(seq, 0);
+
+            // Add some data
+            let coll_name = std::ffi::CString::new("test").unwrap();
+            let mut coll_id = EntiDbCollectionId::new(0);
+            entidb_collection(handle, coll_name.as_ptr(), &mut coll_id);
+
+            let entity_id = EntiDbEntityId::from_bytes([1u8; 16]);
+            let payload = vec![1u8];
+            entidb_put(handle, coll_id, entity_id, payload.as_ptr(), payload.len());
+
+            let result = entidb_latest_sequence(handle, &mut seq);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert!(seq >= 1);
+
+            entidb_close(handle);
+        }
+    }
+
+    #[test]
+    fn test_schema_version() {
+        unsafe {
+            let mut handle: *mut EntiDbHandle = std::ptr::null_mut();
+            entidb_open_memory(&mut handle);
+
+            // Initial version should be 0
+            let mut version: u64 = 999;
+            let result = entidb_get_schema_version(handle, &mut version);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(version, 0);
+
+            // Set version
+            let result = entidb_set_schema_version(handle, 5);
+            assert_eq!(result, EntiDbResult::Ok);
+
+            // Get version
+            let result = entidb_get_schema_version(handle, &mut version);
+            assert_eq!(result, EntiDbResult::Ok);
+            assert_eq!(version, 5);
+
+            entidb_close(handle);
+        }
+    }
+}

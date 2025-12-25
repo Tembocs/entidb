@@ -886,6 +886,115 @@ impl Database {
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
+    // ========================================================================
+    // Change Feed
+    // ========================================================================
+
+    /// Polls for changes since the given cursor.
+    ///
+    /// Returns a list of ChangeEvent objects that occurred after the cursor position.
+    /// Use `latest_sequence` to get the current cursor position.
+    ///
+    /// Args:
+    ///     cursor: The sequence number to start from (exclusive).
+    ///     limit: Maximum number of events to return (default 100).
+    ///
+    /// Returns:
+    ///     A list of ChangeEvent objects.
+    ///
+    /// Example:
+    /// ```python
+    /// cursor = 0
+    /// events = db.poll_changes(cursor, limit=50)
+    /// for event in events:
+    ///     print(f"Change: {event.change_type} on collection {event.collection_id}")
+    ///     cursor = event.sequence
+    /// ```
+    #[pyo3(signature = (cursor, limit=100))]
+    fn poll_changes(&self, cursor: u64, limit: usize) -> Vec<ChangeEvent> {
+        let change_feed = self.inner.change_feed();
+        change_feed
+            .poll(cursor, limit)
+            .into_iter()
+            .map(|e| ChangeEvent {
+                sequence: e.sequence,
+                collection_id: e.collection_id,
+                entity_id: EntityId {
+                    inner: CoreEntityId::from_bytes(e.entity_id),
+                },
+                change_type: match e.change_type {
+                    entidb_core::ChangeType::Insert => ChangeType::Insert,
+                    entidb_core::ChangeType::Update => ChangeType::Update,
+                    entidb_core::ChangeType::Delete => ChangeType::Delete,
+                },
+                payload: e.payload.unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Returns the latest sequence number in the change feed.
+    ///
+    /// This can be used as a starting cursor for `poll_changes`.
+    #[getter]
+    fn latest_sequence(&self) -> u64 {
+        self.inner.change_feed().latest_sequence()
+    }
+
+    // ========================================================================
+    // Schema Version
+    // ========================================================================
+
+    /// Gets the current schema version of the database.
+    ///
+    /// The schema version is user-managed and can be used for migrations.
+    /// Returns 0 if no schema version has been set.
+    ///
+    /// Example:
+    /// ```python
+    /// version = db.schema_version
+    /// if version < 2:
+    ///     # Run migration
+    ///     db.schema_version = 2
+    /// ```
+    #[getter]
+    fn schema_version(&self) -> PyResult<u64> {
+        // Read from the metadata collection
+        let meta_coll_id = CollectionId::from_name("__entidb_meta__");
+        let key_id = CoreEntityId::from_bytes([
+            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
+            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
+        ]);
+
+        match self.inner.get(meta_coll_id, key_id) {
+            Some(bytes) => {
+                if bytes.len() >= 8 {
+                    let arr: [u8; 8] = bytes[0..8].try_into().unwrap();
+                    Ok(u64::from_le_bytes(arr))
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Sets the schema version of the database.
+    ///
+    /// The schema version is user-managed and can be used for migrations.
+    #[setter]
+    fn set_schema_version(&self, version: u64) -> PyResult<()> {
+        // Write to the metadata collection
+        let meta_coll_id = CollectionId::from_name("__entidb_meta__");
+        let key_id = CoreEntityId::from_bytes([
+            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
+            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
+        ]);
+
+        self.inner
+            .put(&meta_coll_id, key_id, version.to_le_bytes().to_vec())
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -1079,6 +1188,70 @@ impl CompactionStats {
     }
 }
 
+/// Type of change event.
+#[pyclass]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ChangeType {
+    /// Entity was inserted (no previous version existed).
+    Insert,
+    /// Entity was updated (previous version existed).
+    Update,
+    /// Entity was deleted.
+    Delete,
+}
+
+#[pymethods]
+impl ChangeType {
+    fn __repr__(&self) -> String {
+        match self {
+            ChangeType::Insert => "ChangeType.Insert".to_string(),
+            ChangeType::Update => "ChangeType.Update".to_string(),
+            ChangeType::Delete => "ChangeType.Delete".to_string(),
+        }
+    }
+}
+
+/// A change event from the change feed.
+///
+/// Change events are emitted when entities are created, updated, or deleted.
+#[pyclass]
+#[derive(Clone)]
+pub struct ChangeEvent {
+    /// The sequence number of this change.
+    #[pyo3(get)]
+    pub sequence: u64,
+    /// The collection ID where the change occurred.
+    #[pyo3(get)]
+    pub collection_id: u32,
+    /// The entity ID that was changed.
+    #[pyo3(get)]
+    pub entity_id: EntityId,
+    /// The type of change (Insert, Update, or Delete).
+    #[pyo3(get)]
+    pub change_type: ChangeType,
+    /// The payload bytes (CBOR-encoded entity data). Empty for delete events.
+    pub payload: Vec<u8>,
+}
+
+#[pymethods]
+impl ChangeEvent {
+    /// Returns the payload as bytes.
+    fn get_payload<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.payload)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ChangeEvent(sequence={}, collection_id={}, entity_id={}, change_type={:?}, payload_len={})",
+            self.sequence,
+            self.collection_id,
+            self.entity_id.to_hex(),
+            self.change_type,
+            self.payload.len()
+        )
+    }
+}
+
 /// Python module initialization.
 #[pymodule]
 fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1091,6 +1264,8 @@ fn entidb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BackupInfo>()?;
     m.add_class::<DatabaseStats>()?;
     m.add_class::<CompactionStats>()?;
+    m.add_class::<ChangeType>()?;
+    m.add_class::<ChangeEvent>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     Ok(())
 }

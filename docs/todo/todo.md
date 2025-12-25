@@ -341,34 +341,45 @@ The core database functionality is **complete and tested**. This document identi
 
 ### 5.2 Medium Priority (Recommended for v1.0)
 
-#### 5.2.1 Migration APIs in FFI/Bindings
-**Gap:** Migrations only in Rust core  
-**Risk:** Binding users cannot evolve schema  
+#### 5.2.1 Migration APIs in FFI/Bindings ✅
+**Status:** IMPLEMENTED  
 **Solution:**
-- Add FFI functions for migration management
-- Expose in Dart and Python bindings
+- Added `entidb_get_schema_version` and `entidb_set_schema_version` FFI functions
+- Exposed `schemaVersion` getter/setter in Dart bindings
+- Exposed `schema_version` property in Python bindings
+- Uses metadata collection for schema version storage
 
-#### 5.2.2 Change Feed in Bindings
-**Gap:** Real-time change subscription only in Rust  
-**Risk:** Binding users cannot react to changes  
+#### 5.2.2 Change Feed in Bindings ✅
+**Status:** IMPLEMENTED  
 **Solution:**
-- Add callback-based subscription to FFI
-- Wrap in Dart Stream and Python generator
+- Added `entidb_poll_changes`, `entidb_latest_sequence`, `entidb_free_change_events` FFI functions
+- Exposed `pollChanges()` and `latestSequence` in Dart bindings
+- Exposed `poll_changes()` and `latest_sequence` in Python bindings
+- Created `ChangeEvent` and `ChangeType` classes in both bindings
 
-#### 5.2.3 CLI Completeness
-**Gap:** CLI missing backup/restore/compact commands  
-**Solution:**
-- Implement `entidb backup`
-- Implement `entidb restore`
-- Implement `entidb compact`
-- Implement `entidb dump`
+#### 5.2.3 CLI Completeness ✅
+**Status:** ALREADY IMPLEMENTED  
+**Evidence:**
+- `entidb backup` - Creates database backups
+- `entidb restore` - Restores from backup files
+- `entidb compact` - Segment compaction with options
+- `entidb dump-oplog` - Exports operation log to JSON
 
-#### 5.2.4 CHANGELOG Files
-**Gap:** No CHANGELOG.md in any crate  
-**Risk:** Users can't track version changes  
+#### 5.2.4 CHANGELOG Files ✅
+**Status:** IMPLEMENTED  
 **Solution:**
-- Create CHANGELOG.md following Keep a Changelog format
-- Document all changes since 0.1.0
+- Created CHANGELOG.md for all crates following Keep a Changelog format:
+  - `crates/entidb_storage/CHANGELOG.md`
+  - `crates/entidb_codec/CHANGELOG.md`
+  - `crates/entidb_core/CHANGELOG.md`
+  - `crates/entidb_ffi/CHANGELOG.md`
+  - `crates/entidb_sync_protocol/CHANGELOG.md`
+  - `crates/entidb_sync_engine/CHANGELOG.md`
+  - `crates/entidb_sync_server/CHANGELOG.md`
+  - `crates/entidb_cli/CHANGELOG.md`
+  - `crates/entidb_testkit/CHANGELOG.md`
+  - `bindings/dart/entidb_dart/CHANGELOG.md`
+  - `bindings/python/entidb_py/CHANGELOG.md`
 
 ### 5.3 Low Priority (Post v1.0)
 
@@ -398,7 +409,7 @@ The core database functionality is **complete and tested**. This document identi
 - [x] Cargo.toml has all required fields
 - [x] Dual license (MIT OR Apache-2.0)
 - [x] Repository URL
-- [ ] CHANGELOG.md in each crate
+- [x] CHANGELOG.md in each crate
 - [ ] All crates pass `cargo publish --dry-run`
 - [ ] Version numbers synchronized
 

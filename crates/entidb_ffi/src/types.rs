@@ -130,6 +130,81 @@ impl From<entidb_core::StatsSnapshot> for EntiDbStats {
     }
 }
 
+/// Change event type.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntiDbChangeType {
+    /// Entity was inserted (no previous version).
+    Insert = 0,
+    /// Entity was updated.
+    Update = 1,
+    /// Entity was deleted.
+    Delete = 2,
+}
+
+impl From<entidb_core::ChangeType> for EntiDbChangeType {
+    fn from(ct: entidb_core::ChangeType) -> Self {
+        match ct {
+            entidb_core::ChangeType::Insert => EntiDbChangeType::Insert,
+            entidb_core::ChangeType::Update => EntiDbChangeType::Update,
+            entidb_core::ChangeType::Delete => EntiDbChangeType::Delete,
+        }
+    }
+}
+
+/// A single change event from the change feed.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct EntiDbChangeEvent {
+    /// Sequence number of the commit.
+    pub sequence: u64,
+    /// Collection ID.
+    pub collection_id: u32,
+    /// Entity ID (16 bytes).
+    pub entity_id: [u8; 16],
+    /// Type of change.
+    pub change_type: EntiDbChangeType,
+    /// Payload data (for Insert/Update). Null for Delete.
+    pub payload: *const u8,
+    /// Length of payload data. 0 for Delete.
+    pub payload_len: usize,
+}
+
+impl Default for EntiDbChangeEvent {
+    fn default() -> Self {
+        Self {
+            sequence: 0,
+            collection_id: 0,
+            entity_id: [0; 16],
+            change_type: EntiDbChangeType::Insert,
+            payload: std::ptr::null(),
+            payload_len: 0,
+        }
+    }
+}
+
+/// List of change events for polling.
+#[repr(C)]
+pub struct EntiDbChangeEventList {
+    /// Array of change events.
+    pub events: *mut EntiDbChangeEvent,
+    /// Number of events.
+    pub count: usize,
+    /// Capacity (for memory management).
+    pub capacity: usize,
+}
+
+impl EntiDbChangeEventList {
+    /// Creates an empty event list.
+    pub fn empty() -> Self {
+        Self {
+            events: std::ptr::null_mut(),
+            count: 0,
+            capacity: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

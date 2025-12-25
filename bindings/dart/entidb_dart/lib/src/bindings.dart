@@ -785,6 +785,138 @@ typedef EntiDbDropBTreeIndexDart = int Function(
 );
 
 // ============================================================================
+// Change Feed Types
+// ============================================================================
+
+/// Change event type.
+abstract final class EntiDbChangeType {
+  static const int insert = 0;
+  static const int update = 1;
+  static const int delete = 2;
+}
+
+/// A single change event from the change feed.
+final class EntiDbChangeEvent extends Struct {
+  @Uint64()
+  external int sequence;
+
+  @Uint32()
+  external int collectionId;
+
+  @Array(16)
+  external Array<Uint8> entityId;
+
+  @Int32()
+  external int changeType;
+
+  external Pointer<Uint8> payload;
+
+  @IntPtr()
+  external int payloadLen;
+
+  /// Gets the entity ID as a list.
+  List<int> get entityIdList {
+    final result = <int>[];
+    for (var i = 0; i < 16; i++) {
+      result.add(entityId[i]);
+    }
+    return result;
+  }
+
+  /// Gets the payload as a list (empty for delete).
+  List<int> get payloadList {
+    if (payload == nullptr || payloadLen == 0) return [];
+    return payload.asTypedList(payloadLen).toList();
+  }
+}
+
+/// List of change events for polling.
+final class EntiDbChangeEventList extends Struct {
+  external Pointer<EntiDbChangeEvent> events;
+
+  @IntPtr()
+  external int count;
+
+  @IntPtr()
+  external int capacity;
+
+  /// Returns true if empty.
+  bool get isEmpty => events == nullptr || count == 0;
+
+  /// Gets event at index.
+  EntiDbChangeEvent operator [](int index) {
+    if (index < 0 || index >= count) {
+      throw RangeError.index(index, this, 'index', null, count);
+    }
+    return (events + index).ref;
+  }
+
+  /// Creates an empty event list pointer.
+  static Pointer<EntiDbChangeEventList> allocate() =>
+      calloc<EntiDbChangeEventList>();
+}
+
+// ============================================================================
+// Change Feed Function Signatures
+// ============================================================================
+
+// Poll changes
+typedef EntiDbPollChangesNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Uint64 cursor,
+  IntPtr limit,
+  Pointer<EntiDbChangeEventList> outEvents,
+);
+typedef EntiDbPollChangesDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  int cursor,
+  int limit,
+  Pointer<EntiDbChangeEventList> outEvents,
+);
+
+// Latest sequence
+typedef EntiDbLatestSequenceNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outSequence,
+);
+typedef EntiDbLatestSequenceDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outSequence,
+);
+
+// Free change events
+typedef EntiDbFreeChangeEventsNative = Void Function(
+  EntiDbChangeEventList events,
+);
+typedef EntiDbFreeChangeEventsDart = void Function(
+  EntiDbChangeEventList events,
+);
+
+// ============================================================================
+// Schema Version Function Signatures
+// ============================================================================
+
+// Get schema version
+typedef EntiDbGetSchemaVersionNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outVersion,
+);
+typedef EntiDbGetSchemaVersionDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  Pointer<Uint64> outVersion,
+);
+
+// Set schema version
+typedef EntiDbSetSchemaVersionNative = Int32 Function(
+  Pointer<EntiDbHandle> handle,
+  Uint64 version,
+);
+typedef EntiDbSetSchemaVersionDart = int Function(
+  Pointer<EntiDbHandle> handle,
+  int version,
+);
+
+// ============================================================================
 // Library Loading
 // ============================================================================
 
@@ -1037,6 +1169,28 @@ class EntiDbBindings {
   late final entidbDropBTreeIndex =
       _lib.lookupFunction<EntiDbDropBTreeIndexNative, EntiDbDropBTreeIndexDart>(
           'entidb_drop_btree_index');
+
+  // Change feed functions
+  late final entidbPollChanges =
+      _lib.lookupFunction<EntiDbPollChangesNative, EntiDbPollChangesDart>(
+          'entidb_poll_changes');
+
+  late final entidbLatestSequence =
+      _lib.lookupFunction<EntiDbLatestSequenceNative, EntiDbLatestSequenceDart>(
+          'entidb_latest_sequence');
+
+  late final entidbFreeChangeEvents = _lib.lookupFunction<
+      EntiDbFreeChangeEventsNative,
+      EntiDbFreeChangeEventsDart>('entidb_free_change_events');
+
+  // Schema version functions
+  late final entidbGetSchemaVersion = _lib.lookupFunction<
+      EntiDbGetSchemaVersionNative,
+      EntiDbGetSchemaVersionDart>('entidb_get_schema_version');
+
+  late final entidbSetSchemaVersion = _lib.lookupFunction<
+      EntiDbSetSchemaVersionNative,
+      EntiDbSetSchemaVersionDart>('entidb_set_schema_version');
 }
 
 /// Cached bindings instance.
