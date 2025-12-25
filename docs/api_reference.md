@@ -449,7 +449,7 @@ fn my_operation() -> CoreResult<()> {
 
 ## Version Information
 
-- **EntiDB Core**: 0.1.0
+- **EntiDB Core**: 2.0.0-alpha.1
 - **WAL Format Version**: 1
 - **Segment Format Version**: 1
 - **Backup Format Version**: 1

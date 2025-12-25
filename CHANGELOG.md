@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-XX-XX
+## [2.0.0-alpha.1] - 2025-12-25
+
+### Changed
+
+- **Complete Rewrite**: This version represents a complete architectural rewrite of EntiDB
+  - Previous (1.x): Pure Dart implementation
+  - Current (2.x): Rust core with Dart, Python, and WASM bindings
+- Version bump to 2.0.0 to continue from previously published pure-Dart EntiDB 1.0.1
 
 ### Added
 
@@ -62,5 +69,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Checksum verification for WAL and segments
 - No heuristic recovery from corruption
 
-[Unreleased]: https://github.com/Tembocs/entidb/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Tembocs/entidb/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Tembocs/entidb/compare/v2.0.0-alpha.1...HEAD
+[2.0.0-alpha.1]: https://github.com/Tembocs/entidb/releases/tag/v2.0.0-alpha.1

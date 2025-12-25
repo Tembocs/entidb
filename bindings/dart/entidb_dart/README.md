@@ -16,7 +16,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  entidb_dart: ^0.1.0
+  entidb_dart: ^2.0.0-alpha.1
 ```
 
 ## Usage

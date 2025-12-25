@@ -86,12 +86,12 @@ Before publishing each package, verify:
 
 All packages must maintain synchronized versions:
 
-| Package | Current Version |
-|---------|-----------------|
-| All Rust crates | 0.1.0 |
-| entidb_dart | 0.1.0 |
-| entidb (Python) | 0.1.0 |
-| entidb_wasm | 0.1.0 |
+| Package | Current Version | Notes |
+|---------|-----------------|-------|
+| All Rust crates | 2.0.0-alpha.1 | SemVer pre-release |
+| entidb_dart | 2.0.0-alpha.1 | SemVer pre-release |
+| entidb (Python) | 2.0.0a1 | PEP 440 format |
+| entidb_wasm | 2.0.0-alpha.1 | SemVer pre-release |
 
 When bumping versions, update:
 1. Workspace `Cargo.toml` (`version = "X.Y.Z"`)
@@ -155,6 +155,6 @@ If a publication fails mid-sequence:
 ## Notes
 
 - Always publish from a clean git state (no uncommitted changes)
-- Tag releases in git after successful publication: `git tag v0.1.0`
+- Tag releases in git after successful publication: `git tag v2.0.0-alpha.1`
 - Wait for crates.io index to update (~5-10 minutes) before publishing dependent crates
 - The `--dry-run` flag cannot verify crates with unpublished dependencies

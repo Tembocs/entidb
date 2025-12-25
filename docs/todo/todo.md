@@ -1,7 +1,7 @@
 # EntiDB Deep Project Review & Roadmap
 
 **Date:** December 25, 2024  
-**Version:** 0.1.0  
+**Version:** 2.0.0-alpha.1  
 **Status:** Pre-release (Development Complete, Hardening Required)
 
 ---
@@ -425,7 +425,7 @@ The core database functionality is **complete and tested**. This document identi
 - [x] Repository URL
 - [x] CHANGELOG.md in each crate
 - [x] All crates pass `cargo publish --dry-run` (verified for base crates; dependents require published deps)
-- [x] Version numbers synchronized (all at 0.1.0)
+- [x] Version numbers synchronized (all at 2.0.0-alpha.1)
 - [x] README.md in each crate
 - [x] Keywords and categories defined
 
@@ -460,7 +460,7 @@ cd crates/entidb_codec && cargo publish
 ```toml
 [package]
 name = "entidb_core"
-version = "0.1.0"
+version = "2.0.0-alpha.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
@@ -505,7 +505,7 @@ maturin publish --username __token__ --password <pypi-token>
 ```toml
 [project]
 name = "entidb"
-version = "0.1.0"
+version = "2.0.0-alpha.1"
 description = "Python bindings for EntiDB - an embedded entity database engine"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -594,7 +594,7 @@ name: entidb_dart
 description: >-
   Dart bindings for EntiDB - an embedded entity database engine 
   with ACID transactions and CBOR storage.
-version: 0.1.0
+version: 2.0.0-alpha.1
 repository: https://github.com/Tembocs/entidb
 homepage: https://github.com/Tembocs/entidb
 documentation: https://github.com/Tembocs/entidb/tree/main/docs/api/dart_api.md
@@ -668,7 +668,7 @@ npm publish --access public
 ```json
 {
   "name": "@entidb/wasm",
-  "version": "0.1.0",
+  "version": "2.0.0-alpha.1",
   "description": "EntiDB WebAssembly bindings",
   "main": "entidb_wasm.js",
   "types": "entidb_wasm.d.ts",
@@ -885,7 +885,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-12-25
+## [2.0.0-alpha.1] - 2024-12-25
 
 ### Added
 - Initial release
@@ -912,8 +912,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Segment checksums ensure integrity
 - Optional encryption at rest
 
-[Unreleased]: https://github.com/Tembocs/entidb/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Tembocs/entidb/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Tembocs/entidb/compare/v2.0.0-alpha.1...HEAD
+[2.0.0-alpha.1]: https://github.com/Tembocs/entidb/releases/tag/v2.0.0-alpha.1
 ```
 
 ### 8.5 Crash Injection Test Harness

@@ -1,6 +1,6 @@
 name: dart_todo
 description: EntiDB Dart todo example application.
-version: 0.1.0
+version: 2.0.0-alpha.1
 publish_to: none
 
 environment:

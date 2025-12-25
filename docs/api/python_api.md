@@ -400,7 +400,7 @@ for entity_id, data in db.iter(users):
 
 Returns the EntiDB library version.
 
-**Returns:** Version string (e.g., "0.1.0")
+**Returns:** Version string (e.g., "2.0.0a1")
 
 **Example:**
 ```python

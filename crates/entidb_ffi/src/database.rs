@@ -434,7 +434,7 @@ pub unsafe extern "C" fn entidb_generate_id(out_id: *mut EntiDbEntityId) -> Enti
 #[no_mangle]
 pub extern "C" fn entidb_version() -> *const std::ffi::c_char {
     // Static version string
-    static VERSION: &[u8] = b"0.1.0\0";
+    static VERSION: &[u8] = b"2.0.0-alpha.1\0";
     VERSION.as_ptr() as *const std::ffi::c_char
 }
 
@@ -2509,7 +2509,7 @@ mod tests {
         assert!(!ver.is_null());
 
         let s = unsafe { std::ffi::CStr::from_ptr(ver) };
-        assert_eq!(s.to_str().unwrap(), "0.1.0");
+        assert_eq!(s.to_str().unwrap(), "2.0.0-alpha.1");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "name": "entidb-web-example",
-  "version": "0.1.0",
+  "version": "2.0.0-alpha.1",
   "description": "EntiDB Web Example",
   "type": "module",
   "scripts": {

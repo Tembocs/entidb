@@ -230,8 +230,8 @@ entidb version
 ```
 
 ```
-EntiDB CLI v0.1.0
-EntiDB Core v0.1.0
+EntiDB CLI v2.0.0-alpha.1
+EntiDB Core v2.0.0-alpha.1
 ```
 
 ---
