@@ -4,14 +4,16 @@ EntiDB Build and Test Script
 
 This script automates the complete build and test workflow for EntiDB:
 1. Builds Rust crates (including entidb_ffi)
-2. Builds Python bindings using maturin
-3. Runs Python binding tests
-4. Runs Dart binding tests (using the built native library)
+2. Sets up a Python virtual environment for isolated testing
+3. Builds Python bindings using maturin
+4. Runs Python binding tests
+5. Runs Dart binding tests (using the built native library)
+6. Optionally runs example applications
 
 Requirements:
 - Rust toolchain (cargo)
 - Python 3.8+
-- uv (Python package manager) or pip
+- uv (recommended) or pip for Python package management
 - maturin (installed automatically if missing)
 - Dart SDK
 
@@ -19,12 +21,35 @@ Usage:
     python build_and_test.py [options]
 
 Options:
-    --release       Build in release mode (default: debug)
-    --skip-rust     Skip Rust build (use existing artifacts)
-    --skip-python   Skip Python bindings build and test
-    --skip-dart     Skip Dart bindings test
-    --verbose       Show verbose output
-    --help          Show this help message
+    --release           Build in release mode (default: debug)
+    --skip-rust         Skip Rust build (use existing artifacts)
+    --skip-rust-tests   Skip Rust tests
+    --skip-python       Skip Python bindings build and test
+    --skip-dart         Skip Dart bindings test
+    --run-examples      Run example applications after tests
+    --examples-only     Only run examples (skip tests, requires prior build)
+    --python-version    Python version for bindings (default: 3.13)
+    --clean-venv        Remove and recreate the Python virtual environment
+    --verbose, -v       Show verbose output
+    --help              Show this help message
+
+Virtual Environment:
+    The script creates a virtual environment at .venv-test in the project root.
+    This isolates dependencies and ensures reproducible builds. Use --clean-venv
+    to recreate it if you encounter issues.
+
+Examples:
+    # Full build and test
+    python build_and_test.py
+
+    # Build, test, and run examples
+    python build_and_test.py --run-examples
+
+    # Just run examples (after a previous build)
+    python build_and_test.py --examples-only
+
+    # Quick iteration on Dart only
+    python build_and_test.py --skip-rust --skip-python
 """
 
 import argparse
@@ -33,6 +58,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 
@@ -114,6 +140,87 @@ def find_executable(name: str, alternatives: list[str] | None = None) -> str | N
     return None
 
 
+def get_venv_python(venv_dir: Path) -> Path:
+    """Get the Python executable path inside a virtual environment."""
+    if platform.system() == "Windows":
+        return venv_dir / "Scripts" / "python.exe"
+    else:
+        return venv_dir / "bin" / "python"
+
+
+def get_venv_pip(venv_dir: Path) -> Path:
+    """Get the pip executable path inside a virtual environment."""
+    if platform.system() == "Windows":
+        return venv_dir / "Scripts" / "pip.exe"
+    else:
+        return venv_dir / "bin" / "pip"
+
+
+def setup_python_venv(root: Path, python_version: str, verbose: bool) -> Path:
+    """
+    Set up a Python virtual environment for testing.
+    
+    Returns the path to the virtual environment directory.
+    """
+    venv_dir = root / ".venv-test"
+    
+    # Check if venv already exists and is valid
+    venv_python = get_venv_python(venv_dir)
+    if venv_python.exists():
+        if verbose:
+            print(f"  Using existing virtual environment: {venv_dir}")
+        return venv_dir
+    
+    print_step("Setting up Python virtual environment")
+    
+    # Try using uv first (faster)
+    uv = find_executable("uv")
+    if uv:
+        # Create venv with specific Python version using uv
+        cmd = [uv, "venv", str(venv_dir), "--python", python_version]
+        try:
+            run_command(cmd, cwd=root, verbose=verbose)
+            print_success(f"Created virtual environment with uv: {venv_dir}")
+            return venv_dir
+        except subprocess.CalledProcessError:
+            print_warning(f"Failed to create venv with Python {python_version}, trying system Python")
+            # Fall through to try with system Python
+    
+    # Fall back to standard venv module
+    python = find_executable("python", ["python3"])
+    if not python:
+        print_error("Python not found. Please install Python 3.8+.")
+        sys.exit(1)
+    
+    # Create venv using the venv module
+    try:
+        venv.create(venv_dir, with_pip=True, clear=True)
+        print_success(f"Created virtual environment: {venv_dir}")
+    except Exception as e:
+        print_error(f"Failed to create virtual environment: {e}")
+        sys.exit(1)
+    
+    return venv_dir
+
+
+def install_venv_packages(venv_dir: Path, packages: list[str], verbose: bool) -> None:
+    """Install packages into the virtual environment."""
+    uv = find_executable("uv")
+    
+    if uv:
+        # Use uv pip for faster installation
+        cmd = [uv, "pip", "install", "--python", str(get_venv_python(venv_dir))] + packages
+        run_command(cmd, verbose=verbose)
+    else:
+        # Use pip from the venv
+        pip = get_venv_pip(venv_dir)
+        if not pip.exists():
+            print_error(f"pip not found in virtual environment: {pip}")
+            sys.exit(1)
+        cmd = [str(pip), "install"] + packages
+        run_command(cmd, verbose=verbose)
+
+
 def get_native_lib_path(root: Path, release: bool) -> Path:
     """Get the path to the built native library."""
     build_type = "release" if release else "debug"
@@ -153,70 +260,42 @@ def build_rust(root: Path, release: bool, verbose: bool) -> Path:
     return lib_path
 
 
-def build_python_bindings(root: Path, release: bool, verbose: bool, python_version: str = "3.13") -> None:
-    """Build Python bindings using maturin."""
+def build_python_bindings(root: Path, venv_dir: Path, release: bool, verbose: bool) -> None:
+    """Build Python bindings using maturin into the virtual environment."""
     print_step("Building Python bindings")
     
     python_dir = root / "bindings" / "python" / "entidb_py"
+    venv_python = get_venv_python(venv_dir)
     
-    # Check for uv or pip
-    uv = find_executable("uv")
+    # Ensure maturin is installed in the venv
+    install_venv_packages(venv_dir, ["maturin"], verbose)
     
-    if uv:
-        # Use uv to run maturin with specific Python version
-        # Note: pyo3 may not support the latest Python, so we default to 3.13
-        cmd = [uv, "run", "--python", python_version, "--isolated", "--with", "maturin", "maturin", "develop"]
-        if release:
-            cmd.append("--release")
-        run_command(cmd, cwd=python_dir, verbose=verbose)
-    else:
-        # Fall back to pip/maturin directly
-        maturin = find_executable("maturin")
-        if not maturin:
-            print_warning("maturin not found. Installing via pip...")
-            pip = find_executable("pip", ["pip3"])
-            if not pip:
-                print_error("pip not found. Please install Python properly.")
-                sys.exit(1)
-            run_command([pip, "install", "maturin"], verbose=verbose)
-            maturin = find_executable("maturin")
-        
-        if not maturin:
-            print_error("Failed to install maturin")
-            sys.exit(1)
-        
-        cmd = [maturin, "develop"]
-        if release:
-            cmd.append("--release")
-        run_command(cmd, cwd=python_dir, verbose=verbose)
+    # Run maturin develop using the venv Python
+    # Use VIRTUAL_ENV env var to ensure maturin installs to our venv
+    # This is needed because maturin may create its own .venv otherwise
+    env = {"VIRTUAL_ENV": str(venv_dir)}
+    
+    cmd = [str(venv_python), "-m", "maturin", "develop"]
+    if release:
+        cmd.append("--release")
+    run_command(cmd, cwd=python_dir, env=env, verbose=verbose)
     
     print_success("Python bindings built successfully")
 
 
-def test_python_bindings(root: Path, verbose: bool, python_version: str = "3.13") -> bool:
-    """Run Python binding tests."""
+def test_python_bindings(root: Path, venv_dir: Path, verbose: bool) -> bool:
+    """Run Python binding tests using the virtual environment."""
     print_step("Running Python binding tests")
     
     python_dir = root / "bindings" / "python" / "entidb_py"
+    venv_python = get_venv_python(venv_dir)
     
-    uv = find_executable("uv")
+    # Ensure pytest is installed
+    install_venv_packages(venv_dir, ["pytest"], verbose)
     
-    if uv:
-        cmd = [uv, "run", "--python", python_version, "--isolated", "--with", "pytest", "pytest", "-v"]
-        result = run_command(cmd, cwd=python_dir, verbose=verbose, check=False)
-    else:
-        pytest = find_executable("pytest")
-        if not pytest:
-            print_warning("pytest not found. Installing...")
-            pip = find_executable("pip", ["pip3"])
-            run_command([pip, "install", "pytest"], verbose=verbose)
-            pytest = find_executable("pytest")
-        
-        if not pytest:
-            print_error("Failed to install pytest")
-            return False
-        
-        result = run_command([pytest, "-v"], cwd=python_dir, verbose=verbose, check=False)
+    # Run pytest using the venv Python
+    cmd = [str(venv_python), "-m", "pytest", "-v"]
+    result = run_command(cmd, cwd=python_dir, verbose=verbose, check=False)
     
     if result.returncode == 0:
         print_success("Python tests passed")
@@ -288,6 +367,131 @@ def run_rust_tests(root: Path, verbose: bool) -> bool:
         return False
 
 
+def run_rust_examples(root: Path, verbose: bool) -> bool:
+    """Run Rust examples."""
+    print_step("Running Rust examples")
+    
+    cargo = find_executable("cargo")
+    if not cargo:
+        print_error("cargo not found")
+        return False
+    
+    examples = ["rust_todo", "rust_notes"]
+    all_passed = True
+    
+    for example in examples:
+        example_dir = root / "examples" / example
+        if not example_dir.exists():
+            print_warning(f"Example not found: {example}")
+            continue
+        
+        print(f"  Running {example}...")
+        result = run_command(
+            [cargo, "run"],
+            cwd=example_dir,
+            verbose=verbose,
+            check=False,
+        )
+        
+        if result.returncode == 0:
+            print_success(f"{example} completed successfully")
+        else:
+            print_error(f"{example} failed")
+            all_passed = False
+    
+    return all_passed
+
+
+def run_python_examples(root: Path, venv_dir: Path, verbose: bool) -> bool:
+    """Run Python examples using the virtual environment."""
+    print_step("Running Python examples")
+    
+    venv_python = get_venv_python(venv_dir)
+    if not venv_python.exists():
+        print_error("Python virtual environment not found. Run without --skip-python first.")
+        return False
+    
+    examples = ["python_todo"]
+    all_passed = True
+    
+    for example in examples:
+        example_dir = root / "examples" / example
+        main_file = example_dir / "main.py"
+        
+        if not main_file.exists():
+            print_warning(f"Example not found: {example}")
+            continue
+        
+        print(f"  Running {example}...")
+        result = run_command(
+            [str(venv_python), str(main_file)],
+            cwd=example_dir,
+            verbose=verbose,
+            check=False,
+        )
+        
+        if result.returncode == 0:
+            print_success(f"{example} completed successfully")
+        else:
+            print_error(f"{example} failed")
+            if not verbose and result.stdout:
+                print(result.stdout)
+            if not verbose and result.stderr:
+                print(result.stderr)
+            all_passed = False
+    
+    return all_passed
+
+
+def run_dart_examples(root: Path, lib_path: Path, verbose: bool) -> bool:
+    """Run Dart examples with the native library."""
+    print_step("Running Dart examples")
+    
+    dart = find_executable("dart")
+    if not dart:
+        print_warning("Dart SDK not found. Skipping Dart examples.")
+        return True
+    
+    examples = ["dart_todo"]
+    all_passed = True
+    
+    for example in examples:
+        example_dir = root / "examples" / example
+        main_file = example_dir / "main.dart"
+        
+        if not main_file.exists():
+            print_warning(f"Example not found: {example}")
+            continue
+        
+        print(f"  Running {example}...")
+        
+        # Get dependencies first
+        run_command([dart, "pub", "get"], cwd=example_dir, verbose=verbose)
+        
+        # Set environment variable for library path
+        env = {"ENTIDB_LIB_PATH": str(lib_path)}
+        
+        result = run_command(
+            [dart, "run", str(main_file)],
+            cwd=example_dir,
+            env=env,
+            verbose=verbose,
+            check=False,
+        )
+        
+        if result.returncode == 0:
+            print_success(f"{example} completed successfully")
+        else:
+            print_error(f"{example} failed")
+            if not verbose and result.stdout:
+                print(result.stdout)
+            if not verbose and result.stderr:
+                print(result.stderr)
+            all_passed = False
+    
+    return all_passed
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -321,9 +525,24 @@ def main() -> int:
         help="Skip Dart bindings test",
     )
     parser.add_argument(
+        "--run-examples",
+        action="store_true",
+        help="Run example applications after tests",
+    )
+    parser.add_argument(
+        "--examples-only",
+        action="store_true",
+        help="Only run examples (skip tests, requires prior build)",
+    )
+    parser.add_argument(
         "--python-version",
         default="3.13",
         help="Python version to use for bindings (default: 3.13, pyo3 may not support newer versions)",
+    )
+    parser.add_argument(
+        "--clean-venv",
+        action="store_true",
+        help="Remove and recreate the Python virtual environment",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -336,19 +555,49 @@ def main() -> int:
     # Find project root (where this script is located)
     root = Path(__file__).parent.resolve()
     
+    # Determine mode
+    examples_only = args.examples_only
+    run_examples = args.run_examples or examples_only
+    run_tests = not examples_only
+    
     print(f"{Colors.BOLD}{Colors.HEADER}")
     print("=" * 60)
-    print("  EntiDB Build and Test")
+    if examples_only:
+        print("  EntiDB Examples")
+    elif run_examples:
+        print("  EntiDB Build, Test, and Examples")
+    else:
+        print("  EntiDB Build and Test")
     print("=" * 60)
     print(f"{Colors.END}")
     print(f"Project root: {root}")
     print(f"Build type: {'release' if args.release else 'debug'}")
+    print(f"Python version: {args.python_version}")
     
     all_passed = True
     lib_path: Path | None = None
+    venv_dir: Path | None = None
     
-    # Build Rust
-    if not args.skip_rust:
+    # Build Rust (unless examples-only mode with existing build)
+    if examples_only:
+        # In examples-only mode, just check for existing build
+        lib_path = get_native_lib_path(root, args.release)
+        if lib_path.exists():
+            print_step("Using existing Rust build")
+            print_success(f"Found native library: {lib_path}")
+        else:
+            print_error(f"Native library not found: {lib_path}")
+            print_error("Run without --examples-only to build first.")
+            return 1
+        
+        # Check for existing venv
+        venv_path = root / ".venv-test"
+        if venv_path.exists():
+            venv_dir = venv_path
+            print_success(f"Found virtual environment: {venv_dir}")
+        else:
+            print_warning("No virtual environment found. Python examples will be skipped.")
+    elif not args.skip_rust:
         lib_path = build_rust(root, args.release, args.verbose)
     else:
         lib_path = get_native_lib_path(root, args.release)
@@ -361,31 +610,66 @@ def main() -> int:
             return 1
     
     # Run Rust tests
-    if not args.skip_rust_tests:
+    if run_tests and not args.skip_rust_tests:
         if not run_rust_tests(root, args.verbose):
             all_passed = False
     
     # Build and test Python bindings
-    if not args.skip_python:
+    if run_tests and not args.skip_python:
         try:
-            build_python_bindings(root, args.release, args.verbose, args.python_version)
-            if not test_python_bindings(root, args.verbose, args.python_version):
+            # Clean venv if requested
+            venv_path = root / ".venv-test"
+            if args.clean_venv and venv_path.exists():
+                print_step("Cleaning existing virtual environment")
+                shutil.rmtree(venv_path)
+                print_success("Removed old virtual environment")
+            
+            # Set up virtual environment
+            venv_dir = setup_python_venv(root, args.python_version, args.verbose)
+            
+            # Build and test
+            build_python_bindings(root, venv_dir, args.release, args.verbose)
+            if not test_python_bindings(root, venv_dir, args.verbose):
                 all_passed = False
         except subprocess.CalledProcessError:
             all_passed = False
     
     # Test Dart bindings
-    if not args.skip_dart:
+    if run_tests and not args.skip_dart:
         if not test_dart_bindings(root, lib_path, args.verbose):
             all_passed = False
+    
+    # Run examples
+    if run_examples:
+        print(f"\n{Colors.BOLD}{Colors.CYAN}--- Running Examples ---{Colors.END}\n")
+        
+        # Rust examples
+        if not args.skip_rust:
+            if not run_rust_examples(root, args.verbose):
+                all_passed = False
+        
+        # Python examples (need venv)
+        if not args.skip_python and venv_dir is not None:
+            if not run_python_examples(root, venv_dir, args.verbose):
+                all_passed = False
+        elif not args.skip_python and venv_dir is None:
+            print_warning("Skipping Python examples (no virtual environment)")
+        
+        # Dart examples
+        if not args.skip_dart:
+            if not run_dart_examples(root, lib_path, args.verbose):
+                all_passed = False
     
     # Summary
     print(f"\n{Colors.BOLD}")
     print("=" * 60)
     if all_passed:
-        print(f"{Colors.GREEN}  All builds and tests passed!{Colors.END}")
+        if run_examples:
+            print(f"{Colors.GREEN}  All builds, tests, and examples passed!{Colors.END}")
+        else:
+            print(f"{Colors.GREEN}  All builds and tests passed!{Colors.END}")
     else:
-        print(f"{Colors.FAIL}  Some builds or tests failed.{Colors.END}")
+        print(f"{Colors.FAIL}  Some builds, tests, or examples failed.{Colors.END}")
     print("=" * 60)
     print(Colors.END)
     

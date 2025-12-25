@@ -779,6 +779,23 @@ void setEntiDbLibraryPath(String path) {
   _bindings = null; // Force reload
 }
 
+/// Gets the library path, checking environment variables and custom overrides.
+String _getLibraryPath() {
+  // Check custom override first
+  if (_customLibraryPath != null) {
+    return _customLibraryPath!;
+  }
+
+  // Check environment variable ENTIDB_LIB_PATH
+  final envPath = Platform.environment['ENTIDB_LIB_PATH'];
+  if (envPath != null && envPath.isNotEmpty) {
+    return envPath;
+  }
+
+  // Fall back to default library name (relies on system library path)
+  return _getLibraryName();
+}
+
 /// The loaded dynamic library.
 DynamicLibrary? _library;
 
@@ -786,7 +803,7 @@ DynamicLibrary? _library;
 DynamicLibrary get library {
   if (_library != null) return _library!;
 
-  final path = _customLibraryPath ?? _getLibraryName();
+  final path = _getLibraryPath();
   _library = DynamicLibrary.open(path);
   return _library!;
 }
