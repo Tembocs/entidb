@@ -1,9 +1,9 @@
 name: entidb_flutter
 description: Flutter plugin for EntiDB - an embedded entity database with ACID transactions and CBOR storage. Bundles native libraries for all platforms.
-version: 2.0.0-alpha.1
 repository: https://github.com/Tembocs/entidb
 homepage: https://github.com/Tembocs/entidb
 documentation: https://github.com/Tembocs/entidb/tree/main/bindings/flutter/entidb_flutter
+version: 2.0.0-alpha.2
 
 topics:
   - database

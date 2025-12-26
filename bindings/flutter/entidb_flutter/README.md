@@ -2,22 +2,18 @@
 
 Flutter plugin for [EntiDB](https://github.com/Tembocs/entidb) - an embedded entity database with ACID transactions and CBOR storage.
 
-> **⚠️ Alpha Release Notice**
-> 
-> This is an early alpha release. The plugin scaffold is complete, but native libraries for mobile platforms are still being cross-compiled and integrated. **Currently only Windows is fully supported.**
->
-> For production use, consider using [`entidb_dart`](https://pub.dev/packages/entidb_dart) directly with your own native library builds.
+> **Alpha Release**: API may change. Production use at your own discretion.
 
-## Platform Support (Alpha)
+## Platform Support
 
-| Platform | Status | Notes |
+| Platform | Status | Architecture |
 |----------|--------|-------|
-| Windows  | ✅ Working | Native library bundled |
-| Android  | 🚧 Scaffold | Native library pending |
-| iOS      | 🚧 Scaffold | Native library pending |
-| macOS    | 🚧 Scaffold | Native library pending |
-| Linux    | 🚧 Scaffold | Native library pending |
-| Web      | ❌ | Use `entidb_web` instead |
+| Android  | ✅ | arm64-v8a, armeabi-v7a, x86_64 |
+| iOS      | ✅ | arm64 (device), arm64+x86_64 (simulator) |
+| macOS    | ✅ | Universal (arm64 + x86_64) |
+| Windows  | ✅ | x86_64 |
+| Linux    | ✅ | x86_64 |
+| Web      | ❌ | Use `entidb_web` (coming soon) |
 
 ## Installation
 
@@ -25,7 +21,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  entidb_flutter: ^2.0.0-alpha.1
+  entidb_flutter: ^2.0.0-alpha.2
 ```
 
 ## Usage
