@@ -1,0 +1,20 @@
+name: flutter_todo
+description: EntiDB Flutter todo example application.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  entidb_flutter: ^2.0.0-alpha.2
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
