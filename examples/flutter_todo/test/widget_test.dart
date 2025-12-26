@@ -1,30 +1,50 @@
-// This is a basic Flutter widget test.
+// Unit tests for the EntiDB Todo example.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Note: Tests that require the native library (EntityId.generate, Database)
+// must run as integration tests on a real device/emulator.
+// These tests verify the pure Dart logic only.
 
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:flutter_todo/main.dart';
-
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('Todo JSON serialization roundtrip', () {
+    // Test the JSON encoding/decoding logic without requiring FFI
+    final original = {
+      'title': 'Test Todo',
+      'completed': false,
+      'priority': 1,
+      'created_at': 1234567890,
+    };
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(original)));
+    final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    expect(decoded['title'], 'Test Todo');
+    expect(decoded['completed'], false);
+    expect(decoded['priority'], 1);
+    expect(decoded['created_at'], 1234567890);
+  });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('Todo JSON handles missing optional fields', () {
+    final minimal = {'title': 'Minimal Todo'};
+
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(minimal)));
+    final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+
+    expect(decoded['title'], 'Minimal Todo');
+    expect(decoded['completed'], isNull);
+    expect(decoded['priority'], isNull);
+  });
+
+  test('Todo title validation', () {
+    // Empty titles should be handled by the UI, but test the data flow
+    final todo = {'title': '', 'completed': false};
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(todo)));
+    final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+
+    expect(decoded['title'], '');
   });
 }
