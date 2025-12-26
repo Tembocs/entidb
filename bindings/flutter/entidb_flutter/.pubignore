@@ -15,5 +15,16 @@ test/
 .idea/
 *.log
 
-# NOTE: We explicitly do NOT exclude native libraries (*.dll, *.so, *.dylib, *.a, *.xcframework)
-# because they need to be bundled with the package for end users
+# Override root .gitignore exclusions - INCLUDE native libraries
+!android/src/main/jniLibs/**/*.so
+!windows/libs/*.dll
+!linux/libs/*.so
+!macos/Libraries/*.dylib
+!ios/Frameworks/**
+
+# Exclude placeholder READMEs from native lib directories (they're just build instructions)
+android/src/main/jniLibs/README.md
+windows/libs/README.md
+linux/libs/README.md
+macos/Libraries/README.md
+ios/Frameworks/README.md

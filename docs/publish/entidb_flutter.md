@@ -95,23 +95,47 @@ flutter pub publish
 - Library: `entidb_ffi.dll`
 - Placed in `windows/libs/`
 
-### Linux (Future)
+### Linux
 - Target: x86_64-unknown-linux-gnu
 - Library: `libentidb_ffi.so`
 - Placed in `linux/libs/`
-- Requires cross-compilation from Windows or Linux build machine
+- Build using WSL on Windows:
+  ```bash
+  wsl -e bash -c "source ~/.cargo/env && cd /mnt/d/rust/entidb && cargo build --release -p entidb_ffi"
+  wsl -e bash -c "cp /mnt/d/rust/entidb/target/release/libentidb_ffi.so /mnt/d/rust/entidb/bindings/flutter/entidb_flutter/linux/libs/"
+  ```
 
-### macOS (Future)
-- Target: x86_64-apple-darwin, aarch64-apple-darwin
+### macOS & iOS (via GitHub Actions)
+
+Apple libraries require a macOS build environment. Use the GitHub Actions workflow:
+
+1. **Trigger the workflow:**
+   - Go to: `Actions` → `Build Apple Native Libraries`
+   - Click `Run workflow` (or push a version tag like `v2.0.0-alpha.2`)
+
+2. **Download artifacts:**
+   - After workflow completes, download from the workflow run:
+     - `macos-libentidb_ffi` → Universal dylib (arm64 + x86_64)
+     - `ios-entidb_ffi-xcframework` → XCFramework for iOS
+
+3. **Copy to Flutter plugin:**
+   ```powershell
+   # macOS
+   copy libentidb_ffi.dylib bindings\flutter\entidb_flutter\macos\Libraries\
+   
+   # iOS (extract XCFramework)
+   copy entidb_ffi.xcframework bindings\flutter\entidb_flutter\ios\Frameworks\ -Recurse
+   ```
+
+### macOS
+- Targets: aarch64-apple-darwin, x86_64-apple-darwin (universal binary)
 - Library: `libentidb_ffi.dylib`
 - Placed in `macos/Libraries/`
-- Requires macOS build machine
 
-### iOS (Future)
-- Targets: aarch64-apple-ios, x86_64-apple-ios (simulator)
+### iOS
+- Targets: aarch64-apple-ios (device), aarch64-apple-ios-sim + x86_64-apple-ios (simulators)
 - Format: XCFramework
 - Placed in `ios/Frameworks/`
-- Requires macOS build machine
 
 ---
 

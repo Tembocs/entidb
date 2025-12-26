@@ -1,0 +1,108 @@
+name: Build Apple Native Libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 2.0.0-alpha.1)'
+        required: false
+        default: 'dev'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-apple:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: |
+            aarch64-apple-ios
+            x86_64-apple-ios
+            aarch64-apple-ios-sim
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+
+      - name: Build iOS libraries
+        run: |
+          # iOS device (arm64)
+          cargo build --release -p entidb_ffi --target aarch64-apple-ios
+          
+          # iOS simulator (arm64 for Apple Silicon Macs)
+          cargo build --release -p entidb_ffi --target aarch64-apple-ios-sim
+          
+          # iOS simulator (x86_64 for Intel Macs)
+          cargo build --release -p entidb_ffi --target x86_64-apple-ios
+
+      - name: Build macOS libraries
+        run: |
+          # macOS arm64 (Apple Silicon)
+          cargo build --release -p entidb_ffi --target aarch64-apple-darwin
+          
+          # macOS x86_64 (Intel)
+          cargo build --release -p entidb_ffi --target x86_64-apple-darwin
+
+      - name: Create macOS universal binary
+        run: |
+          mkdir -p artifacts/macos
+          lipo -create \
+            target/aarch64-apple-darwin/release/libentidb_ffi.dylib \
+            target/x86_64-apple-darwin/release/libentidb_ffi.dylib \
+            -output artifacts/macos/libentidb_ffi.dylib
+          
+          # Verify the universal binary
+          lipo -info artifacts/macos/libentidb_ffi.dylib
+
+      - name: Create iOS XCFramework
+        run: |
+          mkdir -p artifacts/ios
+          
+          # Create fat library for simulators (arm64 + x86_64)
+          mkdir -p target/ios-simulator-universal
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libentidb_ffi.a \
+            target/x86_64-apple-ios/release/libentidb_ffi.a \
+            -output target/ios-simulator-universal/libentidb_ffi.a
+          
+          # Create XCFramework
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libentidb_ffi.a \
+            -library target/ios-simulator-universal/libentidb_ffi.a \
+            -output artifacts/ios/entidb_ffi.xcframework
+
+      - name: Display artifact info
+        run: |
+          echo "=== macOS Universal Binary ==="
+          ls -lh artifacts/macos/
+          file artifacts/macos/libentidb_ffi.dylib
+          
+          echo ""
+          echo "=== iOS XCFramework ==="
+          ls -lhR artifacts/ios/
+
+      - name: Upload macOS library
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-libentidb_ffi
+          path: artifacts/macos/libentidb_ffi.dylib
+          retention-days: 90
+
+      - name: Upload iOS XCFramework
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-entidb_ffi-xcframework
+          path: artifacts/ios/entidb_ffi.xcframework
+          retention-days: 90
+
+      - name: Upload all Apple artifacts (combined)
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-native-libs-${{ github.event.inputs.version || github.ref_name || 'dev' }}
+          path: artifacts/
+          retention-days: 90
