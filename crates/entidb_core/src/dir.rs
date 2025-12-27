@@ -198,6 +198,43 @@ impl DatabaseDir {
     pub fn is_new_database(&self) -> bool {
         !self.manifest_path().exists() && !self.wal_path().exists()
     }
+
+    /// Returns the path to a specific segment file.
+    ///
+    /// # Arguments
+    ///
+    /// * `segment_id` - The segment ID (e.g., 1 produces "seg-000001.dat")
+    #[must_use]
+    pub fn segment_file_path(&self, segment_id: u64) -> PathBuf {
+        self.segments_dir().join(format!("seg-{segment_id:06}.dat"))
+    }
+
+    /// Deletes segment files for the given segment IDs.
+    ///
+    /// This is used during compaction to remove old segment files
+    /// after their data has been merged into a new segment.
+    ///
+    /// # Arguments
+    ///
+    /// * `segment_ids` - List of segment IDs to delete
+    ///
+    /// # Returns
+    ///
+    /// The number of files successfully deleted.
+    pub fn delete_segment_files(&self, segment_ids: &[u64]) -> CoreResult<usize> {
+        let mut deleted = 0;
+        let segments_dir = self.segments_dir();
+
+        for &segment_id in segment_ids {
+            let segment_path = segments_dir.join(format!("seg-{segment_id:06}.dat"));
+            if segment_path.exists() {
+                fs::remove_file(&segment_path)?;
+                deleted += 1;
+            }
+        }
+
+        Ok(deleted)
+    }
 }
 
 impl Drop for DatabaseDir {

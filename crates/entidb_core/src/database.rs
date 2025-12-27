@@ -638,7 +638,7 @@ impl Database {
     pub fn compact(&self, remove_tombstones: bool) -> CoreResult<CompactionStats> {
         self.ensure_open()?;
 
-        // Read all current records
+        // Read all current records from sealed segments only
         let records = self.segments.scan_all()?;
         let input_count = records.len();
         let input_size: usize = records.iter().map(|r| r.encoded_size()).sum();
@@ -664,26 +664,33 @@ impl Database {
         let compactor = Compactor::new(config);
         let current_seq = self.committed_seq();
 
-        // Perform compaction
+        // Perform compaction (this produces deduplicated records)
         let (compacted_records, result) = compactor.compact(records, current_seq)?;
 
-        // Write compacted records back to segments
-        // For now, we append to the segment manager and rebuild the index
-        // A more sophisticated implementation would use a new segment file
-        for record in &compacted_records {
-            // Skip - we're not rewriting segments in place for now
-            // This would require a more complex segment rewrite mechanism
-            let _ = record;
+        // Get the sealed segment IDs before replacement (for file deletion)
+        let sealed_ids = self.segments.sealed_segment_ids();
+
+        // Replace sealed segments with compacted data
+        let (removed_ids, _new_segment_id) =
+            self.segments.replace_sealed_with_compacted(compacted_records)?;
+
+        // Delete the old segment files from disk
+        #[cfg(feature = "std")]
+        if let Some(ref dir) = self.dir {
+            if !removed_ids.is_empty() {
+                // Delete the old segment files
+                let _ = dir.delete_segment_files(&sealed_ids);
+            }
         }
 
-        let output_size: usize = compacted_records.iter().map(|r| r.encoded_size()).sum();
+        let output_size = input_size.saturating_sub(result.bytes_saved);
 
         Ok(CompactionStats {
             input_records: input_count,
-            output_records: compacted_records.len(),
+            output_records: result.output_records,
             tombstones_removed: result.tombstones_removed,
             obsolete_versions_removed: result.obsolete_versions_removed,
-            bytes_saved: input_size.saturating_sub(output_size),
+            bytes_saved: result.bytes_saved,
         })
     }
 

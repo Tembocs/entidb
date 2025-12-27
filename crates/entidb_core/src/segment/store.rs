@@ -639,6 +639,112 @@ impl SegmentManager {
     pub fn segment_count(&self) -> usize {
         self.segment_info.read().len()
     }
+
+    /// Replaces all sealed segments with compacted records.
+    ///
+    /// This is the core operation for compaction:
+    /// 1. Creates a new segment for the compacted data
+    /// 2. Writes all compacted records to it
+    /// 3. Removes the old sealed segments
+    /// 4. Rebuilds the index
+    ///
+    /// The active (unsealed) segment is preserved.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (removed_segment_ids, new_segment_id) on success.
+    pub fn replace_sealed_with_compacted(
+        &self,
+        compacted_records: Vec<SegmentRecord>,
+    ) -> CoreResult<(Vec<u64>, Option<u64>)> {
+        // Get list of sealed segments to remove
+        let sealed_ids: Vec<u64> = {
+            let info = self.segment_info.read();
+            info.iter()
+                .filter(|(_, seg)| seg.sealed)
+                .map(|(&id, _)| id)
+                .collect()
+        };
+
+        if sealed_ids.is_empty() && compacted_records.is_empty() {
+            return Ok((vec![], None));
+        }
+
+        // Find the next segment ID to use
+        let new_segment_id = {
+            let info = self.segment_info.read();
+            info.keys().copied().max().unwrap_or(0) + 1
+        };
+
+        // Create new segment for compacted data (if any records)
+        let created_segment_id = if !compacted_records.is_empty() {
+            let new_backend = (self.backend_factory)(new_segment_id);
+
+            // Write all compacted records
+            let mut total_size = 0u64;
+            {
+                let backend = new_backend;
+                let mut backend_guard =
+                    Arc::new(RwLock::new(backend));
+
+                for record in &compacted_records {
+                    let encoded = record.encode();
+                    total_size += encoded.len() as u64;
+                    backend_guard.write().append(&encoded)?;
+                }
+
+                // Sync to disk
+                backend_guard.write().sync()?;
+
+                // Add to segments map
+                self.segments.write().insert(new_segment_id, backend_guard);
+            }
+
+            // Add segment info (sealed since it contains only historical data)
+            self.segment_info.write().insert(
+                new_segment_id,
+                SegmentInfo {
+                    id: new_segment_id,
+                    sealed: true,
+                    size: total_size,
+                    record_count: compacted_records.len(),
+                },
+            );
+
+            Some(new_segment_id)
+        } else {
+            None
+        };
+
+        // Remove old sealed segments from memory
+        {
+            let mut segments = self.segments.write();
+            let mut info = self.segment_info.write();
+
+            for seg_id in &sealed_ids {
+                segments.remove(seg_id);
+                info.remove(seg_id);
+            }
+        }
+
+        // Rebuild the index from remaining segments
+        self.rebuild_index()?;
+
+        Ok((sealed_ids, created_segment_id))
+    }
+
+    /// Gets the list of sealed segment IDs.
+    ///
+    /// This is useful for the database to delete the corresponding files
+    /// after successful compaction.
+    pub fn sealed_segment_ids(&self) -> Vec<u64> {
+        self.segment_info
+            .read()
+            .iter()
+            .filter(|(_, seg)| seg.sealed)
+            .map(|(&id, _)| id)
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for SegmentManager {
