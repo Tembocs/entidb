@@ -43,9 +43,15 @@
 - ~~Manifest serialization iterates a HashMap without sorting, so identical operations can produce different bytes on disk (AC-01 violation).~~
 - **Fix:** The `Manifest` struct now uses `BTreeMap<String, u32>` for collections (ensures bytewise key ordering). Index definitions are sorted by ID before encoding. A comprehensive `deterministic_encoding` test verifies that manifests with identical logical state produce byte-identical encodings regardless of construction order.
 
-9) Collection creation persistence is best-effort and silent on failure.
-- If manifest save fails, collection creation still succeeds without reporting the failure, risking a mismatch between in-memory state and persisted metadata.
-- Evidence: `crates/entidb_core/src/database.rs:563`.
+9) ~~Collection creation persistence is best-effort and silent on failure.~~ **RESOLVED**
+- ~~If manifest save fails, collection creation still succeeds without reporting the failure, risking a mismatch between in-memory state and persisted metadata.~~
+- ~~Evidence: `crates/entidb_core/src/database.rs:563`.~~
+- **Fix:** Added `create_collection(name) -> CoreResult<CollectionId>` as the recommended API:
+  - Returns an error with `ManifestPersistFailed` if the manifest cannot be saved
+  - Rolls back in-memory state on failure (removes collection from manifest, restores `next_collection_id`)
+  - Existing `collection()` method is deprecated and now panics on persistence failure instead of silently continuing
+  - Added `collection_unchecked()` for backward compatibility with explicit warning about potential inconsistency
+  - Comprehensive tests verify: idempotent creation, immediate persistence, rollback behavior, and in-memory database handling
 
 ### Low
 

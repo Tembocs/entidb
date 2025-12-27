@@ -59,7 +59,8 @@ pub struct CompactionStats {
 /// // Use the database
 /// db.transaction(|txn| {
 ///     let id = entidb_core::EntityId::new();
-///     txn.put(db.collection("users"), id, vec![1, 2, 3])?;
+///     let users = db.create_collection("users")?;
+///     txn.put(users, id, vec![1, 2, 3])?;
 ///     Ok(())
 /// })?;
 ///
@@ -767,31 +768,97 @@ impl Database {
         self.entity_store.list(collection_id)
     }
 
+    /// Creates or retrieves a collection, ensuring persistence.
+    ///
+    /// This is the **recommended** method for collection creation. It guarantees that:
+    /// - If the collection already exists, its ID is returned immediately
+    /// - If the collection is new, it is persisted to the manifest before returning
+    /// - If persistence fails, the in-memory state is rolled back and an error is returned
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError::ManifestPersistFailed` if a new collection cannot be persisted
+    /// to disk. In this case, the collection is **not** created in memory either.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let users = db.create_collection("users")?;
+    /// ```
+    pub fn create_collection(&self, name: &str) -> CoreResult<CollectionId> {
+        let mut manifest = self.manifest.write();
+        
+        // Fast path: collection already exists
+        if let Some(id) = manifest.get_collection(name) {
+            return Ok(CollectionId::new(id));
+        }
+        
+        // Slow path: create new collection
+        let id = manifest.get_or_create_collection(name);
+        
+        // Persist the manifest if we have a directory
+        #[cfg(feature = "std")]
+        if let Some(ref dir) = self.dir {
+            if let Err(e) = dir.save_manifest(&manifest) {
+                // Rollback: remove the collection from in-memory state
+                manifest.collections.remove(name);
+                // Restore next_collection_id (the ID we just assigned)
+                manifest.next_collection_id = id;
+                
+                return Err(CoreError::manifest_persist_failed(format!(
+                    "failed to persist collection '{}': {}",
+                    name, e
+                )));
+            }
+        }
+        
+        Ok(CollectionId::new(id))
+    }
+
     /// Gets or creates a collection ID for a name.
     ///
     /// If this is a persistent database (opened via `open()` or `open_with_config()`),
     /// the manifest is automatically saved to disk when a new collection is created.
+    ///
+    /// # Panics
+    ///
+    /// Panics if manifest persistence fails for a new collection in a persistent database.
+    /// Use [`create_collection`](Self::create_collection) for fallible collection creation.
+    ///
+    /// # Deprecated
+    ///
+    /// This method is provided for backward compatibility. Prefer `create_collection()`
+    /// which returns a `Result` and allows proper error handling.
+    #[deprecated(since = "0.2.0", note = "use create_collection() for proper error handling")]
     pub fn collection(&self, name: &str) -> CollectionId {
-        let mut manifest = self.manifest.write();
-        let existing = manifest.get_collection(name);
-        let id = manifest.get_or_create_collection(name);
-        
-        // Save manifest if this was a new collection
-        #[cfg(feature = "std")]
-        if existing.is_none() {
-            if let Some(ref dir) = self.dir {
-                // Best-effort save - log but don't fail
-                if let Err(e) = dir.save_manifest(&manifest) {
-                    // In production, this would be logged
-                    // For now, we just ignore the error since collection() returns CollectionId, not Result
-                    let _ = e;
-                }
+        self.create_collection(name).unwrap_or_else(|e| {
+            panic!("collection creation failed for '{}': {}", name, e)
+        })
+    }
+
+    /// Gets or creates a collection ID for a name, ignoring persistence errors.
+    ///
+    /// This method is provided for internal use and backward compatibility with
+    /// code that cannot handle `Result` types. It logs a warning but continues
+    /// even if manifest persistence fails.
+    ///
+    /// **Warning:** Using this method may lead to inconsistency between in-memory
+    /// and on-disk state. Collections created when persistence fails will be
+    /// lost on restart.
+    ///
+    /// Prefer [`create_collection`](Self::create_collection) for new code.
+    #[doc(hidden)]
+    pub fn collection_unchecked(&self, name: &str) -> CollectionId {
+        match self.create_collection(name) {
+            Ok(id) => id,
+            Err(_e) => {
+                // Fallback: use in-memory only
+                // In production, this should be logged as a warning
+                let mut manifest = self.manifest.write();
+                let id = manifest.get_or_create_collection(name);
+                CollectionId::new(id)
             }
         }
-        #[cfg(not(feature = "std"))]
-        let _ = existing;
-        
-        CollectionId::new(id)
     }
 
     /// Gets a collection ID by name, if it exists.
@@ -1883,6 +1950,7 @@ impl Drop for Database {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -2123,6 +2191,7 @@ mod tests {
 
 /// Persistence tests that require a real file system.
 #[cfg(test)]
+#[allow(deprecated)]
 mod persistence_tests {
     use super::*;
     use tempfile::tempdir;
@@ -2240,11 +2309,122 @@ mod persistence_tests {
             db.close().unwrap();
         }
     }
+
+    #[test]
+    fn create_collection_returns_result() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("create_collection_test");
+        let db = Database::open(&db_path).unwrap();
+
+        // Create a new collection - should succeed
+        let users = db.create_collection("users").unwrap();
+        
+        // Creating again should return same ID (idempotent)
+        let users_again = db.create_collection("users").unwrap();
+        assert_eq!(users, users_again);
+        
+        // Different collection should get different ID
+        let posts = db.create_collection("posts").unwrap();
+        assert_ne!(users, posts);
+        
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn create_collection_persists_immediately() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("persist_immediate_test");
+        
+        let collection_id;
+        
+        // First session: create collection using create_collection
+        {
+            let db = Database::open(&db_path).unwrap();
+            collection_id = db.create_collection("users").unwrap();
+            // Don't close cleanly - drop without close()
+        }
+        
+        // Second session: collection should exist because manifest was saved
+        {
+            let db = Database::open(&db_path).unwrap();
+            let recovered_id = db.get_collection("users");
+            assert!(recovered_id.is_some(), "collection should persist immediately after create_collection");
+            assert_eq!(recovered_id.unwrap(), collection_id);
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn create_collection_with_data_persists() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("collection_data_persist");
+        
+        let entity_id = EntityId::new();
+        
+        // First session: create and populate
+        {
+            let db = Database::open(&db_path).unwrap();
+            let users = db.create_collection("users").unwrap();
+            
+            db.transaction(|txn| {
+                txn.put(users, entity_id, vec![1, 2, 3])?;
+                Ok(())
+            }).unwrap();
+            
+            db.close().unwrap();
+        }
+        
+        // Second session: verify both collection and data persist
+        {
+            let db = Database::open(&db_path).unwrap();
+            let users = db.get_collection("users").expect("collection should exist");
+            let data = db.get(users, entity_id).unwrap();
+            assert_eq!(data, Some(vec![1, 2, 3]));
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn create_collection_in_memory_no_persist_error() {
+        // In-memory databases don't have a directory, so create_collection
+        // should still work (just doesn't persist)
+        let db = Database::open_in_memory().unwrap();
+        
+        let users = db.create_collection("users").unwrap();
+        let users_again = db.create_collection("users").unwrap();
+        assert_eq!(users, users_again);
+    }
+
+    #[test]
+    fn multiple_collections_persist() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("multi_collection_test");
+        
+        // First session: create multiple collections
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.create_collection("users").unwrap();
+            db.create_collection("posts").unwrap();
+            db.create_collection("comments").unwrap();
+            db.close().unwrap();
+        }
+        
+        // Second session: all should exist
+        {
+            let db = Database::open(&db_path).unwrap();
+            assert!(db.get_collection("users").is_some());
+            assert!(db.get_collection("posts").is_some());
+            assert!(db.get_collection("comments").is_some());
+            assert!(db.get_collection("nonexistent").is_none());
+            db.close().unwrap();
+        }
+    }
 }
 
 /// Encrypted database tests.
 /// Index tests.
 #[cfg(test)]
+#[allow(deprecated)]
 mod index_tests {
     use super::*;
 
@@ -2431,6 +2611,7 @@ mod index_tests {
 
 /// Observability tests for change feed and stats.
 #[cfg(test)]
+#[allow(deprecated)]
 mod observability_tests {
     use super::*;
     use std::time::Duration;

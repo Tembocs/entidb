@@ -131,6 +131,17 @@ pub enum CoreError {
         /// Description of the failure.
         message: String,
     },
+
+    /// Manifest persistence failed.
+    ///
+    /// This error occurs when the database fails to persist metadata changes
+    /// (such as new collections or indexes) to the manifest file on disk.
+    /// The in-memory state is rolled back to ensure consistency.
+    #[error("manifest persist failed: {message}")]
+    ManifestPersistFailed {
+        /// Description of the failure.
+        message: String,
+    },
 }
 
 impl CoreError {
@@ -196,6 +207,13 @@ impl CoreError {
     /// Creates a migration failed error.
     pub fn migration_failed(message: impl Into<String>) -> Self {
         Self::MigrationFailed {
+            message: message.into(),
+        }
+    }
+
+    /// Creates a manifest persist failed error.
+    pub fn manifest_persist_failed(message: impl Into<String>) -> Self {
+        Self::ManifestPersistFailed {
             message: message.into(),
         }
     }
