@@ -3,6 +3,7 @@
 use crate::entity::EntityId;
 use crate::error::{CoreError, CoreResult};
 use crate::types::{CollectionId, SequenceNumber, TransactionId};
+use parking_lot::MutexGuard;
 use std::collections::HashMap;
 
 /// State of a transaction.
@@ -26,6 +27,117 @@ pub enum PendingWrite {
     },
     /// Delete an entity.
     Delete,
+}
+
+/// A write transaction that holds an exclusive write lock.
+///
+/// This type ensures single-writer semantics by holding the write lock
+/// for the entire duration of the transaction. Only one `WriteTransaction`
+/// can exist at a time.
+///
+/// The lock is released when the transaction is committed, aborted, or dropped.
+pub struct WriteTransaction<'a> {
+    /// The underlying transaction.
+    inner: Transaction,
+    /// The write lock guard - held for the transaction's lifetime.
+    /// Using Option so we can release it on commit/abort.
+    _write_guard: Option<MutexGuard<'a, ()>>,
+}
+
+impl<'a> WriteTransaction<'a> {
+    /// Creates a new write transaction with the given lock guard.
+    pub(crate) fn new(inner: Transaction, guard: MutexGuard<'a, ()>) -> Self {
+        Self {
+            inner,
+            _write_guard: Some(guard),
+        }
+    }
+
+    /// Returns a reference to the inner transaction.
+    pub fn inner(&self) -> &Transaction {
+        &self.inner
+    }
+
+    /// Returns a mutable reference to the inner transaction.
+    pub fn inner_mut(&mut self) -> &mut Transaction {
+        &mut self.inner
+    }
+
+    /// Consumes self and returns the inner transaction.
+    /// This also releases the write lock.
+    pub fn into_inner(mut self) -> Transaction {
+        self._write_guard = None;
+        std::mem::replace(
+            &mut self.inner,
+            Transaction::new(TransactionId::new(0), SequenceNumber::new(0)),
+        )
+    }
+
+    // Delegate common methods to inner transaction
+
+    /// Returns the transaction ID.
+    #[must_use]
+    pub fn id(&self) -> TransactionId {
+        self.inner.id()
+    }
+
+    /// Returns the snapshot sequence number.
+    #[must_use]
+    pub fn snapshot_seq(&self) -> SequenceNumber {
+        self.inner.snapshot_seq()
+    }
+
+    /// Checks if the transaction is still active.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.inner.is_active()
+    }
+
+    /// Records a put operation.
+    pub fn put(
+        &mut self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+        payload: Vec<u8>,
+    ) -> CoreResult<()> {
+        self.inner.put(collection_id, entity_id, payload)
+    }
+
+    /// Records a delete operation.
+    pub fn delete(&mut self, collection_id: CollectionId, entity_id: EntityId) -> CoreResult<()> {
+        self.inner.delete(collection_id, entity_id)
+    }
+
+    /// Gets a pending write for an entity.
+    #[must_use]
+    pub fn get_pending_write(
+        &self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+    ) -> Option<&PendingWrite> {
+        self.inner.get_pending_write(collection_id, entity_id)
+    }
+
+    /// Records a read for conflict detection.
+    pub fn record_read(
+        &mut self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+        observed_seq: Option<SequenceNumber>,
+    ) {
+        self.inner.record_read(collection_id, entity_id, observed_seq)
+    }
+}
+
+impl std::fmt::Debug for WriteTransaction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteTransaction")
+            .field("id", &self.inner.id())
+            .field("snapshot_seq", &self.inner.snapshot_seq())
+            .field("state", &self.inner.state())
+            .field("write_count", &self.inner.write_count())
+            .finish()
+    }
 }
 
 /// An active transaction.

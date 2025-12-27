@@ -354,8 +354,13 @@ impl Database {
         let mut active_txns: HashMap<TransactionId, Vec<WalRecord>> = HashMap::new();
         let mut committed_txns: HashSet<TransactionId> = HashSet::new();
         let mut max_txid = 0u64;
-        let mut max_seq = 0u64;
-        let mut committed_seq = 0u64;
+        
+        // Start with manifest's last_checkpoint if available (post-checkpoint recovery)
+        // This is critical for MVCC: if WAL was cleared after checkpoint, we need
+        // to know the committed_seq from manifest to read segment data correctly.
+        let checkpoint_seq = manifest.last_checkpoint.map(|s| s.as_u64()).unwrap_or(0);
+        let mut max_seq = checkpoint_seq;
+        let mut committed_seq = checkpoint_seq;
 
         // First pass: identify committed transactions
         for (_, record) in &records {
@@ -444,6 +449,19 @@ impl Database {
         self.txn_manager.begin()
     }
 
+    /// Begins a new write transaction with exclusive lock.
+    ///
+    /// This acquires the write lock immediately and holds it for the
+    /// transaction's lifetime. Only one write transaction can exist at a time.
+    ///
+    /// For write operations, prefer `write_transaction()` which handles
+    /// commit/abort automatically.
+    pub fn begin_write(&self) -> CoreResult<crate::transaction::WriteTransaction<'_>> {
+        self.ensure_open()?;
+        self.stats.record_transaction_start();
+        self.txn_manager.begin_write()
+    }
+
     /// Commits a transaction.
     ///
     /// After successful commit, change events are emitted to all subscribers.
@@ -490,11 +508,68 @@ impl Database {
         Ok(sequence)
     }
 
+    /// Commits a write transaction.
+    ///
+    /// After successful commit, change events are emitted to all subscribers.
+    /// The write lock is released after this call.
+    pub fn commit_write(
+        &self,
+        wtxn: &mut crate::transaction::WriteTransaction<'_>,
+    ) -> CoreResult<SequenceNumber> {
+        self.ensure_open()?;
+        
+        // Collect pending writes before commit
+        let pending_writes: Vec<_> = wtxn.inner().pending_writes()
+            .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
+            .collect();
+        
+        // Commit the transaction
+        let sequence = self.txn_manager.commit_write(wtxn)?;
+        
+        // Record stats
+        self.stats.record_transaction_commit();
+        
+        // Emit change events for each write
+        for (collection_id, entity_id, write) in pending_writes {
+            let event = match write {
+                crate::transaction::PendingWrite::Put { payload } => {
+                    self.stats.record_write(payload.len() as u64);
+                    crate::change_feed::ChangeEvent::insert(
+                        sequence.as_u64(),
+                        collection_id.as_u32(),
+                        *entity_id.as_bytes(),
+                        payload,
+                    )
+                }
+                crate::transaction::PendingWrite::Delete => {
+                    self.stats.record_delete();
+                    crate::change_feed::ChangeEvent::delete(
+                        sequence.as_u64(),
+                        collection_id.as_u32(),
+                        *entity_id.as_bytes(),
+                    )
+                }
+            };
+            self.change_feed.emit(event);
+        }
+        
+        Ok(sequence)
+    }
+
     /// Aborts a transaction.
     pub fn abort(&self, txn: &mut Transaction) -> CoreResult<()> {
         self.ensure_open()?;
         self.stats.record_transaction_abort();
         self.txn_manager.abort(txn)
+    }
+
+    /// Aborts a write transaction.
+    ///
+    /// All pending writes are discarded. The write lock is released after this call.
+    pub fn abort_write(&self, wtxn: &mut crate::transaction::WriteTransaction<'_>) -> CoreResult<()> {
+        self.ensure_open()?;
+        self.stats.record_transaction_abort();
+        self.txn_manager.abort_write(wtxn)
     }
 
     /// Executes a function within a transaction.
@@ -515,6 +590,39 @@ impl Database {
             Err(e) => {
                 // Abort will record the abort stat
                 let _ = self.abort(&mut txn);
+                Err(e)
+            }
+        }
+    }
+
+    /// Executes a function within a write transaction.
+    ///
+    /// This is the preferred way to perform write operations. It:
+    /// - Acquires an exclusive write lock for the transaction's duration
+    /// - Ensures single-writer semantics (only one write transaction at a time)
+    /// - Automatically commits on success or aborts on error
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// db.write_transaction(|wtxn| {
+    ///     wtxn.put(collection, entity, payload)?;
+    ///     Ok(())
+    /// })?;
+    /// ```
+    pub fn write_transaction<F, T>(&self, f: F) -> CoreResult<T>
+    where
+        F: FnOnce(&mut crate::transaction::WriteTransaction<'_>) -> CoreResult<T>,
+    {
+        self.ensure_open()?;
+        let mut wtxn = self.begin_write()?;
+        match f(&mut wtxn) {
+            Ok(result) => {
+                self.commit_write(&mut wtxn)?;
+                Ok(result)
+            }
+            Err(e) => {
+                let _ = self.abort_write(&mut wtxn);
                 Err(e)
             }
         }
@@ -543,6 +651,21 @@ impl Database {
     ) -> CoreResult<Option<Vec<u8>>> {
         self.ensure_open()?;
         let result = self.entity_store.get_in_txn(txn, collection_id, entity_id);
+        if let Ok(Some(ref data)) = result {
+            self.stats.record_read(data.len() as u64);
+        }
+        result
+    }
+
+    /// Gets an entity within a write transaction.
+    pub fn get_in_write_txn(
+        &self,
+        wtxn: &mut crate::transaction::WriteTransaction<'_>,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+    ) -> CoreResult<Option<Vec<u8>>> {
+        self.ensure_open()?;
+        let result = self.entity_store.get_in_write_txn(wtxn, collection_id, entity_id);
         if let Ok(Some(ref data)) = result {
             self.stats.record_read(data.len() as u64);
         }

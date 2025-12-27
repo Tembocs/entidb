@@ -3,7 +3,7 @@
 use crate::entity::EntityId;
 use crate::error::{CoreError, CoreResult};
 use crate::segment::{SegmentManager, SegmentRecord};
-use crate::transaction::state::{PendingWrite, Transaction};
+use crate::transaction::state::{PendingWrite, Transaction, WriteTransaction};
 use crate::types::{CollectionId, SequenceNumber, TransactionId};
 use crate::wal::{WalManager, WalRecord};
 use parking_lot::{Mutex, RwLock};
@@ -13,10 +13,16 @@ use std::sync::Arc;
 /// Manages transactions with ACID guarantees.
 ///
 /// The transaction manager provides:
-/// - Single-writer concurrency control
+/// - Single-writer concurrency control via `begin_write()`
 /// - Snapshot isolation for readers
 /// - WAL-based durability
 /// - Commit ordering via sequence numbers
+///
+/// ## Single-Writer Guarantee
+///
+/// Only one write transaction can be active at a time. Use `begin_write()`
+/// to start a write transaction, which acquires an exclusive lock that is
+/// held for the transaction's lifetime.
 pub struct TransactionManager {
     /// WAL for durability.
     wal: Arc<WalManager>,
@@ -67,9 +73,10 @@ impl TransactionManager {
         }
     }
 
-    /// Begins a new transaction.
+    /// Begins a new read-only transaction.
     ///
     /// The transaction gets a snapshot of the current committed state.
+    /// For write transactions, use `begin_write()` instead.
     pub fn begin(&self) -> CoreResult<Transaction> {
         let txid = TransactionId::new(self.next_txid.fetch_add(1, Ordering::SeqCst));
         let snapshot_seq = SequenceNumber::new(self.committed_seq.load(Ordering::SeqCst));
@@ -83,17 +90,50 @@ impl TransactionManager {
         Ok(Transaction::new(txid, snapshot_seq))
     }
 
+    /// Begins a new write transaction with exclusive write lock.
+    ///
+    /// This acquires the write lock immediately and holds it for the
+    /// transaction's lifetime. Only one write transaction can exist at a time.
+    ///
+    /// The lock is automatically released when the transaction is committed,
+    /// aborted, or dropped.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut wtx = tm.begin_write()?;
+    /// wtx.put(collection, entity, payload)?;
+    /// tm.commit_write(&mut wtx)?;
+    /// // Lock is released after commit
+    /// ```
+    pub fn begin_write(&self) -> CoreResult<WriteTransaction<'_>> {
+        // Acquire exclusive write lock - this blocks if another writer exists
+        let guard = self.write_lock.lock();
+
+        // Create the underlying transaction
+        let txn = self.begin()?;
+
+        Ok(WriteTransaction::new(txn, guard))
+    }
+
     /// Commits a transaction.
     ///
     /// All pending writes are applied atomically. After commit returns,
     /// the changes are durable and visible to new transactions.
+    ///
+    /// Note: For write transactions created with `begin_write()`, use
+    /// `commit_write()` instead, which doesn't re-acquire the lock.
     pub fn commit(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
+        // Acquire write lock for commit phase
+        let _write_guard = self.write_lock.lock();
+        self.commit_inner(txn)
+    }
+
+    /// Internal commit implementation that assumes lock is already held.
+    fn commit_inner(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
         if !txn.is_active() {
             return Err(CoreError::invalid_operation("transaction not active"));
         }
-
-        // Acquire write lock for commit phase
-        let _write_guard = self.write_lock.lock();
 
         let txid = txn.id();
         let sequence = SequenceNumber::new(self.next_seq.fetch_add(1, Ordering::SeqCst));
@@ -183,6 +223,10 @@ impl TransactionManager {
     }
 
     /// Gets an entity within a transaction's snapshot.
+    ///
+    /// This uses the transaction's snapshot sequence to provide
+    /// snapshot isolation - the read sees data as of when the
+    /// transaction started, not the current state.
     pub fn get(
         &self,
         txn: &mut Transaction,
@@ -197,14 +241,43 @@ impl TransactionManager {
             };
         }
 
-        // Read from segments
-        let result = self.segments.get(collection_id, entity_id.as_bytes())?;
+        // Read from segments at the transaction's snapshot point
+        let snapshot_seq = txn.snapshot_seq();
+        let result = self
+            .segments
+            .get_at_snapshot(collection_id, entity_id.as_bytes(), Some(snapshot_seq))?;
 
         // Record the read for conflict detection
-        // TODO: track the actual sequence number of what we read
-        txn.record_read(collection_id, entity_id, None);
+        txn.record_read(collection_id, entity_id, Some(snapshot_seq));
 
         Ok(result)
+    }
+
+    /// Gets an entity within a write transaction's snapshot.
+    pub fn get_write(
+        &self,
+        wtxn: &mut WriteTransaction<'_>,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+    ) -> CoreResult<Option<Vec<u8>>> {
+        self.get(wtxn.inner_mut(), collection_id, entity_id)
+    }
+
+    /// Commits a write transaction.
+    ///
+    /// All pending writes are applied atomically. After commit returns,
+    /// the changes are durable and visible to new transactions.
+    /// The write lock is released after this call.
+    pub fn commit_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<SequenceNumber> {
+        // WriteTransaction already holds the write lock, so we don't acquire it again
+        self.commit_inner(wtxn.inner_mut())
+    }
+
+    /// Aborts a write transaction.
+    ///
+    /// All pending writes are discarded. The write lock is released after this call.
+    pub fn abort_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<()> {
+        self.abort(wtxn.inner_mut())
     }
 
     /// Returns the current committed sequence number.
@@ -424,5 +497,201 @@ mod tests {
         tm.commit(&mut txn).unwrap();
 
         assert_eq!(tm.committed_seq().as_u64(), 1);
+    }
+
+    // === Snapshot Isolation Tests ===
+
+    #[test]
+    fn snapshot_isolation_reader_sees_old_version() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1, 1, 1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start a read transaction (gets snapshot of seq=1)
+        let mut reader = tm.begin().unwrap();
+        let reader_snapshot = reader.snapshot_seq();
+
+        // Another transaction updates the entity
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![2, 2, 2]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Reader should still see the OLD value (snapshot isolation)
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert_eq!(
+            result,
+            Some(vec![1, 1, 1]),
+            "Reader with snapshot {:?} should see old value",
+            reader_snapshot
+        );
+
+        // A new reader should see the NEW value
+        let mut new_reader = tm.begin().unwrap();
+        let new_result = tm.get(&mut new_reader, collection, entity).unwrap();
+        assert_eq!(new_result, Some(vec![2, 2, 2]));
+    }
+
+    #[test]
+    fn snapshot_isolation_reader_does_not_see_uncommitted() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start a writer but don't commit
+        let mut writer = tm.begin().unwrap();
+        writer.put(collection, entity, vec![2]).unwrap();
+
+        // Start a reader
+        let mut reader = tm.begin().unwrap();
+
+        // Reader should see old value (uncommitted writes are not visible)
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert_eq!(result, Some(vec![1]));
+
+        // Abort the writer
+        tm.abort(&mut writer).unwrap();
+    }
+
+    #[test]
+    fn snapshot_isolation_entity_created_after_snapshot_not_visible() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+
+        // Start a reader before any data exists
+        let mut reader = tm.begin().unwrap();
+
+        // Create entity after reader started
+        let entity = EntityId::new();
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![42]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Reader should NOT see the entity (created after snapshot)
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert!(result.is_none());
+
+        // New reader should see it
+        let mut new_reader = tm.begin().unwrap();
+        let new_result = tm.get(&mut new_reader, collection, entity).unwrap();
+        assert_eq!(new_result, Some(vec![42]));
+    }
+
+    #[test]
+    fn snapshot_isolation_deletion_after_snapshot_not_visible() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start a reader
+        let mut reader = tm.begin().unwrap();
+
+        // Delete after reader started
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.delete(collection, entity).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Reader should still see the entity
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert_eq!(result, Some(vec![1]));
+
+        // New reader should see deletion
+        let mut new_reader = tm.begin().unwrap();
+        let new_result = tm.get(&mut new_reader, collection, entity).unwrap();
+        assert!(new_result.is_none());
+    }
+
+    // === Write Transaction Tests ===
+
+    #[test]
+    fn begin_write_creates_write_transaction() {
+        let tm = create_manager();
+        let wtxn = tm.begin_write().unwrap();
+        assert!(wtxn.is_active());
+        assert_eq!(tm.active_count(), 1);
+    }
+
+    #[test]
+    fn write_transaction_commit() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        let mut wtxn = tm.begin_write().unwrap();
+        wtxn.put(collection, entity, vec![1, 2, 3]).unwrap();
+        let seq = tm.commit_write(&mut wtxn).unwrap();
+
+        assert_eq!(seq.as_u64(), 1);
+        assert!(!wtxn.is_active());
+
+        // Data should be visible
+        let mut reader = tm.begin().unwrap();
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert_eq!(result, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn write_transaction_abort() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        let mut wtxn = tm.begin_write().unwrap();
+        wtxn.put(collection, entity, vec![1, 2, 3]).unwrap();
+        tm.abort_write(&mut wtxn).unwrap();
+
+        // Data should NOT be visible
+        let mut reader = tm.begin().unwrap();
+        let result = tm.get(&mut reader, collection, entity).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn write_transaction_has_snapshot_isolation() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start a write transaction
+        let mut wtxn = tm.begin_write().unwrap();
+
+        // Write transaction should see value from its snapshot
+        let result = tm.get_write(&mut wtxn, collection, entity).unwrap();
+        assert_eq!(result, Some(vec![1]));
+
+        tm.abort_write(&mut wtxn).unwrap();
     }
 }

@@ -3,8 +3,8 @@
 use crate::entity::EntityId;
 use crate::error::CoreResult;
 use crate::segment::SegmentManager;
-use crate::transaction::{Transaction, TransactionManager};
-use crate::types::CollectionId;
+use crate::transaction::{Transaction, TransactionManager, WriteTransaction};
+use crate::types::{CollectionId, SequenceNumber};
 use std::sync::Arc;
 
 /// Provides entity-level operations on the database.
@@ -27,15 +27,28 @@ impl EntityStore {
         }
     }
 
-    /// Gets an entity by ID.
+    /// Gets an entity by ID (latest committed version).
     ///
-    /// This performs a snapshot read outside of a transaction.
+    /// This reads the latest committed version without starting a transaction.
     pub fn get(
         &self,
         collection_id: CollectionId,
         entity_id: EntityId,
     ) -> CoreResult<Option<Vec<u8>>> {
-        self.segments.get(collection_id, entity_id.as_bytes())
+        // Read at the current committed sequence for consistency
+        let snapshot_seq = self.txn_manager.committed_seq();
+        self.get_at_snapshot(collection_id, entity_id, snapshot_seq)
+    }
+
+    /// Gets an entity at a specific snapshot sequence.
+    pub fn get_at_snapshot(
+        &self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+        snapshot_seq: SequenceNumber,
+    ) -> CoreResult<Option<Vec<u8>>> {
+        self.segments
+            .get_at_snapshot(collection_id, entity_id.as_bytes(), Some(snapshot_seq))
     }
 
     /// Gets an entity within a transaction.
@@ -48,14 +61,37 @@ impl EntityStore {
         self.txn_manager.get(txn, collection_id, entity_id)
     }
 
+    /// Gets an entity within a write transaction.
+    pub fn get_in_write_txn(
+        &self,
+        wtxn: &mut WriteTransaction<'_>,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+    ) -> CoreResult<Option<Vec<u8>>> {
+        self.txn_manager.get_write(wtxn, collection_id, entity_id)
+    }
+
     /// Checks if an entity exists.
     pub fn exists(&self, collection_id: CollectionId, entity_id: EntityId) -> CoreResult<bool> {
         Ok(self.get(collection_id, entity_id)?.is_some())
     }
 
-    /// Returns all entities in a collection.
+    /// Returns all entities in a collection (latest committed versions).
     pub fn list(&self, collection_id: CollectionId) -> CoreResult<Vec<(EntityId, Vec<u8>)>> {
-        let raw = self.segments.iter_collection(collection_id)?;
+        // Read at the current committed sequence for consistency
+        let snapshot_seq = self.txn_manager.committed_seq();
+        self.list_at_snapshot(collection_id, snapshot_seq)
+    }
+
+    /// Returns all entities in a collection at a specific snapshot.
+    pub fn list_at_snapshot(
+        &self,
+        collection_id: CollectionId,
+        snapshot_seq: SequenceNumber,
+    ) -> CoreResult<Vec<(EntityId, Vec<u8>)>> {
+        let raw = self
+            .segments
+            .iter_collection_at_snapshot(collection_id, Some(snapshot_seq))?;
         Ok(raw
             .into_iter()
             .map(|(id_bytes, payload)| (EntityId::from_bytes(id_bytes), payload))
@@ -72,9 +108,14 @@ impl EntityStore {
         self.segments.entity_count()
     }
 
-    /// Begins a new transaction.
+    /// Begins a new read-only transaction.
     pub fn begin(&self) -> CoreResult<Transaction> {
         self.txn_manager.begin()
+    }
+
+    /// Begins a new write transaction with exclusive lock.
+    pub fn begin_write(&self) -> CoreResult<WriteTransaction<'_>> {
+        self.txn_manager.begin_write()
     }
 
     /// Commits a transaction.
@@ -83,12 +124,46 @@ impl EntityStore {
         Ok(())
     }
 
+    /// Commits a write transaction.
+    pub fn commit_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<SequenceNumber> {
+        self.txn_manager.commit_write(wtxn)
+    }
+
     /// Aborts a transaction.
     pub fn abort(&self, txn: &mut Transaction) -> CoreResult<()> {
         self.txn_manager.abort(txn)
     }
 
-    /// Executes a function within a transaction.
+    /// Aborts a write transaction.
+    pub fn abort_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<()> {
+        self.txn_manager.abort_write(wtxn)
+    }
+
+    /// Executes a function within a write transaction.
+    ///
+    /// If the function returns `Ok`, the transaction is committed.
+    /// If it returns `Err`, the transaction is aborted.
+    ///
+    /// This ensures single-writer semantics - only one write transaction
+    /// can be active at a time.
+    pub fn write_transaction<F, T>(&self, f: F) -> CoreResult<T>
+    where
+        F: FnOnce(&mut WriteTransaction<'_>) -> CoreResult<T>,
+    {
+        let mut wtxn = self.begin_write()?;
+        match f(&mut wtxn) {
+            Ok(result) => {
+                self.commit_write(&mut wtxn)?;
+                Ok(result)
+            }
+            Err(e) => {
+                let _ = self.abort_write(&mut wtxn);
+                Err(e)
+            }
+        }
+    }
+
+    /// Executes a function within a transaction (legacy API).
     ///
     /// If the function returns `Ok`, the transaction is committed.
     /// If it returns `Err`, the transaction is aborted.

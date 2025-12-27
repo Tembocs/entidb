@@ -28,7 +28,7 @@ pub struct SegmentInfo {
     pub record_count: usize,
 }
 
-/// Entry in the segment index, tracking where to find an entity.
+/// Entry in the segment index, tracking where to find an entity version.
 #[derive(Debug, Clone, Copy)]
 struct IndexEntry {
     /// Segment ID containing this entity.
@@ -37,6 +37,75 @@ struct IndexEntry {
     offset: u64,
     /// Sequence number of this version.
     sequence: SequenceNumber,
+}
+
+/// Version chain for MVCC - stores multiple versions of an entity.
+/// Entries are kept sorted by sequence number in descending order (newest first).
+#[derive(Debug, Clone, Default)]
+struct VersionChain {
+    /// All versions, sorted by sequence descending (newest first).
+    versions: Vec<IndexEntry>,
+}
+
+impl VersionChain {
+    /// Creates a new empty version chain.
+    fn new() -> Self {
+        Self {
+            versions: Vec::new(),
+        }
+    }
+
+    /// Adds a new version to the chain, maintaining descending order by sequence.
+    fn add(&mut self, entry: IndexEntry) {
+        // Find insertion point to maintain descending order
+        let pos = self
+            .versions
+            .iter()
+            .position(|e| e.sequence < entry.sequence)
+            .unwrap_or(self.versions.len());
+        self.versions.insert(pos, entry);
+    }
+
+    /// Gets the version visible at the given snapshot sequence.
+    /// Returns the newest version where sequence <= max_sequence.
+    fn get_at(&self, max_sequence: SequenceNumber) -> Option<&IndexEntry> {
+        self.versions
+            .iter()
+            .find(|e| e.sequence <= max_sequence)
+    }
+
+    /// Gets the latest version (for reads without snapshot).
+    fn latest(&self) -> Option<&IndexEntry> {
+        self.versions.first()
+    }
+
+    /// Returns true if the chain has any versions.
+    fn is_empty(&self) -> bool {
+        self.versions.is_empty()
+    }
+
+    /// Returns the latest sequence number in this chain.
+    #[allow(dead_code)]
+    fn latest_sequence(&self) -> Option<SequenceNumber> {
+        self.versions.first().map(|e| e.sequence)
+    }
+
+    /// Removes versions older than min_sequence (for garbage collection).
+    /// Keeps at least one version (the latest).
+    #[allow(dead_code)]
+    fn prune_before(&mut self, min_sequence: SequenceNumber) {
+        if self.versions.len() <= 1 {
+            return;
+        }
+        // Keep versions that are >= min_sequence, but always keep at least the latest
+        let keep_count = self
+            .versions
+            .iter()
+            .take_while(|e| e.sequence >= min_sequence)
+            .count()
+            .max(1);
+        self.versions.truncate(keep_count);
+    }
 }
 
 /// Manages multiple segments and provides access to entity records.
@@ -85,9 +154,10 @@ pub struct SegmentManager {
     active_segment_id: RwLock<u64>,
     /// Maximum segment size before sealing.
     max_segment_size: u64,
-    /// In-memory index: (collection_id, entity_id) -> IndexEntry
+    /// MVCC index: (collection_id, entity_id) -> VersionChain
+    /// Each entity has a chain of versions for snapshot isolation.
     #[allow(clippy::type_complexity)]
-    index: RwLock<HashMap<(u32, [u8; 16]), IndexEntry>>,
+    index: RwLock<HashMap<(u32, [u8; 16]), VersionChain>>,
     /// Callback for when a segment is sealed.
     on_segment_sealed: RwLock<Option<Box<dyn Fn(u64) + Send + Sync>>>,
 }
@@ -367,16 +437,18 @@ impl SegmentManager {
             }
         }
 
-        // Update in-memory index
+        // Update MVCC index - add new version to the chain
         let key = (record.collection_id.as_u32(), record.entity_id);
-        self.index.write().insert(
-            key,
-            IndexEntry {
-                segment_id,
-                offset,
-                sequence: record.sequence,
-            },
-        );
+        let entry = IndexEntry {
+            segment_id,
+            offset,
+            sequence: record.sequence,
+        };
+        self.index
+            .write()
+            .entry(key)
+            .or_insert_with(VersionChain::new)
+            .add(entry);
 
         Ok((segment_id, offset))
     }
@@ -387,18 +459,49 @@ impl SegmentManager {
         Ok(offset)
     }
 
-    /// Gets an entity by collection and entity ID.
+    /// Gets an entity by collection and entity ID (latest version).
     ///
     /// Returns `None` if the entity doesn't exist or is deleted.
+    /// For snapshot isolation, use `get_at_snapshot` instead.
     pub fn get(
         &self,
         collection_id: CollectionId,
         entity_id: &[u8; 16],
     ) -> CoreResult<Option<Vec<u8>>> {
+        self.get_at_snapshot(collection_id, entity_id, None)
+    }
+
+    /// Gets an entity at a specific snapshot sequence.
+    ///
+    /// If `max_sequence` is `Some`, returns the newest version where
+    /// `version.sequence <= max_sequence`. This provides snapshot isolation.
+    ///
+    /// If `max_sequence` is `None`, returns the latest version.
+    ///
+    /// Returns `None` if:
+    /// - The entity doesn't exist
+    /// - The entity was deleted (tombstone)
+    /// - No version is visible at the given snapshot
+    pub fn get_at_snapshot(
+        &self,
+        collection_id: CollectionId,
+        entity_id: &[u8; 16],
+        max_sequence: Option<SequenceNumber>,
+    ) -> CoreResult<Option<Vec<u8>>> {
         let key = (collection_id.as_u32(), *entity_id);
         let index = self.index.read();
 
-        let Some(entry) = index.get(&key) else {
+        let Some(chain) = index.get(&key) else {
+            return Ok(None);
+        };
+
+        // Get the appropriate version based on snapshot
+        let entry = match max_sequence {
+            Some(seq) => chain.get_at(seq),
+            None => chain.latest(),
+        };
+
+        let Some(entry) = entry else {
             return Ok(None);
         };
 
@@ -495,13 +598,15 @@ impl SegmentManager {
         Ok(records)
     }
 
-    /// Rebuilds the in-memory index from all segment data.
+    /// Rebuilds the in-memory MVCC index from all segment data.
+    ///
+    /// This builds version chains for each entity, enabling snapshot isolation.
     pub fn rebuild_index(&self) -> CoreResult<()> {
         let segments = self.segments.read();
         let mut segment_ids: Vec<_> = segments.keys().copied().collect();
         segment_ids.sort();
 
-        let mut new_index = HashMap::new();
+        let mut new_index: HashMap<(u32, [u8; 16]), VersionChain> = HashMap::new();
 
         for seg_id in segment_ids {
             let backend = segments
@@ -531,21 +636,16 @@ impl SegmentManager {
 
                 let key = (record.collection_id.as_u32(), record.entity_id);
 
-                // Only update if this record has a higher sequence number
-                let should_update = new_index
-                    .get(&key)
-                    .map_or(true, |entry: &IndexEntry| record.sequence > entry.sequence);
-
-                if should_update {
-                    new_index.insert(
-                        key,
-                        IndexEntry {
-                            segment_id: seg_id,
-                            offset,
-                            sequence: record.sequence,
-                        },
-                    );
-                }
+                // Add this version to the chain
+                let entry = IndexEntry {
+                    segment_id: seg_id,
+                    offset,
+                    sequence: record.sequence,
+                };
+                new_index
+                    .entry(key)
+                    .or_insert_with(VersionChain::new)
+                    .add(entry);
 
                 offset += record_len as u64;
             }
@@ -601,21 +701,49 @@ impl SegmentManager {
     /// Checks if an entity exists (including tombstones in index).
     pub fn contains(&self, collection_id: CollectionId, entity_id: &[u8; 16]) -> bool {
         let key = (collection_id.as_u32(), *entity_id);
-        self.index.read().contains_key(&key)
+        let index = self.index.read();
+        index
+            .get(&key)
+            .map(|chain| !chain.is_empty())
+            .unwrap_or(false)
     }
 
-    /// Iterates over all live entities in a collection.
+    /// Iterates over all live entities in a collection (latest versions).
+    ///
+    /// For snapshot-isolated iteration, use `iter_collection_at_snapshot`.
     pub fn iter_collection(
         &self,
         collection_id: CollectionId,
     ) -> CoreResult<Vec<([u8; 16], Vec<u8>)>> {
+        self.iter_collection_at_snapshot(collection_id, None)
+    }
+
+    /// Iterates over all live entities in a collection at a specific snapshot.
+    ///
+    /// If `max_sequence` is `Some`, returns versions visible at that snapshot.
+    /// If `max_sequence` is `None`, returns latest versions.
+    pub fn iter_collection_at_snapshot(
+        &self,
+        collection_id: CollectionId,
+        max_sequence: Option<SequenceNumber>,
+    ) -> CoreResult<Vec<([u8; 16], Vec<u8>)>> {
         let index = self.index.read();
         let mut results = Vec::new();
 
-        for (&(col_id, entity_id), entry) in index.iter() {
+        for (&(col_id, entity_id), chain) in index.iter() {
             if col_id != collection_id.as_u32() {
                 continue;
             }
+
+            // Get the appropriate version based on snapshot
+            let entry = match max_sequence {
+                Some(seq) => chain.get_at(seq),
+                None => chain.latest(),
+            };
+
+            let Some(entry) = entry else {
+                continue;
+            };
 
             let record = self.read_at(entry.segment_id, entry.offset)?;
             if !record.is_tombstone() {
