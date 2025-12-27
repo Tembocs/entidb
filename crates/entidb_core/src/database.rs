@@ -12,11 +12,11 @@ use crate::index::{
 use crate::manifest::Manifest;
 use crate::segment::{SegmentManager, SegmentRecord};
 use crate::transaction::{Transaction, TransactionManager};
-use crate::types::{CollectionId, SequenceNumber, TransactionId};
+use crate::types::{CollectionId, SequenceNumber};
 use crate::wal::{WalManager, WalRecord};
 use entidb_storage::StorageBackend;
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 #[cfg(feature = "std")]
 use std::path::Path;
 use std::sync::Arc;
@@ -380,96 +380,59 @@ impl Database {
 
     /// Recovers database state from WAL with an existing manifest.
     ///
+    /// Uses streaming two-pass recovery for memory efficiency:
+    /// - Pass 1: Identify committed transactions (O(txn count) memory)
+    /// - Pass 2: Replay operations from committed transactions (O(1) memory per record)
+    ///
     /// Returns (manifest, next_txid, next_seq, committed_seq).
     fn recover_with_manifest(
         wal: &WalManager,
         segments: &SegmentManager,
         manifest: Manifest,
     ) -> CoreResult<(Manifest, u64, u64, u64)> {
-        let records = wal.read_all()?;
-
-        // Track transaction states
-        let mut active_txns: HashMap<TransactionId, Vec<WalRecord>> = HashMap::new();
-        let mut committed_txns: HashSet<TransactionId> = HashSet::new();
-        let mut max_txid = 0u64;
+        use crate::wal::StreamingRecovery;
         
         // Start with manifest's last_checkpoint if available (post-checkpoint recovery)
         // This is critical for MVCC: if WAL was cleared after checkpoint, we need
         // to know the committed_seq from manifest to read segment data correctly.
         let checkpoint_seq = manifest.last_checkpoint.map(|s| s.as_u64()).unwrap_or(0);
-        let mut max_seq = checkpoint_seq;
-        let mut committed_seq = checkpoint_seq;
-
-        // First pass: identify committed transactions
-        for (_, record) in &records {
-            if let Some(txid) = record.txid() {
-                max_txid = max_txid.max(txid.as_u64());
-            }
-
-            match record {
-                WalRecord::Begin { txid } => {
-                    active_txns.insert(*txid, Vec::new());
-                }
-                WalRecord::Put { txid, .. } | WalRecord::Delete { txid, .. } => {
-                    if let Some(ops) = active_txns.get_mut(txid) {
-                        ops.push(record.clone());
-                    }
-                }
-                WalRecord::Commit { txid, sequence } => {
-                    committed_txns.insert(*txid);
-                    max_seq = max_seq.max(sequence.as_u64());
-                    committed_seq = committed_seq.max(sequence.as_u64());
-                }
-                WalRecord::Abort { txid } => {
-                    active_txns.remove(txid);
-                }
-                WalRecord::Checkpoint { sequence } => {
-                    max_seq = max_seq.max(sequence.as_u64());
-                }
-            }
-        }
-
-        // Second pass: replay committed transactions to segments
-        for (txid, ops) in &active_txns {
-            if !committed_txns.contains(txid) {
-                continue; // Skip uncommitted transactions
-            }
-
-            // Find the commit record to get sequence number
-            let commit_seq = records
-                .iter()
-                .find_map(|(_, r)| match r {
-                    WalRecord::Commit { txid: t, sequence } if t == txid => Some(*sequence),
-                    _ => None,
-                })
-                .unwrap_or(SequenceNumber::new(0));
-
-            for op in ops {
-                match op {
-                    WalRecord::Put {
-                        collection_id,
-                        entity_id,
-                        after_bytes,
-                        ..
-                    } => {
-                        let record = SegmentRecord::put(
+        
+        // === PASS 1: Streaming scan to identify committed transactions ===
+        // Memory usage: O(number of committed transactions), not O(WAL size)
+        let mut recovery = StreamingRecovery::new(checkpoint_seq);
+        recovery.scan_committed(wal.iter()?)?;
+        
+        // === PASS 2: Streaming replay of committed operations ===
+        // Memory usage: O(1) per record
+        for result in wal.iter()? {
+            let (_, record) = result?;
+            
+            match &record {
+                WalRecord::Put { txid, collection_id, entity_id, after_bytes, .. } => {
+                    // Only replay if this transaction was committed
+                    if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
+                        let segment_record = SegmentRecord::put(
                             *collection_id,
                             *entity_id,
                             after_bytes.clone(),
                             commit_seq,
                         );
-                        segments.append(&record)?;
+                        segments.append(&segment_record)?;
                     }
-                    WalRecord::Delete {
-                        collection_id,
-                        entity_id,
-                        ..
-                    } => {
-                        let record =
-                            SegmentRecord::tombstone(*collection_id, *entity_id, commit_seq);
-                        segments.append(&record)?;
+                }
+                WalRecord::Delete { txid, collection_id, entity_id, .. } => {
+                    // Only replay if this transaction was committed
+                    if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
+                        let segment_record = SegmentRecord::tombstone(
+                            *collection_id,
+                            *entity_id,
+                            commit_seq,
+                        );
+                        segments.append(&segment_record)?;
                     }
-                    _ => {}
+                }
+                _ => {
+                    // BEGIN, COMMIT, ABORT, CHECKPOINT don't need replay to segments
                 }
             }
         }
@@ -477,7 +440,7 @@ impl Database {
         // Rebuild segment index
         segments.rebuild_index()?;
 
-        Ok((manifest, max_txid + 1, max_seq + 1, committed_seq))
+        Ok((manifest, recovery.next_txid(), recovery.next_seq(), recovery.committed_seq()))
     }
 
     /// Begins a new transaction.

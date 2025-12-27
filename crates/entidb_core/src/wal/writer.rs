@@ -1,7 +1,7 @@
 //! WAL writer and reader.
 
 use crate::error::{CoreError, CoreResult};
-use crate::wal::record::{compute_crc32, WalRecord, WalRecordType, WAL_MAGIC, WAL_VERSION};
+use crate::wal::record::{compute_crc32, WalRecord, WAL_MAGIC, WAL_VERSION};
 use entidb_storage::StorageBackend;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -86,106 +86,77 @@ impl WalManager {
         Ok(self.backend.lock().size()?)
     }
 
-    /// Reads all records from the WAL.
+    /// Returns a streaming iterator over WAL records.
     ///
-    /// This is used during recovery to replay committed transactions.
-    pub fn read_all(&self) -> CoreResult<Vec<(u64, WalRecord)>> {
+    /// This is the preferred method for reading WAL records as it uses
+    /// O(1) memory regardless of WAL size. Records are read one-by-one
+    /// from the storage backend.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// for result in wal.iter()? {
+    ///     let (offset, record) = result?;
+    ///     // Process record...
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot be accessed.
+    pub fn iter(&self) -> CoreResult<super::WalRecordIterator<'_>> {
         let backend = self.backend.lock();
-        let size = backend.size()?;
-
-        let mut records = Vec::new();
-        let mut offset = 0u64;
-
-        while offset < size {
-            // Try to read header
-            if offset + HEADER_SIZE as u64 > size {
-                // Incomplete header - truncated WAL
-                break;
-            }
-
-            let header = backend.read_at(offset, HEADER_SIZE)?;
-
-            // Validate magic
-            if header[0..4] != WAL_MAGIC {
-                return Err(CoreError::wal_corruption(format!(
-                    "invalid magic at offset {offset}"
-                )));
-            }
-
-            // Check version
-            let version = u16::from_le_bytes([header[4], header[5]]);
-            if version > WAL_VERSION {
-                return Err(CoreError::wal_corruption(format!(
-                    "unsupported version {version} at offset {offset}"
-                )));
-            }
-
-            // Record type
-            let type_byte = header[6];
-            let record_type = WalRecordType::from_byte(type_byte).ok_or_else(|| {
-                CoreError::wal_corruption(format!(
-                    "unknown record type {type_byte} at offset {offset}"
-                ))
-            })?;
-
-            // Payload length
-            let payload_len =
-                u32::from_le_bytes([header[7], header[8], header[9], header[10]]) as usize;
-
-            // Check if we have the full record
-            let total_len = HEADER_SIZE + payload_len + CRC_SIZE;
-            if offset + total_len as u64 > size {
-                // Incomplete record - truncated WAL
-                break;
-            }
-
-            // Read payload and CRC
-            let rest = backend.read_at(offset + HEADER_SIZE as u64, payload_len + CRC_SIZE)?;
-            let payload = &rest[..payload_len];
-            let stored_crc = u32::from_le_bytes([
-                rest[payload_len],
-                rest[payload_len + 1],
-                rest[payload_len + 2],
-                rest[payload_len + 3],
-            ]);
-
-            // Verify CRC
-            let mut crc_data = Vec::with_capacity(HEADER_SIZE + payload_len);
-            crc_data.extend_from_slice(&header);
-            crc_data.extend_from_slice(payload);
-            let computed_crc = compute_crc32(&crc_data);
-
-            if stored_crc != computed_crc {
-                return Err(CoreError::ChecksumMismatch {
-                    expected: stored_crc,
-                    actual: computed_crc,
-                });
-            }
-
-            // Decode record
-            let record = WalRecord::decode_payload(record_type, payload)?;
-            records.push((offset, record));
-
-            offset += total_len as u64;
-        }
-
-        Ok(records)
+        super::WalRecordIterator::new(backend, 0)
     }
 
-    /// Iterates over records, calling the callback for each.
+    /// Iterates over records with a streaming callback.
     ///
     /// This is more memory-efficient than `read_all` for large WALs.
-    pub fn for_each<F>(&self, mut callback: F) -> CoreResult<()>
+    /// The callback receives each record and returns `Ok(true)` to continue
+    /// or `Ok(false)` to stop iteration early.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - Function called for each record. Returns `Ok(true)` to
+    ///   continue, `Ok(false)` to stop, or `Err(...)` to abort with error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading fails or the callback returns an error.
+    pub fn for_each_streaming<F>(&self, mut callback: F) -> CoreResult<()>
     where
         F: FnMut(u64, WalRecord) -> CoreResult<bool>,
     {
-        let records = self.read_all()?;
-        for (offset, record) in records {
+        for result in self.iter()? {
+            let (offset, record) = result?;
             if !callback(offset, record)? {
                 break;
             }
         }
         Ok(())
+    }
+
+    /// Reads all records from the WAL.
+    ///
+    /// **Note:** For large WALs, prefer using `iter()` which streams records
+    /// with O(1) memory usage.
+    ///
+    /// This method is retained for backwards compatibility and for cases where
+    /// having all records in memory is acceptable (small WALs, testing).
+    pub fn read_all(&self) -> CoreResult<Vec<(u64, WalRecord)>> {
+        self.iter()?.collect()
+    }
+
+    /// Iterates over records, calling the callback for each.
+    ///
+    /// **Deprecated:** Use `for_each_streaming` instead for true streaming behavior.
+    /// This method is retained for backwards compatibility.
+    #[deprecated(since = "0.1.0", note = "Use for_each_streaming() for true streaming behavior")]
+    pub fn for_each<F>(&self, callback: F) -> CoreResult<()>
+    where
+        F: FnMut(u64, WalRecord) -> CoreResult<bool>,
+    {
+        self.for_each_streaming(callback)
     }
 
     /// Truncates the WAL to the specified offset.
@@ -370,7 +341,7 @@ mod tests {
         }
 
         let mut count = 0;
-        wal.for_each(|_, _| {
+        wal.for_each_streaming(|_, _| {
             count += 1;
             Ok(true)
         })
@@ -391,7 +362,7 @@ mod tests {
         }
 
         let mut count = 0;
-        wal.for_each(|_, _| {
+        wal.for_each_streaming(|_, _| {
             count += 1;
             Ok(count < 3) // Stop after 3
         })
