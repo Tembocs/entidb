@@ -193,16 +193,50 @@ impl Database {
 
         // Open storage backends
         let wal_backend = FileBackend::open_with_create_dirs(&dir.wal_path())?;
-        let segment_backend = FileBackend::open_with_create_dirs(&dir.segment_path())?;
+
+        // Create segments directory if it doesn't exist
+        let segments_dir = dir.segments_dir();
+        std::fs::create_dir_all(&segments_dir)?;
+
+        // Discover existing segment files (for recovery)
+        let mut existing_segment_ids: Vec<u64> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&segments_dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                // Parse segment file names like "seg-000001.dat"
+                if name.starts_with("seg-") && name.ends_with(".dat") {
+                    if let Ok(id) = name[4..10].parse::<u64>() {
+                        existing_segment_ids.push(id);
+                    }
+                }
+            }
+        }
+        existing_segment_ids.sort();
+
+        // Create segment manager with file-backed factory for proper rotation
+        let segments_dir_clone = segments_dir.clone();
+        let segment_factory = move |segment_id: u64| -> Box<dyn StorageBackend> {
+            let segment_path = segments_dir_clone.join(format!("seg-{:06}.dat", segment_id));
+            match FileBackend::open_with_create_dirs(&segment_path) {
+                Ok(backend) => Box::new(backend),
+                Err(e) => {
+                    // Log error and fall back to in-memory (should not happen in normal operation)
+                    eprintln!("Warning: Failed to create segment file {:?}: {}", segment_path, e);
+                    Box::new(entidb_storage::InMemoryBackend::new())
+                }
+            }
+        };
 
         // Create managers
         let wal = Arc::new(WalManager::new(
             Box::new(wal_backend),
             config.sync_on_commit,
         ));
-        let segments = Arc::new(SegmentManager::new(
-            Box::new(segment_backend),
+        let segments = Arc::new(SegmentManager::with_factory_and_existing(
+            segment_factory,
             config.max_segment_size,
+            existing_segment_ids,
         ));
 
         // Recover from WAL (use existing manifest as base)

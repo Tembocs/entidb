@@ -95,6 +95,9 @@ pub struct SegmentManager {
 impl SegmentManager {
     /// Creates a new segment manager with a factory function.
     ///
+    /// This will start with segment ID 1. For recovering existing segments
+    /// from disk, use [`with_factory_and_existing`] instead.
+    ///
     /// # Arguments
     ///
     /// * `backend_factory` - Function that creates a storage backend for a segment ID
@@ -126,6 +129,67 @@ impl SegmentManager {
             segments: RwLock::new(segments),
             segment_info: RwLock::new(segment_info),
             active_segment_id: RwLock::new(initial_id),
+            max_segment_size,
+            index: RwLock::new(HashMap::new()),
+            on_segment_sealed: RwLock::new(None),
+        }
+    }
+
+    /// Creates a segment manager with a factory and loads existing segment files.
+    ///
+    /// This variant is used for recovery scenarios where segment files already
+    /// exist on disk. It scans the given existing segment IDs, loads them, and
+    /// sets the highest ID as the active segment.
+    ///
+    /// # Arguments
+    ///
+    /// * `backend_factory` - Function that creates a storage backend for a segment ID
+    /// * `max_segment_size` - Maximum size before auto-sealing
+    /// * `existing_segment_ids` - Sorted list of existing segment IDs to load
+    pub fn with_factory_and_existing<F>(
+        backend_factory: F,
+        max_segment_size: u64,
+        existing_segment_ids: Vec<u64>,
+    ) -> Self
+    where
+        F: Fn(u64) -> Box<dyn StorageBackend> + Send + Sync + 'static,
+    {
+        if existing_segment_ids.is_empty() {
+            // No existing segments, start fresh
+            return Self::with_factory(backend_factory, max_segment_size);
+        }
+
+        let mut segments = HashMap::new();
+        let mut segment_info = HashMap::new();
+        let mut max_id = 0u64;
+
+        // Load all existing segments
+        for &segment_id in &existing_segment_ids {
+            let backend = backend_factory(segment_id);
+            let size = backend.size().unwrap_or(0);
+
+            // All existing segments except the last one are considered sealed
+            let is_last = segment_id == *existing_segment_ids.last().unwrap();
+
+            segments.insert(segment_id, Arc::new(RwLock::new(backend)));
+            segment_info.insert(
+                segment_id,
+                SegmentInfo {
+                    id: segment_id,
+                    sealed: !is_last,
+                    size,
+                    record_count: 0, // Will be updated during index rebuild
+                },
+            );
+
+            max_id = max_id.max(segment_id);
+        }
+
+        Self {
+            backend_factory: Box::new(backend_factory),
+            segments: RwLock::new(segments),
+            segment_info: RwLock::new(segment_info),
+            active_segment_id: RwLock::new(max_id),
             max_segment_size,
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
@@ -496,6 +560,19 @@ impl SegmentManager {
         let segments = self.segments.read();
         for backend in segments.values() {
             backend.write().flush()?;
+        }
+        Ok(())
+    }
+
+    /// Syncs all segments to durable storage.
+    ///
+    /// This calls `sync_all()` on all segment backends, ensuring data is
+    /// persisted to disk. This is more expensive than `flush()` but provides
+    /// crash safety guarantees.
+    pub fn sync(&self) -> CoreResult<()> {
+        let segments = self.segments.read();
+        for backend in segments.values() {
+            backend.write().sync()?;
         }
         Ok(())
     }

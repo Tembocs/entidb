@@ -222,14 +222,15 @@ impl TransactionManager {
     /// Creates a checkpoint.
     ///
     /// A checkpoint:
-    /// 1. Ensures all segments are flushed
+    /// 1. Ensures all segments are synced to durable storage
     /// 2. Writes a checkpoint record to WAL
     /// 3. Truncates the WAL (all committed data is in segments)
     ///
     /// After checkpoint, WAL space is reclaimed.
     pub fn checkpoint(&self) -> CoreResult<()> {
-        // First, flush segments to ensure all committed data is durable
-        self.segments.flush()?;
+        // First, sync segments to ensure all committed data is durable on disk
+        // Using sync() instead of flush() to guarantee data survives power loss
+        self.segments.sync()?;
 
         let sequence = self.committed_seq();
         

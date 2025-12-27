@@ -20,8 +20,8 @@
 //! harness.test_crash_before_commit();
 //! ```
 
-use entidb_core::{Config, Database, EntityId};
-use entidb_storage::{FileBackend, InMemoryBackend, StorageBackend};
+use entidb_core::{Database, EntityId};
+use entidb_storage::{InMemoryBackend, StorageBackend};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -212,9 +212,14 @@ impl CrashRecoveryHarness {
 
     /// Creates a new harness with a temporary directory.
     pub fn with_temp_dir() -> std::io::Result<Self> {
+        // Use process ID and a random suffix to ensure unique paths across parallel tests
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let temp_dir = std::env::temp_dir()
             .join("entidb_crash_test")
-            .join(format!("test_{}", std::process::id()));
+            .join(format!("test_{}_{}", std::process::id(), unique_id));
         std::fs::create_dir_all(&temp_dir)?;
         Ok(Self::new(temp_dir))
     }
@@ -233,32 +238,14 @@ impl CrashRecoveryHarness {
         let _ = std::fs::remove_dir_all(&self.db_path);
         std::fs::create_dir_all(&self.db_path)?;
 
-        let wal_path = self.db_path.join("wal.log");
-        let segment_path = self.db_path.join("segments.dat");
-
-        let wal_backend = FileBackend::open_with_create_dirs(&wal_path)?;
-        let segment_backend = FileBackend::open_with_create_dirs(&segment_path)?;
-
-        Database::open_with_backends(
-            Config::default(),
-            Box::new(wal_backend),
-            Box::new(segment_backend),
-        )
+        // Use path-based open for proper segment rotation support
+        Database::open(&self.db_path)
     }
 
     /// Reopens the database for recovery testing.
     fn reopen_db(&self) -> Result<Database, entidb_core::CoreError> {
-        let wal_path = self.db_path.join("wal.log");
-        let segment_path = self.db_path.join("segments.dat");
-
-        let wal_backend = FileBackend::open(&wal_path)?;
-        let segment_backend = FileBackend::open(&segment_path)?;
-
-        Database::open_with_backends(
-            Config::default(),
-            Box::new(wal_backend),
-            Box::new(segment_backend),
-        )
+        // Use path-based open for proper segment rotation support
+        Database::open(&self.db_path)
     }
 
     /// Tests that committed data survives a crash.
@@ -283,7 +270,9 @@ impl CrashRecoveryHarness {
             db.checkpoint()?;
 
             // Close the database (simulates crash after commit)
+            // Must drop to release the LOCK file before reopening
             db.close()?;
+            drop(db);
 
             // Reopen and verify
             let db = self.reopen_db()?;
@@ -299,6 +288,7 @@ impl CrashRecoveryHarness {
             }
 
             db.close()?;
+            drop(db);
 
             if found == 10 {
                 Ok(CrashRecoveryResult::pass(
@@ -350,6 +340,7 @@ impl CrashRecoveryHarness {
             // we'll test by closing without committing and verify only committed data exists
 
             db.close()?;
+            drop(db);
 
             // Reopen and verify
             let db = self.reopen_db()?;
@@ -358,6 +349,7 @@ impl CrashRecoveryHarness {
             let committed_exists = db.get(collection, committed_id)?.is_some();
 
             db.close()?;
+            drop(db);
 
             if committed_exists {
                 Ok(CrashRecoveryResult::pass(
@@ -411,6 +403,7 @@ impl CrashRecoveryHarness {
 
             // Close (simulate crash after compaction)
             db.close()?;
+            drop(db);
 
             // Reopen and verify latest version is present
             let db = self.reopen_db()?;
@@ -419,6 +412,7 @@ impl CrashRecoveryHarness {
             let data = db.get(collection, id)?;
 
             db.close()?;
+            drop(db);
 
             match data {
                 Some(d) if d == vec![4u8; 50] => {
@@ -475,6 +469,7 @@ impl CrashRecoveryHarness {
 
             // Close without checkpoint (WAL contains the data)
             db.close()?;
+            drop(db);
 
             // Reopen - should replay WAL
             let db = self.reopen_db()?;
@@ -490,6 +485,7 @@ impl CrashRecoveryHarness {
             }
 
             db.close()?;
+            drop(db);
 
             if found == 5 {
                 Ok(CrashRecoveryResult::pass(
@@ -547,6 +543,7 @@ impl CrashRecoveryHarness {
 
             // Close without checkpoint
             db.close()?;
+            drop(db);
 
             // Reopen and verify all data
             let db = self.reopen_db()?;
@@ -571,6 +568,7 @@ impl CrashRecoveryHarness {
             }
 
             db.close()?;
+            drop(db);
 
             let total_found = segment_found + wal_found;
             if total_found == 6 {
@@ -628,12 +626,14 @@ impl CrashRecoveryHarness {
 
             // Close and reopen
             db.close()?;
+            drop(db);
 
             let db = self.reopen_db()?;
             let collection = db.collection("test");
 
             let exists = db.get(collection, id)?.is_some();
             db.close()?;
+            drop(db);
 
             if !exists {
                 Ok(CrashRecoveryResult::pass(
