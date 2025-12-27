@@ -29,9 +29,9 @@
 - Indexes are not persisted or registered in the manifest, which contradicts the architecture and index invariants.
 - Evidence: `docs/access_paths.md:17`, `crates/entidb_core/src/database.rs:947`, `crates/entidb_core/src/database.rs:1099`, `crates/entidb_core/src/manifest.rs:18`.
 
-6) Change feed emits incorrect operation types.
-- Updates are always emitted as inserts, so consumers cannot distinguish inserts vs updates. This breaks sync protocol expectations for op_type accuracy.
-- Evidence: `crates/entidb_core/src/database.rs:471`.
+6) ~~Change feed emits incorrect operation types.~~ **RESOLVED**
+- ~~Updates are always emitted as inserts, so consumers cannot distinguish inserts vs updates. This breaks sync protocol expectations for op_type accuracy.~~
+- **Fix:** The `PendingWrite::Put` variant now includes an `is_update: Option<bool>` field. At commit time, if `is_update` is `None`, the database checks entity existence at the transaction's snapshot sequence to determine the correct operation type. New entities emit `ChangeType::Insert`, existing entities emit `ChangeType::Update`, and deletes emit `ChangeType::Delete`. Added `put_with_op_type()` for callers who already know the operation type (e.g., sync layer). Comprehensive tests added to verify correct behavior.
 
 7) Compaction scans all segments, including the active segment, and does not coordinate with writers.
 - The comment says sealed-only, but the implementation scans all segments and then replaces sealed segments. This can duplicate active data and race with ongoing writes.
@@ -71,7 +71,7 @@
 - Clear architectural docs and acceptance criteria are present and detailed.
 - WAL record encoding and CRC checks are implemented and tested.
 - Segment compaction logic is deterministic and well-structured at the record level.
-- The change feed API shape matches sync needs, even though op types need fixing.
+- The change feed API correctly emits Insert/Update/Delete operation types with comprehensive test coverage.
 
 ## Summary
 

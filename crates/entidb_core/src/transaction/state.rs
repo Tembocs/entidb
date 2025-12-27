@@ -24,6 +24,14 @@ pub enum PendingWrite {
     Put {
         /// Entity payload (canonical CBOR bytes).
         payload: Vec<u8>,
+        /// Whether this is an update (entity existed before this transaction).
+        ///
+        /// - `Some(true)` = entity existed at transaction snapshot → Update
+        /// - `Some(false)` = entity did not exist at transaction snapshot → Insert
+        /// - `None` = not yet determined (will be resolved at commit time)
+        ///
+        /// This field is used by the change feed to emit the correct operation type.
+        is_update: Option<bool>,
     },
     /// Delete an entity.
     Delete,
@@ -101,6 +109,20 @@ impl<'a> WriteTransaction<'a> {
         payload: Vec<u8>,
     ) -> CoreResult<()> {
         self.inner.put(collection_id, entity_id, payload)
+    }
+
+    /// Records a put operation with a known operation type.
+    ///
+    /// Use this when you already know whether this is an insert or update.
+    pub fn put_with_op_type(
+        &mut self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+        payload: Vec<u8>,
+        is_update: bool,
+    ) -> CoreResult<()> {
+        self.inner
+            .put_with_op_type(collection_id, entity_id, payload, is_update)
     }
 
     /// Records a delete operation.
@@ -195,6 +217,9 @@ impl Transaction {
     }
 
     /// Records a put operation.
+    ///
+    /// The `is_update` flag will be determined at commit time by checking
+    /// whether the entity existed at the transaction's snapshot.
     pub fn put(
         &mut self,
         collection_id: CollectionId,
@@ -202,8 +227,35 @@ impl Transaction {
         payload: Vec<u8>,
     ) -> CoreResult<()> {
         self.ensure_active()?;
-        self.writes
-            .insert((collection_id, entity_id), PendingWrite::Put { payload });
+        self.writes.insert(
+            (collection_id, entity_id),
+            PendingWrite::Put {
+                payload,
+                is_update: None, // Will be resolved at commit time
+            },
+        );
+        Ok(())
+    }
+
+    /// Records a put operation with a known operation type.
+    ///
+    /// Use this when you already know whether this is an insert or update.
+    /// This avoids the need to check entity existence at commit time.
+    pub fn put_with_op_type(
+        &mut self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+        payload: Vec<u8>,
+        is_update: bool,
+    ) -> CoreResult<()> {
+        self.ensure_active()?;
+        self.writes.insert(
+            (collection_id, entity_id),
+            PendingWrite::Put {
+                payload,
+                is_update: Some(is_update),
+            },
+        );
         Ok(())
     }
 
@@ -332,7 +384,7 @@ mod tests {
         txn.put(collection, entity, vec![2]).unwrap();
 
         assert_eq!(txn.write_count(), 1);
-        if let Some(PendingWrite::Put { payload }) = txn.get_pending_write(collection, entity) {
+        if let Some(PendingWrite::Put { payload, .. }) = txn.get_pending_write(collection, entity) {
             assert_eq!(payload, &vec![2]);
         } else {
             panic!("expected Put");

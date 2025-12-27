@@ -128,7 +128,7 @@ impl<T: EntityCodec> Collection<T> {
         // First check pending writes in transaction
         if let Some(pending) = txn.get_pending_write(self.collection_id, id) {
             match pending {
-                PendingWrite::Put { payload } => {
+                PendingWrite::Put { payload, .. } => {
                     return Ok(Some(T::decode(id, payload)?));
                 }
                 PendingWrite::Delete => {

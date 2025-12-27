@@ -505,6 +505,9 @@ impl Database {
     pub fn commit(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
         
+        // Capture snapshot sequence for existence checks
+        let snapshot_seq = txn.snapshot_seq();
+        
         // Collect pending writes before commit (they're consumed during commit)
         let pending_writes: Vec<_> = txn.pending_writes()
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
@@ -519,16 +522,39 @@ impl Database {
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload } => {
+                crate::transaction::PendingWrite::Put { payload, is_update } => {
                     // Track bytes written
                     self.stats.record_write(payload.len() as u64);
-                    // Determine if this is insert or update (for now, always use insert semantics)
-                    crate::change_feed::ChangeEvent::insert(
-                        sequence.as_u64(),
-                        collection_id.as_u32(),
-                        *entity_id.as_bytes(),
-                        payload,
-                    )
+                    
+                    // Determine if this is an insert or update
+                    let is_update = match is_update {
+                        Some(known) => known,
+                        None => {
+                            // Check if entity existed at the transaction's snapshot
+                            // This lookup is at the snapshot sequence, so it shows
+                            // what existed before any writes in this transaction
+                            self.entity_store
+                                .get_at_snapshot(collection_id, entity_id, snapshot_seq)
+                                .unwrap_or(None)
+                                .is_some()
+                        }
+                    };
+                    
+                    if is_update {
+                        crate::change_feed::ChangeEvent::update(
+                            sequence.as_u64(),
+                            collection_id.as_u32(),
+                            *entity_id.as_bytes(),
+                            payload,
+                        )
+                    } else {
+                        crate::change_feed::ChangeEvent::insert(
+                            sequence.as_u64(),
+                            collection_id.as_u32(),
+                            *entity_id.as_bytes(),
+                            payload,
+                        )
+                    }
                 }
                 crate::transaction::PendingWrite::Delete => {
                     self.stats.record_delete();
@@ -555,6 +581,9 @@ impl Database {
     ) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
         
+        // Capture snapshot sequence for existence checks
+        let snapshot_seq = wtxn.snapshot_seq();
+        
         // Collect pending writes before commit
         let pending_writes: Vec<_> = wtxn.inner().pending_writes()
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
@@ -569,14 +598,36 @@ impl Database {
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload } => {
+                crate::transaction::PendingWrite::Put { payload, is_update } => {
                     self.stats.record_write(payload.len() as u64);
-                    crate::change_feed::ChangeEvent::insert(
-                        sequence.as_u64(),
-                        collection_id.as_u32(),
-                        *entity_id.as_bytes(),
-                        payload,
-                    )
+                    
+                    // Determine if this is an insert or update
+                    let is_update = match is_update {
+                        Some(known) => known,
+                        None => {
+                            // Check if entity existed at the transaction's snapshot
+                            self.entity_store
+                                .get_at_snapshot(collection_id, entity_id, snapshot_seq)
+                                .unwrap_or(None)
+                                .is_some()
+                        }
+                    };
+                    
+                    if is_update {
+                        crate::change_feed::ChangeEvent::update(
+                            sequence.as_u64(),
+                            collection_id.as_u32(),
+                            *entity_id.as_bytes(),
+                            payload,
+                        )
+                    } else {
+                        crate::change_feed::ChangeEvent::insert(
+                            sequence.as_u64(),
+                            collection_id.as_u32(),
+                            *entity_id.as_bytes(),
+                            payload,
+                        )
+                    }
                 }
                 crate::transaction::PendingWrite::Delete => {
                     self.stats.record_delete();
@@ -3245,5 +3296,253 @@ mod observability_tests {
         let results = db.fts_search(collection, "content", "unique50").unwrap();
         assert_eq!(results.len(), 1);
         assert!(results.contains(&entities[50]));
+    }
+
+    // ==========================================================================
+    // Change Feed Operation Type Tests
+    // ==========================================================================
+    // These tests verify that the change feed correctly emits Insert vs Update
+    // event types based on whether an entity existed before the transaction.
+
+    #[test]
+    fn change_feed_insert_for_new_entity() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // Subscribe before making changes
+        let rx = db.subscribe();
+
+        // Insert a new entity
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![1, 2, 3])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Verify the event is Insert (not Update)
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Insert);
+        assert_eq!(event.entity_id, *entity.as_bytes());
+        assert_eq!(event.payload, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn change_feed_update_for_existing_entity() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // First, insert the entity
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![1])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Subscribe AFTER the first insert
+        let rx = db.subscribe();
+
+        // Update the existing entity
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![2, 3, 4])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Verify the event is Update (not Insert)
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Update);
+        assert_eq!(event.entity_id, *entity.as_bytes());
+        assert_eq!(event.payload, Some(vec![2, 3, 4]));
+    }
+
+    #[test]
+    fn change_feed_delete_for_existing_entity() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // First, insert the entity
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![1])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Subscribe AFTER the insert
+        let rx = db.subscribe();
+
+        // Delete the entity
+        db.transaction(|txn| {
+            txn.delete(collection, entity)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Verify the event is Delete
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Delete);
+        assert_eq!(event.entity_id, *entity.as_bytes());
+        assert_eq!(event.payload, None);
+    }
+
+    #[test]
+    fn change_feed_multiple_ops_in_single_transaction() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        // Pre-insert entity2 so it can be updated
+        db.transaction(|txn| {
+            txn.put(collection, entity2, vec![1])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Subscribe AFTER pre-insert
+        let rx = db.subscribe();
+
+        // Single transaction with insert and update
+        db.transaction(|txn| {
+            txn.put(collection, entity1, vec![10])?; // New entity - Insert
+            txn.put(collection, entity2, vec![20])?; // Existing entity - Update
+            Ok(())
+        })
+        .unwrap();
+
+        // Collect both events (order may vary due to HashMap iteration)
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            events.push(rx.recv_timeout(Duration::from_millis(100)).unwrap());
+        }
+
+        // Find the insert event
+        let insert_event = events
+            .iter()
+            .find(|e| e.entity_id == *entity1.as_bytes())
+            .expect("should find insert event");
+        assert_eq!(insert_event.change_type, ChangeType::Insert);
+        assert_eq!(insert_event.payload, Some(vec![10]));
+
+        // Find the update event
+        let update_event = events
+            .iter()
+            .find(|e| e.entity_id == *entity2.as_bytes())
+            .expect("should find update event");
+        assert_eq!(update_event.change_type, ChangeType::Update);
+        assert_eq!(update_event.payload, Some(vec![20]));
+    }
+
+    #[test]
+    fn change_feed_insert_after_delete_in_separate_transactions() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // Insert entity
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![1])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Delete entity
+        db.transaction(|txn| {
+            txn.delete(collection, entity)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Subscribe AFTER delete
+        let rx = db.subscribe();
+
+        // Re-insert the same entity - this should be an Insert since
+        // the entity no longer exists at the transaction's snapshot
+        db.transaction(|txn| {
+            txn.put(collection, entity, vec![2])?;
+            Ok(())
+        })
+        .unwrap();
+
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Insert);
+        assert_eq!(event.payload, Some(vec![2]));
+    }
+
+    #[test]
+    fn change_feed_write_transaction_correct_types() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // Subscribe before changes
+        let rx = db.subscribe();
+
+        // Use write_transaction API (with exclusive lock)
+        db.write_transaction(|wtxn| {
+            wtxn.put(collection, entity, vec![1, 2, 3])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Verify Insert
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Insert);
+
+        // Update via write_transaction
+        db.write_transaction(|wtxn| {
+            wtxn.put(collection, entity, vec![4, 5, 6])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Verify Update
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Update);
+    }
+
+    #[test]
+    fn change_feed_with_explicit_op_type() {
+        use crate::change_feed::ChangeType;
+        use std::time::Duration;
+
+        let db = create_db();
+        let collection = db.collection("test");
+        let entity = EntityId::new();
+
+        // Subscribe before changes
+        let rx = db.subscribe();
+
+        // Use put_with_op_type to explicitly mark as update
+        // (even though entity doesn't exist - useful for sync scenarios)
+        db.transaction(|txn| {
+            txn.put_with_op_type(collection, entity, vec![1], true)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Should respect explicit op type
+        let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(event.change_type, ChangeType::Update);
     }
 }

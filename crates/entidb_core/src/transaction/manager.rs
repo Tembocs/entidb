@@ -142,7 +142,7 @@ impl TransactionManager {
         for ((collection_id, entity_id), write) in txn.pending_writes() {
             let entity_bytes = *entity_id.as_bytes();
             match write {
-                PendingWrite::Put { payload } => {
+                PendingWrite::Put { payload, .. } => {
                     self.wal.append(&WalRecord::Put {
                         txid,
                         collection_id: *collection_id,
@@ -172,7 +172,7 @@ impl TransactionManager {
         for ((collection_id, entity_id), write) in txn.pending_writes() {
             let entity_bytes = *entity_id.as_bytes();
             match write {
-                PendingWrite::Put { payload } => {
+                PendingWrite::Put { payload, .. } => {
                     let record =
                         SegmentRecord::put(*collection_id, entity_bytes, payload.clone(), sequence);
                     self.segments.append(&record)?;
@@ -236,7 +236,7 @@ impl TransactionManager {
         // First check pending writes in this transaction
         if let Some(write) = txn.get_pending_write(collection_id, entity_id) {
             return match write {
-                PendingWrite::Put { payload } => Ok(Some(payload.clone())),
+                PendingWrite::Put { payload, .. } => Ok(Some(payload.clone())),
                 PendingWrite::Delete => Ok(None),
             };
         }
