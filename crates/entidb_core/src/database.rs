@@ -5,7 +5,10 @@ use crate::config::Config;
 use crate::dir::DatabaseDir;
 use crate::entity::{EntityId, EntityStore};
 use crate::error::{CoreError, CoreResult};
-use crate::index::{BTreeIndex, FtsIndex, FtsIndexSpec, HashIndex, Index, IndexSpec, TokenizerConfig};
+use crate::index::{
+    BTreeIndex, FtsIndex, FtsIndexSpec, HashIndex, Index, IndexEngine, IndexEngineConfig,
+    IndexSpec, TokenizerConfig,
+};
 use crate::manifest::Manifest;
 use crate::segment::{SegmentManager, SegmentRecord};
 use crate::transaction::{Transaction, TransactionManager};
@@ -89,9 +92,14 @@ pub struct Database {
     entity_store: EntityStore,
     /// Whether the database is open.
     is_open: RwLock<bool>,
+    /// Central index engine managing all indexes (new architecture).
+    /// This replaces the separate hash_indexes/btree_indexes maps for persistence.
+    index_engine: IndexEngine,
     /// Hash indexes keyed by (collection_id, index_name).
+    /// DEPRECATED: Retained for backward API compatibility. Will be removed in future version.
     hash_indexes: RwLock<HashMap<(u32, String), HashIndex<Vec<u8>>>>,
     /// BTree indexes keyed by (collection_id, index_name).
+    /// DEPRECATED: Retained for backward API compatibility. Will be removed in future version.
     btree_indexes: RwLock<HashMap<(u32, String), BTreeIndex<Vec<u8>>>>,
     /// FTS indexes keyed by (collection_id, index_name).
     fts_indexes: RwLock<HashMap<(u32, String), FtsIndex>>,
@@ -253,6 +261,20 @@ impl Database {
 
         let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
 
+        // Create index engine with persisted definitions from manifest
+        let mut index_engine = IndexEngine::new(IndexEngineConfig::default());
+        for idx_def in &recovered_manifest.indexes {
+            index_engine.register_index(idx_def.clone());
+        }
+
+        // Rebuild indexes from segment records to recover state
+        // This ensures indexes are consistent with persisted entities
+        if let Ok(all_records) = segments.scan_all() {
+            if !all_records.is_empty() {
+                index_engine.rebuild_from_records(&all_records);
+            }
+        }
+
         Ok(Self {
             config,
             #[cfg(feature = "std")]
@@ -263,6 +285,7 @@ impl Database {
             txn_manager,
             entity_store,
             is_open: RwLock::new(true),
+            index_engine,
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
             fts_indexes: RwLock::new(HashMap::new()),
@@ -299,6 +322,19 @@ impl Database {
 
         let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
 
+        // Create index engine with persisted definitions from manifest
+        let mut index_engine = IndexEngine::new(IndexEngineConfig::default());
+        for idx_def in &manifest.indexes {
+            index_engine.register_index(idx_def.clone());
+        }
+
+        // Rebuild indexes from segment records to recover state
+        if let Ok(all_records) = segments.scan_all() {
+            if !all_records.is_empty() {
+                index_engine.rebuild_from_records(&all_records);
+            }
+        }
+
         Ok(Self {
             config,
             #[cfg(feature = "std")]
@@ -309,6 +345,7 @@ impl Database {
             txn_manager,
             entity_store,
             is_open: RwLock::new(true),
+            index_engine,
             hash_indexes: RwLock::new(HashMap::new()),
             btree_indexes: RwLock::new(HashMap::new()),
             fts_indexes: RwLock::new(HashMap::new()),
@@ -1074,16 +1111,16 @@ impl Database {
         unique: bool,
     ) -> CoreResult<()> {
         self.ensure_open()?;
-
+        
+        // Use IndexEngine for new index creation (persisted + transactional)
+        self.index_engine.create_hash_index_legacy(collection_id, name, unique)?;
+        
+        // Also maintain legacy in-memory index for backward compatibility
         let key = (collection_id.as_u32(), name.to_string());
         let mut indexes = self.hash_indexes.write();
 
         if indexes.contains_key(&key) {
-            return Err(CoreError::invalid_format(format!(
-                "hash index '{}' already exists on collection {}",
-                name,
-                collection_id.as_u32()
-            )));
+            return Ok(()); // Already created by IndexEngine
         }
 
         let spec = if unique {
@@ -1123,15 +1160,15 @@ impl Database {
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
+        // Use IndexEngine for new index creation (persisted + transactional)
+        self.index_engine.create_btree_index_legacy(collection_id, name, unique)?;
+
+        // Also maintain legacy in-memory index for backward compatibility
         let key = (collection_id.as_u32(), name.to_string());
         let mut indexes = self.btree_indexes.write();
 
         if indexes.contains_key(&key) {
-            return Err(CoreError::invalid_format(format!(
-                "btree index '{}' already exists on collection {}",
-                name,
-                collection_id.as_u32()
-            )));
+            return Ok(()); // Already created by IndexEngine
         }
 
         let spec = if unique {
@@ -1163,18 +1200,18 @@ impl Database {
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
+        // Use IndexEngine for index maintenance (supports transactional updates)
+        self.index_engine.hash_index_insert_legacy(collection_id, index_name, key.clone(), entity_id)?;
+
+        // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.hash_indexes.write();
 
-        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "hash index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.insert(key, entity_id)
+        // Legacy index may not exist if only using IndexEngine
+        if let Some(index) = indexes.get_mut(&idx_key) {
+            let _ = index.insert(key, entity_id);
+        }
+        Ok(())
     }
 
     /// Removes an entry from a hash index.
@@ -1194,18 +1231,17 @@ impl Database {
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
+        // Use IndexEngine for index maintenance
+        self.index_engine.hash_index_remove_legacy(collection_id, index_name, key, entity_id)?;
+
+        // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.hash_indexes.write();
 
-        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "hash index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.remove(&key.to_vec(), entity_id)
+        if let Some(index) = indexes.get_mut(&idx_key) {
+            let _ = index.remove(&key.to_vec(), entity_id);
+        }
+        Ok(true)
     }
 
     /// Looks up entities by exact key match in a hash index.
@@ -1227,19 +1263,9 @@ impl Database {
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
         self.stats.record_index_lookup();
-
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
-        let indexes = self.hash_indexes.read();
-
-        let index = indexes.get(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "hash index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.lookup(&key.to_vec())
+        
+        // Use IndexEngine for lookups (authoritative source)
+        self.index_engine.hash_index_lookup_legacy(collection_id, index_name, key)
     }
 
     /// Inserts an entry into a BTree index.
@@ -1259,18 +1285,17 @@ impl Database {
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
+        // Use IndexEngine for index maintenance
+        self.index_engine.btree_index_insert_legacy(collection_id, index_name, key.clone(), entity_id)?;
+
+        // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.btree_indexes.write();
 
-        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "btree index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.insert(key, entity_id)
+        if let Some(index) = indexes.get_mut(&idx_key) {
+            let _ = index.insert(key, entity_id);
+        }
+        Ok(())
     }
 
     /// Removes an entry from a BTree index.
@@ -1290,18 +1315,17 @@ impl Database {
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
+        // Use IndexEngine for index maintenance
+        self.index_engine.btree_index_remove_legacy(collection_id, index_name, key, entity_id)?;
+
+        // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.btree_indexes.write();
 
-        let index = indexes.get_mut(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "btree index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.remove(&key.to_vec(), entity_id)
+        if let Some(index) = indexes.get_mut(&idx_key) {
+            let _ = index.remove(&key.to_vec(), entity_id);
+        }
+        Ok(true)
     }
 
     /// Looks up entities by exact key match in a BTree index.
@@ -1324,18 +1348,8 @@ impl Database {
         self.ensure_open()?;
         self.stats.record_index_lookup();
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
-        let indexes = self.btree_indexes.read();
-
-        let index = indexes.get(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "btree index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        index.lookup(&key.to_vec())
+        // Use IndexEngine for lookups (authoritative source)
+        self.index_engine.btree_index_lookup_legacy(collection_id, index_name, key)
     }
 
     /// Performs a range query on a BTree index.
@@ -1362,29 +1376,8 @@ impl Database {
         self.ensure_open()?;
         self.stats.record_index_lookup(); // Range query is still an index operation
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
-        let indexes = self.btree_indexes.read();
-
-        let index = indexes.get(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "btree index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        use std::ops::Bound;
-
-        let start = match min_key {
-            Some(k) => Bound::Included(k.to_vec()),
-            None => Bound::Unbounded,
-        };
-        let end = match max_key {
-            Some(k) => Bound::Included(k.to_vec()),
-            None => Bound::Unbounded,
-        };
-
-        index.range((start, end))
+        // Use IndexEngine for range lookups
+        self.index_engine.btree_index_range_legacy(collection_id, index_name, min_key, max_key)
     }
 
     /// Returns the number of entries in a hash index.
@@ -1395,18 +1388,8 @@ impl Database {
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
-        let indexes = self.hash_indexes.read();
-
-        let index = indexes.get(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "hash index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        Ok(index.len())
+        // Use IndexEngine for index length
+        self.index_engine.hash_index_len_legacy(collection_id, index_name)
     }
 
     /// Returns the number of entries in a BTree index.
@@ -1417,18 +1400,8 @@ impl Database {
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
-        let indexes = self.btree_indexes.read();
-
-        let index = indexes.get(&idx_key).ok_or_else(|| {
-            CoreError::invalid_format(format!(
-                "btree index '{}' not found on collection {}",
-                index_name,
-                collection_id.as_u32()
-            ))
-        })?;
-
-        Ok(index.len())
+        // Use IndexEngine for index length
+        self.index_engine.btree_index_len_legacy(collection_id, index_name)
     }
 
     /// Drops a hash index.
@@ -1439,10 +1412,15 @@ impl Database {
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
+        // Drop from IndexEngine (authoritative)
+        let result = self.index_engine.drop_hash_index_legacy(collection_id, index_name);
+
+        // Also remove from legacy in-memory index
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.hash_indexes.write();
+        indexes.remove(&idx_key);
 
-        Ok(indexes.remove(&idx_key).is_some())
+        result
     }
 
     /// Drops a BTree index.
@@ -1453,10 +1431,15 @@ impl Database {
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
+        // Drop from IndexEngine (authoritative)
+        let result = self.index_engine.drop_btree_index_legacy(collection_id, index_name);
+
+        // Also remove from legacy in-memory index
         let idx_key = (collection_id.as_u32(), index_name.to_string());
         let mut indexes = self.btree_indexes.write();
+        indexes.remove(&idx_key);
 
-        Ok(indexes.remove(&idx_key).is_some())
+        result
     }
 
     // ========================================================================
