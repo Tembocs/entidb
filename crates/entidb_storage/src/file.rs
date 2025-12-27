@@ -123,8 +123,14 @@ impl StorageBackend for FileBackend {
     }
 
     fn flush(&mut self) -> StorageResult<()> {
-        let mut file = self.file.write();
-        file.flush()?;
+        let file = self.file.write();
+        // Use sync_all() instead of flush() to guarantee durability.
+        // - Windows: FlushFileBuffers
+        // - Linux: fsync
+        // - macOS: fsync (with F_FULLFSYNC in Rust std)
+        // This ensures data is physically written to disk before returning,
+        // which is required for WAL commit durability (AC-04).
+        file.sync_all()?;
         Ok(())
     }
 

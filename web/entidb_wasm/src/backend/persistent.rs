@@ -195,6 +195,19 @@ impl PersistentBackend {
 
 // Note: We implement StorageBackend on a mutable reference since we need &mut self for append.
 // The actual backend is used through interior mutability patterns in the database.
+//
+// IMPORTANT: Web Durability Limitation
+// ------------------------------------
+// The `flush()` and `sync()` methods below are synchronous stubs that only operate on
+// the in-memory buffer. They do NOT persist data to disk.
+//
+// For WAL commit durability on web, callers MUST use the async `save()` method after
+// committing. This is a fundamental limitation because:
+// 1. OPFS and IndexedDB APIs are async-only in JavaScript
+// 2. Rust's StorageBackend trait is synchronous
+//
+// The EntiDB WASM database wrapper handles this by calling `save()` after each commit.
+// See docs/invariants.md section 11: "Browser storage MUST be treated as unreliable."
 impl StorageBackend for PersistentBackend {
     fn read_at(&self, offset: u64, len: usize) -> StorageResult<Vec<u8>> {
         self.memory.read_at(offset, len)
