@@ -2,7 +2,7 @@
 //!
 //! These tests verify behavior under heavy load and concurrent access.
 
-use entidb_core::{CollectionId, Database, EntityId, SequenceNumber};
+use entidb_core::{CollectionId, Database, EntityId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;

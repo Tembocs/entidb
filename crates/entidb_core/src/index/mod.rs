@@ -45,5 +45,6 @@ pub use btree::BTreeIndex;
 pub use composite::{CompositeKey2, CompositeKey3};
 pub use fts::{FtsIndex, FtsIndexSpec, TokenizerConfig};
 pub use hash::HashIndex;
+#[allow(unused_imports)]
 pub use persistence::{IndexHeader, IndexType};
 pub use traits::{Index, IndexKey, IndexSpec};

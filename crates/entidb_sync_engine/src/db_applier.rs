@@ -4,7 +4,7 @@
 //! ensuring the sync server uses the same EntiDB core as clients
 //! (per architecture requirement).
 
-use crate::error::{SyncError, SyncResult};
+use crate::error::SyncResult;
 use crate::state::SyncApplier;
 use entidb_core::{CollectionId, Database, EntityId};
 use entidb_sync_protocol::{OperationType, SyncOperation};
@@ -14,6 +14,7 @@ use std::sync::{Arc, RwLock};
 /// Metadata for sync state.
 const SYNC_COLLECTION_ID: u32 = 0xFFFF_FF00;
 const CURSOR_ENTITY_ID: [u8; 16] = [0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x01];
+#[allow(dead_code)] // Reserved for oplog entity encoding
 const OPLOG_ENTITY_PREFIX: u8 = 0xAA;
 
 /// A sync applier backed by an EntiDB database.

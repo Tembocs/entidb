@@ -21,6 +21,7 @@ pub struct HandlerContext {
 
 /// Information about a connected device.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in session management
 struct DeviceSession {
     /// Database ID.
     db_id: [u8; 16],
@@ -30,6 +31,7 @@ struct DeviceSession {
     authenticated: bool,
 }
 
+#[allow(dead_code)] // Session management methods for future use
 impl HandlerContext {
     /// Creates a new handler context.
     pub fn new(config: ServerConfig, oplog: Arc<ServerOplog>) -> Self {

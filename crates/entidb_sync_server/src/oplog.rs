@@ -1,7 +1,7 @@
 //! Server-side oplog management.
 
 use crate::error::{ServerError, ServerResult};
-use entidb_sync_protocol::{Conflict, ConflictPolicy, OperationType, SyncOperation};
+use entidb_sync_protocol::{Conflict, ConflictPolicy, SyncOperation};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -189,6 +189,7 @@ impl Default for ServerOplog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use entidb_sync_protocol::OperationType;
 
     fn make_op(collection_id: u32, entity_id: [u8; 16], sequence: u64) -> SyncOperation {
         SyncOperation {

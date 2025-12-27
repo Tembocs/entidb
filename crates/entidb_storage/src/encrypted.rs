@@ -28,6 +28,7 @@ pub const NONCE_SIZE: usize = 12;
 /// Size of GCM authentication tag in bytes.
 pub const TAG_SIZE: usize = 16;
 /// Default block size for encryption (4KB).
+#[allow(dead_code)]
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
 /// Encryption key for the encrypted backend.

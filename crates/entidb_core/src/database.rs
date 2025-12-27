@@ -683,7 +683,7 @@ impl Database {
             }
         }
 
-        let output_size = input_size.saturating_sub(result.bytes_saved);
+        let _output_size = input_size.saturating_sub(result.bytes_saved);
 
         Ok(CompactionStats {
             input_records: input_count,
@@ -1970,7 +1970,7 @@ mod persistence_tests {
         {
             let db = Database::open(&db_path).unwrap();
             let users = db.collection("users");
-            let posts = db.collection("posts");
+            let _posts = db.collection("posts");
 
             db.transaction(|txn| {
                 txn.put(users, entity_id, vec![1, 2, 3])?;

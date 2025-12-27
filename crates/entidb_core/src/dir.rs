@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 const MANIFEST_FILE: &str = "MANIFEST";
 const LOCK_FILE: &str = "LOCK";
 const WAL_FILE: &str = "wal.log";
+#[allow(dead_code)]
 const SEGMENT_FILE: &str = "segments.dat";
 /// Directory for segment files (multi-segment mode).
 const SEGMENTS_DIR: &str = "SEGMENTS";
@@ -117,6 +118,7 @@ impl DatabaseDir {
 
     /// Returns the path to the database directory.
     #[must_use]
+    #[allow(dead_code)]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -129,6 +131,7 @@ impl DatabaseDir {
 
     /// Returns the path to the segment file (legacy single-file mode).
     #[must_use]
+    #[allow(dead_code)]
     pub fn segment_path(&self) -> PathBuf {
         self.path.join(SEGMENT_FILE)
     }
@@ -205,6 +208,7 @@ impl DatabaseDir {
     ///
     /// * `segment_id` - The segment ID (e.g., 1 produces "seg-000001.dat")
     #[must_use]
+    #[allow(dead_code)] // Public API for bindings
     pub fn segment_file_path(&self, segment_id: u64) -> PathBuf {
         self.segments_dir().join(format!("seg-{segment_id:06}.dat"))
     }

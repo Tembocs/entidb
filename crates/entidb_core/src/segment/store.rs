@@ -443,7 +443,7 @@ impl SegmentManager {
     /// Scans all records across all segments.
     pub fn scan_all(&self) -> CoreResult<Vec<SegmentRecord>> {
         let segments = self.segments.read();
-        let segment_info = self.segment_info.read();
+        let _segment_info = self.segment_info.read();
 
         let mut all_records = Vec::new();
         let mut segment_ids: Vec<_> = segments.keys().copied().collect();
@@ -684,7 +684,7 @@ impl SegmentManager {
             let mut total_size = 0u64;
             {
                 let backend = new_backend;
-                let mut backend_guard =
+                let backend_guard =
                     Arc::new(RwLock::new(backend));
 
                 for record in &compacted_records {
@@ -761,7 +761,6 @@ impl std::fmt::Debug for SegmentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use entidb_storage::InMemoryBackend;
 
     fn create_manager() -> SegmentManager {
         SegmentManager::new_in_memory(1024 * 1024)

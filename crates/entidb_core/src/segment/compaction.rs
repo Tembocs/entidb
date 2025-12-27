@@ -13,7 +13,7 @@
 
 use crate::error::{CoreError, CoreResult};
 use crate::segment::record::SegmentRecord;
-use crate::types::{CollectionId, SequenceNumber};
+use crate::types::SequenceNumber;
 use std::collections::HashMap;
 
 /// Configuration for compaction.
@@ -236,6 +236,7 @@ impl Compactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CollectionId;
 
     fn make_put(collection: u32, entity: u8, payload: &[u8], seq: u64) -> SegmentRecord {
         SegmentRecord::put(

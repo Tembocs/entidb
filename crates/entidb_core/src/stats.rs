@@ -122,11 +122,13 @@ impl DatabaseStats {
     }
 
     /// Records an error.
+    #[allow(dead_code)] // Will be used when error tracking is integrated
     pub(crate) fn record_error(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Updates the entity count.
+    #[allow(dead_code)] // Will be used when entity counting is integrated
     pub(crate) fn set_entity_count(&self, count: u64) {
         self.entity_count.store(count, Ordering::Relaxed);
     }

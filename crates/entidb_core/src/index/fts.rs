@@ -70,6 +70,7 @@ impl TokenizerConfig {
 
     /// Adds extra separator characters.
     #[must_use]
+    #[allow(dead_code)] // Public API for bindings
     pub fn with_separators(mut self, chars: &[char]) -> Self {
         self.extra_separators.extend_from_slice(chars);
         self
@@ -137,6 +138,7 @@ pub struct FtsIndex {
     token_count: usize,
 }
 
+#[allow(dead_code)] // Many methods are public API for bindings
 impl FtsIndex {
     /// Creates a new full-text index.
     pub fn new(spec: FtsIndexSpec) -> Self {

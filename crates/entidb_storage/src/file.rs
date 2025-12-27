@@ -139,7 +139,7 @@ impl StorageBackend for FileBackend {
     }
 
     fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
-        let mut file = self.file.write();
+        let file = self.file.write();
         let mut size = self.size.write();
 
         if new_size > *size {

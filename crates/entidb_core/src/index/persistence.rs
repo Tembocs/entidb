@@ -393,12 +393,14 @@ pub fn load_btree_index<K: IndexKey>(data: &[u8]) -> CoreResult<BTreeIndex<K>> {
 }
 
 /// Reads the header without loading the full index.
+#[allow(dead_code)] // Public API for index inspection
 pub fn read_index_header(data: &[u8]) -> CoreResult<IndexHeader> {
     let (header, _) = read_header(data)?;
     Ok(header)
 }
 
 /// Validates an index file without loading it.
+#[allow(dead_code)] // Public API for index validation
 pub fn validate_index_file(data: &[u8]) -> CoreResult<IndexHeader> {
     let (header, pos) = read_header(data)?;
 

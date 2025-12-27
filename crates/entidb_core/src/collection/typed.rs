@@ -222,12 +222,14 @@ impl<T: EntityCodec> Collection<T> {
 ///
 /// This allows multiple operations on the same collection within
 /// a single transaction while maintaining type safety.
+#[allow(dead_code)]
 pub struct CollectionRef<'a, T: EntityCodec> {
     collection: &'a Collection<T>,
     #[allow(dead_code)]
     txn: &'a mut Transaction,
 }
 
+#[allow(dead_code)]
 impl<'a, T: EntityCodec> CollectionRef<'a, T> {
     /// Gets an entity by ID.
     pub fn get(&self, id: EntityId) -> CoreResult<Option<T>> {

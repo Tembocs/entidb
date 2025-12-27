@@ -3,7 +3,7 @@
 //! This module provides fuzz targets that can be used with cargo-fuzz
 //! or other fuzzing frameworks.
 
-use entidb_codec::{from_cbor, to_canonical_cbor, Value};
+use entidb_codec::{from_cbor, to_canonical_cbor};
 use entidb_core::{CollectionId, Database, EntityId};
 
 /// Fuzz target for CBOR decoding.
@@ -148,19 +148,35 @@ pub fn fuzz_segment_record(data: &[u8]) {
 /// Structured fuzzing input for database operations.
 #[derive(Debug, Clone)]
 pub enum FuzzOp {
-    /// Put an entity
+    /// Put an entity.
     Put {
+        /// Collection identifier.
         collection: u8,
+        /// Entity identifier (16 bytes).
         entity: [u8; 16],
+        /// Entity data payload.
         data: Vec<u8>,
     },
-    /// Get an entity
-    Get { collection: u8, entity: [u8; 16] },
-    /// Delete an entity
-    Delete { collection: u8, entity: [u8; 16] },
-    /// List entities
-    List { collection: u8 },
-    /// Checkpoint
+    /// Get an entity.
+    Get {
+        /// Collection identifier.
+        collection: u8,
+        /// Entity identifier (16 bytes).
+        entity: [u8; 16],
+    },
+    /// Delete an entity.
+    Delete {
+        /// Collection identifier.
+        collection: u8,
+        /// Entity identifier (16 bytes).
+        entity: [u8; 16],
+    },
+    /// List entities in a collection.
+    List {
+        /// Collection identifier.
+        collection: u8,
+    },
+    /// Checkpoint the database.
     Checkpoint,
 }
 

@@ -21,7 +21,7 @@
 //! ```
 
 use entidb_core::{Database, EntityId};
-use entidb_storage::{InMemoryBackend, StorageBackend};
+use entidb_storage::StorageBackend;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -711,6 +711,7 @@ impl CrashRecoveryHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use entidb_storage::InMemoryBackend;
 
     #[test]
     fn test_crashable_backend_normal_operation() {
