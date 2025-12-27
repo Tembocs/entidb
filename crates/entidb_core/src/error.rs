@@ -142,6 +142,36 @@ pub enum CoreError {
         /// Description of the failure.
         message: String,
     },
+
+    /// Commit succeeded in WAL but segment apply failed.
+    ///
+    /// This error indicates that the transaction is durably committed in the WAL
+    /// but the segment write failed. The database requires recovery to complete
+    /// the commit. The transaction WILL be applied on next database open.
+    ///
+    /// **Important:** The caller should NOT retry the transaction - it is already
+    /// committed and will be recovered. The database should be reopened to
+    /// trigger recovery.
+    #[error("commit accepted but segment apply failed (recovery required): {message}")]
+    CommitPendingRecovery {
+        /// The committed sequence number.
+        sequence: u64,
+        /// Description of the segment failure.
+        message: String,
+    },
+
+    /// Segment file creation failed.
+    ///
+    /// This error occurs when a segment file cannot be created on disk.
+    /// Unlike silent fallback to in-memory, this is a hard error that
+    /// prevents the database from opening in an unreliable state.
+    #[error("segment file creation failed: {path}")]
+    SegmentFileCreationFailed {
+        /// Path that failed to create.
+        path: String,
+        /// Underlying error message.
+        source_message: String,
+    },
 }
 
 impl CoreError {
@@ -215,6 +245,22 @@ impl CoreError {
     pub fn manifest_persist_failed(message: impl Into<String>) -> Self {
         Self::ManifestPersistFailed {
             message: message.into(),
+        }
+    }
+
+    /// Creates a commit pending recovery error.
+    pub fn commit_pending_recovery(sequence: u64, message: impl Into<String>) -> Self {
+        Self::CommitPendingRecovery {
+            sequence,
+            message: message.into(),
+        }
+    }
+
+    /// Creates a segment file creation failed error.
+    pub fn segment_file_creation_failed(path: impl Into<String>, source: impl Into<String>) -> Self {
+        Self::SegmentFileCreationFailed {
+            path: path.into(),
+            source_message: source.into(),
         }
     }
 }

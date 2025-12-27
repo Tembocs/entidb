@@ -122,6 +122,12 @@ impl VersionChain {
 /// the manager seals the current segment (making it immutable) and creates
 /// a new active segment for future writes.
 ///
+/// # Backend Factory Errors
+///
+/// The backend factory can return errors (e.g., if file creation fails).
+/// Unlike silently falling back to in-memory storage, errors are propagated
+/// to ensure durability guarantees are maintained.
+///
 /// # Example
 ///
 /// ```ignore
@@ -145,7 +151,8 @@ impl VersionChain {
 /// ```
 pub struct SegmentManager {
     /// Factory function to create storage backends for new segments.
-    backend_factory: Box<dyn Fn(u64) -> Box<dyn StorageBackend> + Send + Sync>,
+    /// Returns Result to allow proper error handling (e.g., file creation failures).
+    backend_factory: Box<dyn Fn(u64) -> CoreResult<Box<dyn StorageBackend>> + Send + Sync>,
     /// All segment backends, keyed by segment ID.
     segments: RwLock<HashMap<u64, Arc<RwLock<Box<dyn StorageBackend>>>>>,
     /// Segment metadata.
@@ -173,14 +180,19 @@ impl SegmentManager {
     ///
     /// # Arguments
     ///
-    /// * `backend_factory` - Function that creates a storage backend for a segment ID
+    /// * `backend_factory` - Function that creates a storage backend for a segment ID.
+    ///   Returns `CoreResult` to allow proper error handling on creation failure.
     /// * `max_segment_size` - Maximum size before auto-sealing
-    pub fn with_factory<F>(backend_factory: F, max_segment_size: u64) -> Self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the initial backend cannot be created.
+    pub fn with_factory<F>(backend_factory: F, max_segment_size: u64) -> CoreResult<Self>
     where
-        F: Fn(u64) -> Box<dyn StorageBackend> + Send + Sync + 'static,
+        F: Fn(u64) -> CoreResult<Box<dyn StorageBackend>> + Send + Sync + 'static,
     {
         let initial_id = 1;
-        let initial_backend = backend_factory(initial_id);
+        let initial_backend = backend_factory(initial_id)?;
         let initial_size = initial_backend.size().unwrap_or(0);
 
         let mut segments = HashMap::new();
@@ -197,7 +209,7 @@ impl SegmentManager {
             },
         );
 
-        Self {
+        Ok(Self {
             backend_factory: Box::new(backend_factory),
             segments: RwLock::new(segments),
             segment_info: RwLock::new(segment_info),
@@ -206,7 +218,7 @@ impl SegmentManager {
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
             compaction_lock: parking_lot::Mutex::new(()),
-        }
+        })
     }
 
     /// Creates a segment manager with a factory and loads existing segment files.
@@ -217,16 +229,21 @@ impl SegmentManager {
     ///
     /// # Arguments
     ///
-    /// * `backend_factory` - Function that creates a storage backend for a segment ID
+    /// * `backend_factory` - Function that creates a storage backend for a segment ID.
+    ///   Returns `CoreResult` to allow proper error handling on creation failure.
     /// * `max_segment_size` - Maximum size before auto-sealing
     /// * `existing_segment_ids` - Sorted list of existing segment IDs to load
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any backend cannot be created.
     pub fn with_factory_and_existing<F>(
         backend_factory: F,
         max_segment_size: u64,
         existing_segment_ids: Vec<u64>,
-    ) -> Self
+    ) -> CoreResult<Self>
     where
-        F: Fn(u64) -> Box<dyn StorageBackend> + Send + Sync + 'static,
+        F: Fn(u64) -> CoreResult<Box<dyn StorageBackend>> + Send + Sync + 'static,
     {
         if existing_segment_ids.is_empty() {
             // No existing segments, start fresh
@@ -239,7 +256,7 @@ impl SegmentManager {
 
         // Load all existing segments
         for &segment_id in &existing_segment_ids {
-            let backend = backend_factory(segment_id);
+            let backend = backend_factory(segment_id)?;
             let size = backend.size().unwrap_or(0);
 
             // All existing segments except the last one are considered sealed
@@ -259,7 +276,7 @@ impl SegmentManager {
             max_id = max_id.max(segment_id);
         }
 
-        Self {
+        Ok(Self {
             backend_factory: Box::new(backend_factory),
             segments: RwLock::new(segments),
             segment_info: RwLock::new(segment_info),
@@ -268,7 +285,7 @@ impl SegmentManager {
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
             compaction_lock: parking_lot::Mutex::new(()),
-        }
+        })
     }
 
     /// Creates a segment manager with a single initial backend.
@@ -307,7 +324,7 @@ impl SegmentManager {
         // When using this constructor, new segments get in-memory backends
         // (suitable for testing; production should use with_factory)
         Self {
-            backend_factory: Box::new(|_| Box::new(InMemoryBackend::new())),
+            backend_factory: Box::new(|_| Ok(Box::new(InMemoryBackend::new()))),
             segments: RwLock::new(segments),
             segment_info: RwLock::new(segment_info),
             active_segment_id: RwLock::new(initial_id),
@@ -322,7 +339,8 @@ impl SegmentManager {
     #[cfg(test)]
     pub fn new_in_memory(max_segment_size: u64) -> Self {
         use entidb_storage::InMemoryBackend;
-        Self::with_factory(|_| Box::new(InMemoryBackend::new()), max_segment_size)
+        Self::with_factory(|_| Ok(Box::new(InMemoryBackend::new())), max_segment_size)
+            .expect("in-memory backend creation should never fail")
     }
 
     /// Sets a callback to be invoked when a segment is sealed.
@@ -372,7 +390,12 @@ impl SegmentManager {
 
         let old_id = *self.active_segment_id.read();
 
-        // Seal the current segment
+        // Create new segment FIRST before sealing - if this fails, we haven't
+        // sealed the old segment yet and can return cleanly
+        let new_id = old_id + 1;
+        let new_backend = (self.backend_factory)(new_id)?;
+
+        // Now seal the current segment (we have a valid new segment ready)
         {
             let mut info = self.segment_info.write();
             if let Some(seg_info) = info.get_mut(&old_id) {
@@ -384,10 +407,6 @@ impl SegmentManager {
         if let Some(backend) = self.segments.read().get(&old_id) {
             backend.write().flush()?;
         }
-
-        // Create new segment
-        let new_id = old_id + 1;
-        let new_backend = (self.backend_factory)(new_id);
 
         {
             let mut segments = self.segments.write();
@@ -716,7 +735,7 @@ impl SegmentManager {
 
         // Create new segment for compacted data (if any records)
         let created_segment_id = if !compacted_records.is_empty() {
-            let new_backend = (self.backend_factory)(new_segment_id);
+            let new_backend = (self.backend_factory)(new_segment_id)?;
 
             // Write all compacted records
             let mut total_size = 0u64;

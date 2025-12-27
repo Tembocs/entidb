@@ -253,6 +253,13 @@ impl WalRecord {
         match record_type {
             WalRecordType::Begin => {
                 let txid = TransactionId::new(read_u64(&mut cursor)?);
+                // Validate no trailing bytes for fixed-size record
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Begin record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Begin { txid })
             }
 
@@ -266,6 +273,15 @@ impl WalRecord {
                     return Err(CoreError::wal_corruption("unexpected end of after_bytes"));
                 }
                 let after_bytes = payload[cursor..cursor + len].to_vec();
+                // Advance cursor past after_bytes for validation
+                cursor += len;
+                // Validate no trailing bytes
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Put record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Put {
                     txid,
                     collection_id,
@@ -280,6 +296,13 @@ impl WalRecord {
                 let collection_id = CollectionId::new(read_u32(&mut cursor)?);
                 let entity_id = read_entity_id(&mut cursor)?;
                 let before_hash = read_optional_hash(&mut cursor)?;
+                // Validate no trailing bytes
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Delete record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Delete {
                     txid,
                     collection_id,
@@ -291,16 +314,37 @@ impl WalRecord {
             WalRecordType::Commit => {
                 let txid = TransactionId::new(read_u64(&mut cursor)?);
                 let sequence = SequenceNumber::new(read_u64(&mut cursor)?);
+                // Validate no trailing bytes for fixed-size record
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Commit record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Commit { txid, sequence })
             }
 
             WalRecordType::Abort => {
                 let txid = TransactionId::new(read_u64(&mut cursor)?);
+                // Validate no trailing bytes for fixed-size record
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Abort record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Abort { txid })
             }
 
             WalRecordType::Checkpoint => {
                 let sequence = SequenceNumber::new(read_u64(&mut cursor)?);
+                // Validate no trailing bytes for fixed-size record
+                if cursor != payload.len() {
+                    return Err(CoreError::wal_corruption(format!(
+                        "trailing bytes in Checkpoint record: expected {} bytes, got {}",
+                        cursor, payload.len()
+                    )));
+                }
                 Ok(Self::Checkpoint { sequence })
             }
         }

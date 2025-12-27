@@ -166,9 +166,48 @@ impl TransactionManager {
         self.wal.append(&WalRecord::Commit { txid, sequence })?;
 
         // Flush WAL - critical for durability
+        // After this point, the transaction is DURABLY COMMITTED.
+        // Any failure after this must NOT return a normal error that would
+        // cause the caller to think the transaction failed.
         self.wal.flush()?;
 
         // Apply to segments (now that WAL is durable)
+        // If segment append fails, the transaction is still committed in WAL
+        // and will be recovered on next open. We must signal this specially.
+        let segment_result = self.apply_to_segments(txn, sequence);
+
+        // Update committed sequence regardless of segment result
+        // The transaction IS committed in WAL
+        self.committed_seq
+            .store(sequence.as_u64(), Ordering::SeqCst);
+
+        // Remove from active transactions
+        self.active_txns.write().retain(|&id| id != txid);
+
+        // Mark transaction as committed
+        txn.mark_committed();
+
+        // Now handle segment result
+        match segment_result {
+            Ok(()) => Ok(sequence),
+            Err(e) => {
+                // Transaction is committed in WAL but segment apply failed.
+                // Return a special error that indicates recovery is needed.
+                // The caller should NOT retry - the transaction WILL be applied
+                // on database reopen.
+                Err(CoreError::commit_pending_recovery(
+                    sequence.as_u64(),
+                    format!("segment apply failed: {}", e),
+                ))
+            }
+        }
+    }
+
+    /// Applies committed transaction writes to segments.
+    /// 
+    /// This is separated from commit_inner to handle errors appropriately
+    /// after WAL is already durable.
+    fn apply_to_segments(&self, txn: &Transaction, sequence: SequenceNumber) -> CoreResult<()> {
         for ((collection_id, entity_id), write) in txn.pending_writes() {
             let entity_bytes = *entity_id.as_bytes();
             match write {
@@ -186,18 +225,7 @@ impl TransactionManager {
 
         // Flush segments
         self.segments.flush()?;
-
-        // Update committed sequence
-        self.committed_seq
-            .store(sequence.as_u64(), Ordering::SeqCst);
-
-        // Remove from active transactions
-        self.active_txns.write().retain(|&id| id != txid);
-
-        // Mark transaction as committed
-        txn.mark_committed();
-
-        Ok(sequence)
+        Ok(())
     }
 
     /// Aborts a transaction.
@@ -297,10 +325,14 @@ impl TransactionManager {
     /// A checkpoint:
     /// 1. Ensures all segments are synced to durable storage
     /// 2. Writes a checkpoint record to WAL
-    /// 3. Truncates the WAL (all committed data is in segments)
+    /// 3. Returns the checkpoint sequence (caller is responsible for manifest update and WAL truncation)
     ///
-    /// After checkpoint, WAL space is reclaimed.
-    pub fn checkpoint(&self) -> CoreResult<()> {
+    /// **Important:** The caller MUST persist the checkpoint sequence to the manifest
+    /// BEFORE calling `truncate_wal()`. This ensures crash safety: if a crash occurs
+    /// between these steps, recovery can still use the WAL.
+    ///
+    /// After checkpoint, WAL space is reclaimed via `truncate_wal()`.
+    pub fn checkpoint(&self) -> CoreResult<SequenceNumber> {
         // First, sync segments to ensure all committed data is durable on disk
         // Using sync() instead of flush() to guarantee data survives power loss
         self.segments.sync()?;
@@ -311,11 +343,17 @@ impl TransactionManager {
         self.wal.append(&WalRecord::Checkpoint { sequence })?;
         self.wal.flush()?;
 
-        // Now we can safely truncate the WAL since all committed
-        // transactions are persisted in segments
-        self.wal.clear()?;
+        // Return the sequence - caller must save manifest before truncating WAL
+        Ok(sequence)
+    }
 
-        Ok(())
+    /// Truncates the WAL after a successful checkpoint.
+    ///
+    /// **IMPORTANT:** This should ONLY be called after the manifest has been
+    /// durably updated with the checkpoint sequence. Calling this before
+    /// manifest save can cause data loss on crash.
+    pub fn truncate_wal(&self) -> CoreResult<()> {
+        self.wal.clear()
     }
 }
 
