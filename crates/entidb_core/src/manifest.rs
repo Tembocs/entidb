@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn deterministic_encoding() {
-        // Create two manifests with same data
+        // Test 1: Same manifest encodes identically on repeated calls
         let mut m1 = Manifest::default();
         m1.get_or_create_collection("users");
         m1.get_or_create_collection("posts");
@@ -598,16 +598,75 @@ mod tests {
             created_at_seq: SequenceNumber::new(0),
         });
 
-        let mut m2 = Manifest::default();
-        // Add in different order
-        m2.get_or_create_collection("posts");
-        m2.get_or_create_collection("users");
-        // But collections assigned same IDs because we add in different order
-        // So we need to manually set the same state
-        
-        // For truly deterministic test, we compare same manifest encoded twice
         let enc1 = m1.encode();
         let enc2 = m1.encode();
         assert_eq!(enc1, enc2, "same manifest should encode identically");
+
+        // Test 2: Two manifests with identical logical state encode identically
+        // We manually construct them to have the exact same state
+        let mut m3 = Manifest::new((1, 0));
+        m3.collections.insert("alpha".to_string(), 10);
+        m3.collections.insert("beta".to_string(), 20);
+        m3.collections.insert("gamma".to_string(), 30);
+        m3.next_collection_id = 31;
+        m3.indexes.push(IndexDefinition {
+            id: 5,
+            collection_id: CollectionId::new(10),
+            field_path: vec!["name".to_string()],
+            kind: IndexKind::Hash,
+            unique: false,
+            created_at_seq: SequenceNumber::new(1),
+        });
+        m3.indexes.push(IndexDefinition {
+            id: 3,
+            collection_id: CollectionId::new(20),
+            field_path: vec!["age".to_string()],
+            kind: IndexKind::BTree,
+            unique: true,
+            created_at_seq: SequenceNumber::new(2),
+        });
+        m3.next_index_id = 6;
+        m3.last_checkpoint = Some(SequenceNumber::new(100));
+
+        let mut m4 = Manifest::new((1, 0));
+        // Insert collections in DIFFERENT order - BTreeMap will sort them
+        m4.collections.insert("gamma".to_string(), 30);
+        m4.collections.insert("alpha".to_string(), 10);
+        m4.collections.insert("beta".to_string(), 20);
+        m4.next_collection_id = 31;
+        // Insert indexes in DIFFERENT order - encode() sorts by ID
+        m4.indexes.push(IndexDefinition {
+            id: 3,
+            collection_id: CollectionId::new(20),
+            field_path: vec!["age".to_string()],
+            kind: IndexKind::BTree,
+            unique: true,
+            created_at_seq: SequenceNumber::new(2),
+        });
+        m4.indexes.push(IndexDefinition {
+            id: 5,
+            collection_id: CollectionId::new(10),
+            field_path: vec!["name".to_string()],
+            kind: IndexKind::Hash,
+            unique: false,
+            created_at_seq: SequenceNumber::new(1),
+        });
+        m4.next_index_id = 6;
+        m4.last_checkpoint = Some(SequenceNumber::new(100));
+
+        let enc3 = m3.encode();
+        let enc4 = m4.encode();
+        assert_eq!(
+            enc3, enc4,
+            "manifests with same logical state must produce identical bytes"
+        );
+
+        // Test 3: Verify the encoding is stable across decode/re-encode
+        let decoded = Manifest::decode(&enc3).unwrap();
+        let enc5 = decoded.encode();
+        assert_eq!(
+            enc3, enc5,
+            "decode then re-encode must produce identical bytes"
+        );
     }
 }

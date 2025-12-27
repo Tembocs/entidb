@@ -39,9 +39,9 @@
 
 ### Medium
 
-8) Manifest encoding is non-deterministic.
-- Manifest serialization iterates a HashMap without sorting, so identical operations can produce different bytes on disk (AC-01 violation).
-- Evidence: `crates/entidb_core/src/manifest.rs:89`.
+8) ~~Manifest encoding is non-deterministic.~~ **RESOLVED**
+- ~~Manifest serialization iterates a HashMap without sorting, so identical operations can produce different bytes on disk (AC-01 violation).~~
+- **Fix:** The `Manifest` struct now uses `BTreeMap<String, u32>` for collections (ensures bytewise key ordering). Index definitions are sorted by ID before encoding. A comprehensive `deterministic_encoding` test verifies that manifests with identical logical state produce byte-identical encodings regardless of construction order.
 
 9) Collection creation persistence is best-effort and silent on failure.
 - If manifest save fails, collection creation still succeeds without reporting the failure, risking a mismatch between in-memory state and persisted metadata.
@@ -57,7 +57,7 @@
 
 - No tests assert snapshot isolation (repeatable reads) or that earlier snapshots ignore later commits.
 - No tests verify WAL durability semantics with fsync/sync guarantees.
-- No tests assert manifest determinism (byte-for-byte stability across runs).
+- ~~No tests assert manifest determinism (byte-for-byte stability across runs).~~ **ADDED: `deterministic_encoding` test**
 - No tests assert index rebuild/derivability or that index updates are atomic with commit.
 
 ## Questions / assumptions
