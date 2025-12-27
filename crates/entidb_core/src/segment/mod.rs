@@ -6,8 +6,11 @@
 //! ## Segment Record Format
 //!
 //! ```text
-//! | record_len (4) | collection_id (4) | entity_id (16) | flags (1) | payload (N) | checksum (4) |
+//! | record_len (4) | collection_id (4) | entity_id (16) | flags (1) | sequence (8) | payload (N) | checksum (4) |
 //! ```
+//!
+//! Fields:
+//! - `sequence` (8 bytes): Commit sequence number; latest wins during compaction.
 //!
 //! Flags:
 //! - `0x01` = tombstone (deleted entity)

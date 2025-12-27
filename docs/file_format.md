@@ -91,8 +91,18 @@ entidb/
 ### 4.2 Segment record
 
 ```
-| record_len (4) | collection_id (u32) | entity_id (128bit) | flags (1) | payload (N) | checksum (4) |
+| record_len (4) | collection_id (4) | entity_id (16) | flags (1) | sequence (8) | payload (N) | checksum (4) |
 ```
+
+Fields:
+
+* `record_len` (4 bytes): Total record length including this field and checksum.
+* `collection_id` (4 bytes): Little-endian u32 collection identifier.
+* `entity_id` (16 bytes): 128-bit UUID as raw bytes.
+* `flags` (1 byte): Record flags.
+* `sequence` (8 bytes): Little-endian u64 commit sequence number. Determines version ordering; latest sequence wins.
+* `payload` (N bytes): Canonical CBOR entity bytes (empty for tombstones).
+* `checksum` (4 bytes): CRC32 over all preceding bytes.
 
 Flags:
 

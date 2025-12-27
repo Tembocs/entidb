@@ -20,9 +20,9 @@
 
 ### High
 
-4) Segment file format in code does not match the spec.
-- Code includes a sequence number in the segment record header; the spec omits this field. This is a hard incompatibility with docs/file_format.md and test vectors.
-- Evidence: `docs/file_format.md:91`, `crates/entidb_core/src/segment/record.rs:66`, `crates/entidb_core/src/segment/record.rs:128`.
+4) ~~Segment file format in code does not match the spec.~~ **RESOLVED**
+- ~~Code includes a sequence number in the segment record header; the spec omits this field. This is a hard incompatibility with docs/file_format.md and test vectors.~~
+- **Fix:** Documentation updated to include the sequence number field. The sequence is required for "latest version wins" semantics during compaction and visibility ordering.
 
 5) Index invariants and access path rules are violated.
 - Users must not reference indexes by name, and indexes should be automatically maintained and derivable. The public API requires index names and exposes manual insert/remove/lookups with no transactional coupling.
