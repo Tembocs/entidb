@@ -160,6 +160,9 @@ pub struct SegmentManager {
     index: RwLock<HashMap<(u32, [u8; 16]), VersionChain>>,
     /// Callback for when a segment is sealed.
     on_segment_sealed: RwLock<Option<Box<dyn Fn(u64) + Send + Sync>>>,
+    /// Compaction lock to coordinate between compaction and segment sealing.
+    /// When held, prevents new segments from being sealed during compaction.
+    compaction_lock: parking_lot::Mutex<()>,
 }
 
 impl SegmentManager {
@@ -202,6 +205,7 @@ impl SegmentManager {
             max_segment_size,
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
+            compaction_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -263,6 +267,7 @@ impl SegmentManager {
             max_segment_size,
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
+            compaction_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -309,6 +314,7 @@ impl SegmentManager {
             max_segment_size,
             index: RwLock::new(HashMap::new()),
             on_segment_sealed: RwLock::new(None),
+            compaction_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -355,7 +361,15 @@ impl SegmentManager {
     }
 
     /// Seals the current active segment and creates a new one.
+    ///
+    /// This method coordinates with compaction by acquiring the compaction lock
+    /// before sealing. This ensures that:
+    /// - No segment is sealed while compaction is scanning sealed segments
+    /// - Compaction sees a consistent view of sealed segments
     pub fn seal_and_rotate(&self) -> CoreResult<u64> {
+        // Acquire compaction lock to prevent sealing during compaction
+        let _compaction_guard = self.compaction_lock.lock();
+
         let old_id = *self.active_segment_id.read();
 
         // Seal the current segment
@@ -544,6 +558,10 @@ impl SegmentManager {
     }
 
     /// Scans all records across all segments.
+    ///
+    /// **Warning:** This includes the active segment. For compaction, use
+    /// [`scan_sealed`] instead to avoid scanning data that may be concurrently
+    /// written.
     pub fn scan_all(&self) -> CoreResult<Vec<SegmentRecord>> {
         let segments = self.segments.read();
         let _segment_info = self.segment_info.read();
@@ -558,6 +576,198 @@ impl SegmentManager {
         }
 
         Ok(all_records)
+    }
+
+    /// Scans all records across sealed (immutable) segments only.
+    ///
+    /// This method is safe for compaction as it excludes the active segment,
+    /// preventing races with concurrent writes. The active segment continues
+    /// to receive new writes while sealed segments are being compacted.
+    ///
+    /// **Note:** For compaction, prefer using [`compact_sealed`] which performs
+    /// the scan and replacement atomically while holding the compaction lock.
+    ///
+    /// # Returns
+    ///
+    /// A vector of all segment records from sealed segments, ordered by segment ID.
+    pub fn scan_sealed(&self) -> CoreResult<Vec<SegmentRecord>> {
+        let active_id = *self.active_segment_id.read();
+        let segment_info = self.segment_info.read();
+
+        // Collect sealed segment IDs only
+        let mut sealed_ids: Vec<u64> = segment_info
+            .iter()
+            .filter(|(&id, info)| info.sealed && id != active_id)
+            .map(|(&id, _)| id)
+            .collect();
+        sealed_ids.sort();
+
+        drop(segment_info); // Release lock before scanning
+
+        let mut all_records = Vec::new();
+        for seg_id in sealed_ids {
+            let records = self.scan_segment(seg_id)?;
+            all_records.extend(records);
+        }
+
+        Ok(all_records)
+    }
+
+    /// Performs atomic compaction of sealed segments.
+    ///
+    /// This is the preferred method for compaction as it:
+    /// 1. Acquires the compaction lock to prevent segment sealing during the operation
+    /// 2. Scans all sealed segments
+    /// 3. Applies the provided compaction function
+    /// 4. Replaces sealed segments with compacted data
+    ///
+    /// The compaction lock ensures that no new segments are sealed while the
+    /// operation is in progress, providing a consistent view of sealed segments.
+    ///
+    /// # Arguments
+    ///
+    /// * `compact_fn` - A function that takes the scanned records and returns
+    ///   the compacted records to write
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (removed_segment_ids, new_segment_id) on success.
+    ///
+    /// # Concurrency
+    ///
+    /// - Writers can continue appending to the active segment
+    /// - Segment sealing is blocked until compaction completes
+    /// - Reads are not blocked (MVCC index provides consistent view)
+    pub fn compact_sealed<F>(
+        &self,
+        compact_fn: F,
+    ) -> CoreResult<(Vec<SegmentRecord>, Vec<u64>, Option<u64>)>
+    where
+        F: FnOnce(Vec<SegmentRecord>) -> CoreResult<Vec<SegmentRecord>>,
+    {
+        // Acquire compaction lock for the entire operation
+        // This prevents seal_and_rotate from completing while we're compacting
+        let _compaction_guard = self.compaction_lock.lock();
+
+        // Scan sealed segments while holding the lock
+        let records = self.scan_sealed_internal()?;
+
+        if records.is_empty() {
+            return Ok((vec![], vec![], None));
+        }
+
+        // Apply compaction logic
+        let compacted_records = compact_fn(records)?;
+
+        // Replace sealed segments with compacted data
+        let (removed_ids, new_segment_id) =
+            self.replace_sealed_with_compacted_internal(compacted_records.clone())?;
+
+        Ok((compacted_records, removed_ids, new_segment_id))
+    }
+
+    /// Internal scan that doesn't acquire the compaction lock (caller must hold it).
+    fn scan_sealed_internal(&self) -> CoreResult<Vec<SegmentRecord>> {
+        let active_id = *self.active_segment_id.read();
+        let segment_info = self.segment_info.read();
+
+        // Collect sealed segment IDs only
+        let mut sealed_ids: Vec<u64> = segment_info
+            .iter()
+            .filter(|(&id, info)| info.sealed && id != active_id)
+            .map(|(&id, _)| id)
+            .collect();
+        sealed_ids.sort();
+
+        drop(segment_info); // Release lock before scanning
+
+        let mut all_records = Vec::new();
+        for seg_id in sealed_ids {
+            let records = self.scan_segment(seg_id)?;
+            all_records.extend(records);
+        }
+
+        Ok(all_records)
+    }
+
+    /// Internal replacement that doesn't acquire the compaction lock (caller must hold it).
+    fn replace_sealed_with_compacted_internal(
+        &self,
+        compacted_records: Vec<SegmentRecord>,
+    ) -> CoreResult<(Vec<u64>, Option<u64>)> {
+        // Get list of sealed segments to remove
+        let sealed_ids: Vec<u64> = {
+            let info = self.segment_info.read();
+            info.iter()
+                .filter(|(_, seg)| seg.sealed)
+                .map(|(&id, _)| id)
+                .collect()
+        };
+
+        if sealed_ids.is_empty() && compacted_records.is_empty() {
+            return Ok((vec![], None));
+        }
+
+        // Find the next segment ID to use
+        let new_segment_id = {
+            let info = self.segment_info.read();
+            info.keys().copied().max().unwrap_or(0) + 1
+        };
+
+        // Create new segment for compacted data (if any records)
+        let created_segment_id = if !compacted_records.is_empty() {
+            let new_backend = (self.backend_factory)(new_segment_id);
+
+            // Write all compacted records
+            let mut total_size = 0u64;
+            {
+                let backend = new_backend;
+                let backend_guard = Arc::new(RwLock::new(backend));
+
+                for record in &compacted_records {
+                    let encoded = record.encode();
+                    total_size += encoded.len() as u64;
+                    backend_guard.write().append(&encoded)?;
+                }
+
+                // Sync to disk
+                backend_guard.write().sync()?;
+
+                // Add to segments map
+                self.segments.write().insert(new_segment_id, backend_guard);
+            }
+
+            // Add segment info (sealed since it contains only historical data)
+            self.segment_info.write().insert(
+                new_segment_id,
+                SegmentInfo {
+                    id: new_segment_id,
+                    sealed: true,
+                    size: total_size,
+                    record_count: compacted_records.len(),
+                },
+            );
+
+            Some(new_segment_id)
+        } else {
+            None
+        };
+
+        // Remove old sealed segments from memory
+        {
+            let mut segments = self.segments.write();
+            let mut info = self.segment_info.write();
+
+            for seg_id in &sealed_ids {
+                segments.remove(seg_id);
+                info.remove(seg_id);
+            }
+        }
+
+        // Rebuild the index from remaining segments
+        self.rebuild_index()?;
+
+        Ok((sealed_ids, created_segment_id))
     }
 
     /// Scans all records in a specific segment.
@@ -771,12 +981,16 @@ impl SegmentManager {
     /// Replaces all sealed segments with compacted records.
     ///
     /// This is the core operation for compaction:
-    /// 1. Creates a new segment for the compacted data
-    /// 2. Writes all compacted records to it
-    /// 3. Removes the old sealed segments
-    /// 4. Rebuilds the index
+    /// 1. Acquires the compaction lock to prevent segment sealing
+    /// 2. Creates a new segment for the compacted data
+    /// 3. Writes all compacted records to it
+    /// 4. Removes the old sealed segments
+    /// 5. Rebuilds the index
     ///
     /// The active (unsealed) segment is preserved.
+    ///
+    /// **Note:** For atomic compaction (scan + replace), prefer using [`compact_sealed`]
+    /// which holds the compaction lock throughout the entire operation.
     ///
     /// # Returns
     ///
@@ -785,80 +999,9 @@ impl SegmentManager {
         &self,
         compacted_records: Vec<SegmentRecord>,
     ) -> CoreResult<(Vec<u64>, Option<u64>)> {
-        // Get list of sealed segments to remove
-        let sealed_ids: Vec<u64> = {
-            let info = self.segment_info.read();
-            info.iter()
-                .filter(|(_, seg)| seg.sealed)
-                .map(|(&id, _)| id)
-                .collect()
-        };
-
-        if sealed_ids.is_empty() && compacted_records.is_empty() {
-            return Ok((vec![], None));
-        }
-
-        // Find the next segment ID to use
-        let new_segment_id = {
-            let info = self.segment_info.read();
-            info.keys().copied().max().unwrap_or(0) + 1
-        };
-
-        // Create new segment for compacted data (if any records)
-        let created_segment_id = if !compacted_records.is_empty() {
-            let new_backend = (self.backend_factory)(new_segment_id);
-
-            // Write all compacted records
-            let mut total_size = 0u64;
-            {
-                let backend = new_backend;
-                let backend_guard =
-                    Arc::new(RwLock::new(backend));
-
-                for record in &compacted_records {
-                    let encoded = record.encode();
-                    total_size += encoded.len() as u64;
-                    backend_guard.write().append(&encoded)?;
-                }
-
-                // Sync to disk
-                backend_guard.write().sync()?;
-
-                // Add to segments map
-                self.segments.write().insert(new_segment_id, backend_guard);
-            }
-
-            // Add segment info (sealed since it contains only historical data)
-            self.segment_info.write().insert(
-                new_segment_id,
-                SegmentInfo {
-                    id: new_segment_id,
-                    sealed: true,
-                    size: total_size,
-                    record_count: compacted_records.len(),
-                },
-            );
-
-            Some(new_segment_id)
-        } else {
-            None
-        };
-
-        // Remove old sealed segments from memory
-        {
-            let mut segments = self.segments.write();
-            let mut info = self.segment_info.write();
-
-            for seg_id in &sealed_ids {
-                segments.remove(seg_id);
-                info.remove(seg_id);
-            }
-        }
-
-        // Rebuild the index from remaining segments
-        self.rebuild_index()?;
-
-        Ok((sealed_ids, created_segment_id))
+        // Acquire compaction lock to coordinate with seal_and_rotate
+        let _compaction_guard = self.compaction_lock.lock();
+        self.replace_sealed_with_compacted_internal(compacted_records)
     }
 
     /// Gets the list of sealed segment IDs.
@@ -1168,5 +1311,166 @@ mod tests {
         assert_eq!(new_id, 2);
         assert_eq!(manager.active_segment_id(), 2);
         assert_eq!(manager.sealed_segment_count(), 1);
+    }
+
+    #[test]
+    fn scan_sealed_excludes_active_segment() {
+        let manager = create_manager();
+        let collection = CollectionId::new(1);
+
+        // Add some records to segment 1 (active)
+        for i in 0..3u8 {
+            let record = SegmentRecord::put(
+                collection,
+                [i; 16],
+                vec![i; 10],
+                SequenceNumber::new(u64::from(i) + 1),
+            );
+            manager.append(&record).unwrap();
+        }
+
+        // scan_sealed should return empty (no sealed segments yet)
+        let sealed_records = manager.scan_sealed().unwrap();
+        assert!(sealed_records.is_empty(), "No sealed segments should exist yet");
+
+        // Seal segment 1 and rotate to segment 2
+        manager.seal_and_rotate().unwrap();
+
+        // Add more records to segment 2 (now active)
+        for i in 3..6u8 {
+            let record = SegmentRecord::put(
+                collection,
+                [i; 16],
+                vec![i; 10],
+                SequenceNumber::new(u64::from(i) + 1),
+            );
+            manager.append(&record).unwrap();
+        }
+
+        // scan_sealed should only return records from segment 1
+        let sealed_records = manager.scan_sealed().unwrap();
+        assert_eq!(sealed_records.len(), 3, "Should have 3 records from sealed segment");
+
+        // Verify the records are from the first batch
+        for record in &sealed_records {
+            assert!(record.entity_id[0] < 3, "Record should be from first batch");
+        }
+
+        // scan_all should return all 6 records
+        let all_records = manager.scan_all().unwrap();
+        assert_eq!(all_records.len(), 6, "Should have all 6 records");
+    }
+
+    #[test]
+    fn compact_sealed_is_atomic() {
+        let manager = create_manager();
+        let collection = CollectionId::new(1);
+
+        // Add records and seal segment
+        for i in 0..3u8 {
+            let record = SegmentRecord::put(
+                collection,
+                [i; 16],
+                vec![i; 10],
+                SequenceNumber::new(u64::from(i) + 1),
+            );
+            manager.append(&record).unwrap();
+        }
+        manager.seal_and_rotate().unwrap();
+
+        // Add duplicate records with higher sequence numbers
+        for i in 0..2u8 {
+            let record = SegmentRecord::put(
+                collection,
+                [i; 16],
+                vec![i + 100; 10], // Updated payload
+                SequenceNumber::new(u64::from(i) + 10),
+            );
+            manager.append(&record).unwrap();
+        }
+        manager.seal_and_rotate().unwrap();
+
+        // Add records to active segment (should not be affected)
+        let active_record = SegmentRecord::put(
+            collection,
+            [10u8; 16],
+            vec![10; 10],
+            SequenceNumber::new(100),
+        );
+        manager.append(&active_record).unwrap();
+
+        // Perform atomic compaction - should only compact sealed segments
+        let (compacted, removed_ids, new_seg_id) = manager
+            .compact_sealed(|records| {
+                // Simple deduplication: keep highest sequence per entity
+                use std::collections::HashMap;
+                let mut latest: HashMap<[u8; 16], SegmentRecord> = HashMap::new();
+                for record in records {
+                    latest
+                        .entry(record.entity_id)
+                        .and_modify(|e| {
+                            if record.sequence > e.sequence {
+                                *e = record.clone();
+                            }
+                        })
+                        .or_insert(record);
+                }
+                Ok(latest.into_values().collect())
+            })
+            .unwrap();
+
+        // Should have removed 2 sealed segments
+        assert_eq!(removed_ids.len(), 2);
+
+        // Should have created 1 new compacted segment
+        assert!(new_seg_id.is_some());
+
+        // Compacted result should have 3 unique entities
+        assert_eq!(compacted.len(), 3);
+
+        // Active segment record should still be readable
+        let active_data = manager.get(collection, &[10u8; 16]).unwrap();
+        assert!(active_data.is_some());
+        assert_eq!(active_data.unwrap(), vec![10; 10]);
+    }
+
+    #[test]
+    fn replace_sealed_preserves_active_segment() {
+        let manager = create_manager();
+        let collection = CollectionId::new(1);
+
+        // Add and seal a segment
+        let sealed_record = SegmentRecord::put(
+            collection,
+            [1u8; 16],
+            vec![1; 10],
+            SequenceNumber::new(1),
+        );
+        manager.append(&sealed_record).unwrap();
+        manager.seal_and_rotate().unwrap();
+
+        // Add to active segment
+        let active_record = SegmentRecord::put(
+            collection,
+            [2u8; 16],
+            vec![2; 10],
+            SequenceNumber::new(2),
+        );
+        manager.append(&active_record).unwrap();
+
+        // Replace sealed segments with empty compacted data
+        let (removed, _new_id) = manager.replace_sealed_with_compacted(vec![]).unwrap();
+
+        // Should have removed the sealed segment
+        assert_eq!(removed.len(), 1);
+
+        // Active segment data should still be accessible
+        let data = manager.get(collection, &[2u8; 16]).unwrap();
+        assert!(data.is_some());
+        assert_eq!(data.unwrap(), vec![2; 10]);
+
+        // Sealed segment data should be gone
+        let old_data = manager.get(collection, &[1u8; 16]).unwrap();
+        assert!(old_data.is_none());
     }
 }

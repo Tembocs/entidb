@@ -33,9 +33,9 @@
 - ~~Updates are always emitted as inserts, so consumers cannot distinguish inserts vs updates. This breaks sync protocol expectations for op_type accuracy.~~
 - **Fix:** The `PendingWrite::Put` variant now includes an `is_update: Option<bool>` field. At commit time, if `is_update` is `None`, the database checks entity existence at the transaction's snapshot sequence to determine the correct operation type. New entities emit `ChangeType::Insert`, existing entities emit `ChangeType::Update`, and deletes emit `ChangeType::Delete`. Added `put_with_op_type()` for callers who already know the operation type (e.g., sync layer). Comprehensive tests added to verify correct behavior.
 
-7) Compaction scans all segments, including the active segment, and does not coordinate with writers.
-- The comment says sealed-only, but the implementation scans all segments and then replaces sealed segments. This can duplicate active data and race with ongoing writes.
-- Evidence: `crates/entidb_core/src/database.rs:638`, `crates/entidb_core/src/segment/store.rs:444`.
+7) ~~Compaction scans all segments, including the active segment, and does not coordinate with writers.~~ **RESOLVED**
+- ~~The comment says sealed-only, but the implementation scans all segments and then replaces sealed segments. This can duplicate active data and race with ongoing writes.~~
+- **Fix:** Added `scan_sealed()` method that explicitly excludes the active segment. Introduced a `compaction_lock` in `SegmentManager` to coordinate between compaction and segment sealing. The `compact_sealed()` method performs atomic compaction: it acquires the lock, scans sealed segments, applies compaction logic, and replaces segments atomically. `seal_and_rotate()` now also acquires this lock, preventing segments from being sealed during compaction. Comprehensive tests verify that active segment data is preserved during compaction.
 
 ### Medium
 

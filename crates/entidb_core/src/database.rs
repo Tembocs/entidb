@@ -842,27 +842,20 @@ impl Database {
     ///
     /// Statistics about the compaction operation.
     ///
+    /// # Concurrency
+    ///
+    /// Compaction operates safely alongside concurrent reads and writes:
+    /// - Only sealed (immutable) segments are compacted
+    /// - The active segment continues to receive writes during compaction
+    /// - A compaction lock prevents segment sealing during the operation
+    /// - Segment replacement is atomic with respect to the MVCC index
+    ///
     /// # Note
     ///
     /// Compaction is a read-heavy operation. For large databases, consider
     /// running it during periods of low activity.
     pub fn compact(&self, remove_tombstones: bool) -> CoreResult<CompactionStats> {
         self.ensure_open()?;
-
-        // Read all current records from sealed segments only
-        let records = self.segments.scan_all()?;
-        let input_count = records.len();
-        let input_size: usize = records.iter().map(|r| r.encoded_size()).sum();
-
-        if records.is_empty() {
-            return Ok(CompactionStats {
-                input_records: 0,
-                output_records: 0,
-                tombstones_removed: 0,
-                obsolete_versions_removed: 0,
-                bytes_saved: 0,
-            });
-        }
 
         // Configure compactor
         use crate::segment::{CompactionConfig, Compactor};
@@ -875,15 +868,41 @@ impl Database {
         let compactor = Compactor::new(config);
         let current_seq = self.committed_seq();
 
-        // Perform compaction (this produces deduplicated records)
-        let (compacted_records, result) = compactor.compact(records, current_seq)?;
-
-        // Get the sealed segment IDs before replacement (for file deletion)
+        // Get sealed segment IDs before compaction (for file deletion)
         let sealed_ids = self.segments.sealed_segment_ids();
 
-        // Replace sealed segments with compacted data
-        let (removed_ids, _new_segment_id) =
-            self.segments.replace_sealed_with_compacted(compacted_records)?;
+        // Track compaction statistics across the closure
+        use std::cell::RefCell;
+        let stats = RefCell::new(None);
+
+        // Perform atomic compaction: scan + compact + replace while holding compaction lock
+        // This ensures no segments are sealed during the operation, providing a
+        // consistent view of sealed segments and preventing data duplication.
+        let (_compacted_records, removed_ids, _new_segment_id) =
+            self.segments.compact_sealed(|records| {
+                let input_count = records.len();
+                let input_size: usize = records.iter().map(|r| r.encoded_size()).sum();
+
+                if records.is_empty() {
+                    *stats.borrow_mut() = Some(CompactionStats::default());
+                    return Ok(vec![]);
+                }
+
+                // Perform compaction (this produces deduplicated records)
+                let (compacted, result) = compactor.compact(records, current_seq)?;
+
+                let output_size: usize = compacted.iter().map(|r| r.encoded_size()).sum();
+
+                *stats.borrow_mut() = Some(CompactionStats {
+                    input_records: input_count,
+                    output_records: result.output_records,
+                    tombstones_removed: result.tombstones_removed,
+                    obsolete_versions_removed: result.obsolete_versions_removed,
+                    bytes_saved: input_size.saturating_sub(output_size),
+                });
+
+                Ok(compacted)
+            })?;
 
         // Delete the old segment files from disk
         #[cfg(feature = "std")]
@@ -894,15 +913,7 @@ impl Database {
             }
         }
 
-        let _output_size = input_size.saturating_sub(result.bytes_saved);
-
-        Ok(CompactionStats {
-            input_records: input_count,
-            output_records: result.output_records,
-            tombstones_removed: result.tombstones_removed,
-            obsolete_versions_removed: result.obsolete_versions_removed,
-            bytes_saved: result.bytes_saved,
-        })
+        Ok(stats.into_inner().unwrap_or_default())
     }
 
     /// Returns the current committed sequence number.
