@@ -506,7 +506,7 @@ impl Database {
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload, is_update } => {
+                crate::transaction::PendingWrite::Put { payload, is_update, .. } => {
                     // Track bytes written
                     self.stats.record_write(payload.len() as u64);
                     
@@ -540,7 +540,7 @@ impl Database {
                         )
                     }
                 }
-                crate::transaction::PendingWrite::Delete => {
+                crate::transaction::PendingWrite::Delete { .. } => {
                     self.stats.record_delete();
                     crate::change_feed::ChangeEvent::delete(
                         sequence.as_u64(),
@@ -582,7 +582,7 @@ impl Database {
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload, is_update } => {
+                crate::transaction::PendingWrite::Put { payload, is_update, .. } => {
                     self.stats.record_write(payload.len() as u64);
                     
                     // Determine if this is an insert or update
@@ -613,7 +613,7 @@ impl Database {
                         )
                     }
                 }
-                crate::transaction::PendingWrite::Delete => {
+                crate::transaction::PendingWrite::Delete { .. } => {
                     self.stats.record_delete();
                     crate::change_feed::ChangeEvent::delete(
                         sequence.as_u64(),

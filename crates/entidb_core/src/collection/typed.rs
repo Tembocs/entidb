@@ -131,7 +131,7 @@ impl<T: EntityCodec> Collection<T> {
                 PendingWrite::Put { payload, .. } => {
                     return Ok(Some(T::decode(id, payload)?));
                 }
-                PendingWrite::Delete => {
+                PendingWrite::Delete { .. } => {
                     return Ok(None);
                 }
             }

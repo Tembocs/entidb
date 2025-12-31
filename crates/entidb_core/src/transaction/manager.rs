@@ -3,7 +3,7 @@
 use crate::entity::EntityId;
 use crate::error::{CoreError, CoreResult};
 use crate::segment::{SegmentManager, SegmentRecord};
-use crate::transaction::state::{PendingWrite, Transaction, WriteTransaction};
+use crate::transaction::state::{compute_content_hash, PendingWrite, Transaction, WriteTransaction};
 use crate::types::{CollectionId, SequenceNumber, TransactionId};
 use crate::wal::{WalManager, WalRecord};
 use parking_lot::{Mutex, RwLock};
@@ -138,25 +138,67 @@ impl TransactionManager {
         let txid = txn.id();
         let sequence = SequenceNumber::new(self.next_seq.fetch_add(1, Ordering::SeqCst));
 
-        // Write all operations to WAL
+        // Verify conflict detection: check that before_hash matches current state
+        // This implements optimistic concurrency control.
+        for ((collection_id, entity_id), write) in txn.pending_writes() {
+            let expected_hash = match write {
+                PendingWrite::Put { before_hash, .. } => before_hash,
+                PendingWrite::Delete { before_hash } => before_hash,
+            };
+
+            // Get the current committed value
+            let current_value = self
+                .segments
+                .get(*collection_id, entity_id.as_bytes())?;
+            let current_hash = current_value.as_ref().map(|bytes| compute_content_hash(bytes));
+
+            // If we have an expected hash, verify it matches
+            if let Some(expected) = expected_hash {
+                match current_hash {
+                    Some(actual) if actual != *expected => {
+                        // Conflict: entity was modified since we read it
+                        return Err(CoreError::TransactionConflict {
+                            collection_id: collection_id.as_u32(),
+                            entity_id: *entity_id.as_bytes(),
+                        });
+                    }
+                    None => {
+                        // Conflict: entity was deleted since we read it
+                        return Err(CoreError::TransactionConflict {
+                            collection_id: collection_id.as_u32(),
+                            entity_id: *entity_id.as_bytes(),
+                        });
+                    }
+                    _ => {} // Hash matches, no conflict
+                }
+            } else if current_hash.is_some() && txn.get_read_hash(*collection_id, *entity_id) == Some(None) {
+                // We read the entity as non-existent but it now exists
+                return Err(CoreError::TransactionConflict {
+                    collection_id: collection_id.as_u32(),
+                    entity_id: *entity_id.as_bytes(),
+                });
+            }
+        }
+
+        // Write all operations to WAL with before_hash
         for ((collection_id, entity_id), write) in txn.pending_writes() {
             let entity_bytes = *entity_id.as_bytes();
             match write {
-                PendingWrite::Put { payload, .. } => {
+                PendingWrite::Put { payload, before_hash, .. } => {
                     self.wal.append(&WalRecord::Put {
                         txid,
                         collection_id: *collection_id,
                         entity_id: entity_bytes,
-                        before_hash: None, // TODO: implement conflict detection
+                        before_hash: *before_hash,
                         after_bytes: payload.clone(),
                     })?;
                 }
-                PendingWrite::Delete => {
+                PendingWrite::Delete { before_hash } => {
                     self.wal.append(&WalRecord::Delete {
                         txid,
                         collection_id: *collection_id,
                         entity_id: entity_bytes,
-                        before_hash: None,
+                        before_hash: *before_hash,
                     })?;
                 }
             }
@@ -216,7 +258,7 @@ impl TransactionManager {
                         SegmentRecord::put(*collection_id, entity_bytes, payload.clone(), sequence);
                     self.segments.append(&record)?;
                 }
-                PendingWrite::Delete => {
+                PendingWrite::Delete { .. } => {
                     let record = SegmentRecord::tombstone(*collection_id, entity_bytes, sequence);
                     self.segments.append(&record)?;
                 }
@@ -265,7 +307,7 @@ impl TransactionManager {
         if let Some(write) = txn.get_pending_write(collection_id, entity_id) {
             return match write {
                 PendingWrite::Put { payload, .. } => Ok(Some(payload.clone())),
-                PendingWrite::Delete => Ok(None),
+                PendingWrite::Delete { .. } => Ok(None),
             };
         }
 
@@ -275,8 +317,9 @@ impl TransactionManager {
             .segments
             .get_at_snapshot(collection_id, entity_id.as_bytes(), Some(snapshot_seq))?;
 
-        // Record the read for conflict detection
-        txn.record_read(collection_id, entity_id, Some(snapshot_seq));
+        // Record the read for conflict detection with content hash
+        let observed_hash = result.as_ref().map(|bytes| compute_content_hash(bytes));
+        txn.record_read(collection_id, entity_id, observed_hash);
 
         Ok(result)
     }
@@ -731,5 +774,159 @@ mod tests {
         assert_eq!(result, Some(vec![1]));
 
         tm.abort_write(&mut wtxn).unwrap();
+    }
+
+    // === Conflict Detection Tests ===
+
+    #[test]
+    fn conflict_detection_same_entity_modified() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start transaction 1: read then prepare to write
+        let mut txn1 = tm.begin().unwrap();
+        let _value = tm.get(&mut txn1, collection, entity).unwrap(); // Records before_hash
+        txn1.put(collection, entity, vec![10]).unwrap();
+
+        // Transaction 2 commits a change to the same entity
+        {
+            let mut txn2 = tm.begin().unwrap();
+            let _value = tm.get(&mut txn2, collection, entity).unwrap();
+            txn2.put(collection, entity, vec![20]).unwrap();
+            tm.commit(&mut txn2).unwrap();
+        }
+
+        // Transaction 1's commit should fail with conflict error
+        let result = tm.commit(&mut txn1);
+        assert!(result.is_err());
+        if let Err(crate::error::CoreError::TransactionConflict { collection_id, entity_id }) = result {
+            assert_eq!(collection_id, collection.as_u32());
+            assert_eq!(entity_id, *entity.as_bytes());
+        } else {
+            panic!("Expected TransactionConflict error");
+        }
+    }
+
+    #[test]
+    fn conflict_detection_entity_deleted_after_read() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start transaction 1: read then prepare to update
+        let mut txn1 = tm.begin().unwrap();
+        let _value = tm.get(&mut txn1, collection, entity).unwrap();
+        txn1.put(collection, entity, vec![10]).unwrap();
+
+        // Transaction 2 deletes the entity
+        {
+            let mut txn2 = tm.begin().unwrap();
+            txn2.delete(collection, entity).unwrap();
+            tm.commit(&mut txn2).unwrap();
+        }
+
+        // Transaction 1's commit should fail with conflict error
+        let result = tm.commit(&mut txn1);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(crate::error::CoreError::TransactionConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn conflict_detection_no_conflict_without_read() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start transaction 1: write without reading (blind write)
+        let mut txn1 = tm.begin().unwrap();
+        txn1.put(collection, entity, vec![10]).unwrap();
+
+        // Transaction 2 commits a change to the same entity
+        {
+            let mut txn2 = tm.begin().unwrap();
+            let _value = tm.get(&mut txn2, collection, entity).unwrap();
+            txn2.put(collection, entity, vec![20]).unwrap();
+            tm.commit(&mut txn2).unwrap();
+        }
+
+        // Transaction 1's commit should succeed (no before_hash recorded)
+        let result = tm.commit(&mut txn1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn conflict_detection_no_conflict_when_unchanged() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Write initial value
+        {
+            let mut txn = tm.begin().unwrap();
+            txn.put(collection, entity, vec![1]).unwrap();
+            tm.commit(&mut txn).unwrap();
+        }
+
+        // Start transaction 1: read then update
+        let mut txn1 = tm.begin().unwrap();
+        let _value = tm.get(&mut txn1, collection, entity).unwrap();
+        txn1.put(collection, entity, vec![10]).unwrap();
+
+        // Transaction 1's commit should succeed (entity unchanged)
+        let result = tm.commit(&mut txn1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn conflict_detection_insert_on_nonexistent() {
+        let tm = create_manager();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // Transaction 1: check entity doesn't exist, prepare to insert
+        let mut txn1 = tm.begin().unwrap();
+        let exists = tm.get(&mut txn1, collection, entity).unwrap();
+        assert!(exists.is_none());
+        txn1.put(collection, entity, vec![10]).unwrap();
+
+        // Transaction 2: insert the entity first
+        {
+            let mut txn2 = tm.begin().unwrap();
+            txn2.put(collection, entity, vec![20]).unwrap();
+            tm.commit(&mut txn2).unwrap();
+        }
+
+        // Transaction 1's commit should fail (entity now exists)
+        let result = tm.commit(&mut txn1);
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(crate::error::CoreError::TransactionConflict { .. })
+        ));
     }
 }

@@ -112,5 +112,5 @@ Scope: Rust core + storage + bindings surface, focusing on crash safety, determi
 - [x] Recovery skips re-applying txns with `commit_seq <= last_checkpoint`.
 - [x] Encryption backend redesigned to prevent nonce reuse under truncation/rewrites.
 - [x] Index definitions persisted in manifest and restored on open.
-- [ ] Conflict detection implemented (before-hash + typed conflict error).
+- [x] Conflict detection implemented (before-hash + typed conflict error).
 - [ ] Recovery policy documented + regression tests.

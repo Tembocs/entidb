@@ -4,7 +4,24 @@ use crate::entity::EntityId;
 use crate::error::{CoreError, CoreResult};
 use crate::types::{CollectionId, SequenceNumber, TransactionId};
 use parking_lot::MutexGuard;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+/// Computes a SHA-256 hash of entity content for conflict detection.
+///
+/// This function computes a deterministic hash over the canonical CBOR bytes
+/// of an entity. The hash is used for optimistic conflict detection:
+/// - When reading an entity, compute its hash
+/// - When writing, store the "before" hash
+/// - At commit, verify the before hash matches current state
+///
+/// Returns a 32-byte hash.
+#[must_use]
+pub fn compute_content_hash(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
 
 /// State of a transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +49,22 @@ pub enum PendingWrite {
         ///
         /// This field is used by the change feed to emit the correct operation type.
         is_update: Option<bool>,
+        /// Hash of the entity's "before" state for conflict detection.
+        ///
+        /// - `Some(hash)` = entity existed; hash is SHA-256 of previous content
+        /// - `None` = entity did not exist before this write
+        ///
+        /// At commit time, this is verified against the current committed value.
+        before_hash: Option<[u8; 32]>,
     },
     /// Delete an entity.
-    Delete,
+    Delete {
+        /// Hash of the entity's "before" state for conflict detection.
+        ///
+        /// - `Some(hash)` = entity existed; hash is SHA-256 of previous content
+        /// - `None` = entity did not exist (delete of non-existent is a no-op)
+        before_hash: Option<[u8; 32]>,
+    },
 }
 
 /// A write transaction that holds an exclusive write lock.
@@ -141,13 +171,16 @@ impl<'a> WriteTransaction<'a> {
     }
 
     /// Records a read for conflict detection.
+    ///
+    /// `observed_hash` is the SHA-256 hash of the entity content at read time,
+    /// or `None` if the entity did not exist.
     pub fn record_read(
         &mut self,
         collection_id: CollectionId,
         entity_id: EntityId,
-        observed_seq: Option<SequenceNumber>,
+        observed_hash: Option<[u8; 32]>,
     ) {
-        self.inner.record_read(collection_id, entity_id, observed_seq)
+        self.inner.record_read(collection_id, entity_id, observed_hash)
     }
 }
 
@@ -176,8 +209,10 @@ pub struct Transaction {
     state: TransactionState,
     /// Pending writes: (collection_id, entity_id) -> write operation.
     writes: HashMap<(CollectionId, EntityId), PendingWrite>,
-    /// Read set for conflict detection: (collection_id, entity_id) -> observed sequence.
-    reads: HashMap<(CollectionId, EntityId), Option<SequenceNumber>>,
+    /// Read set for conflict detection: (collection_id, entity_id) -> observed content hash.
+    /// `Some(hash)` means entity existed with that content hash.
+    /// `None` means entity did not exist at read time.
+    reads: HashMap<(CollectionId, EntityId), Option<[u8; 32]>>,
 }
 
 impl Transaction {
@@ -218,8 +253,8 @@ impl Transaction {
 
     /// Records a put operation.
     ///
-    /// The `is_update` flag will be determined at commit time by checking
-    /// whether the entity existed at the transaction's snapshot.
+    /// The `is_update` and `before_hash` will be determined at commit time
+    /// from the read set or by checking the current entity state.
     pub fn put(
         &mut self,
         collection_id: CollectionId,
@@ -227,11 +262,14 @@ impl Transaction {
         payload: Vec<u8>,
     ) -> CoreResult<()> {
         self.ensure_active()?;
+        // Get before_hash from read set if we previously read this entity
+        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
         self.writes.insert(
             (collection_id, entity_id),
             PendingWrite::Put {
                 payload,
                 is_update: None, // Will be resolved at commit time
+                before_hash,
             },
         );
         Ok(())
@@ -249,11 +287,14 @@ impl Transaction {
         is_update: bool,
     ) -> CoreResult<()> {
         self.ensure_active()?;
+        // Get before_hash from read set if we previously read this entity
+        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
         self.writes.insert(
             (collection_id, entity_id),
             PendingWrite::Put {
                 payload,
                 is_update: Some(is_update),
+                before_hash,
             },
         );
         Ok(())
@@ -262,22 +303,27 @@ impl Transaction {
     /// Records a delete operation.
     pub fn delete(&mut self, collection_id: CollectionId, entity_id: EntityId) -> CoreResult<()> {
         self.ensure_active()?;
+        // Get before_hash from read set if we previously read this entity
+        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
         self.writes
-            .insert((collection_id, entity_id), PendingWrite::Delete);
+            .insert((collection_id, entity_id), PendingWrite::Delete { before_hash });
         Ok(())
     }
 
     /// Records a read for conflict detection.
+    ///
+    /// `observed_hash` is the SHA-256 hash of the entity content at read time,
+    /// or `None` if the entity did not exist.
     pub fn record_read(
         &mut self,
         collection_id: CollectionId,
         entity_id: EntityId,
-        observed_seq: Option<SequenceNumber>,
+        observed_hash: Option<[u8; 32]>,
     ) {
         // Only record if not already written in this transaction
         let key = (collection_id, entity_id);
         if !self.writes.contains_key(&key) {
-            self.reads.insert(key, observed_seq);
+            self.reads.insert(key, observed_hash);
         }
     }
 
@@ -305,10 +351,28 @@ impl Transaction {
     }
 
     /// Returns the read set for conflict detection.
+    ///
+    /// Returns entries of (collection_id, entity_id) -> Option<hash>
+    /// where `Some(hash)` means the entity existed with that content hash,
+    /// and `None` means the entity did not exist.
     pub fn read_set(
         &self,
-    ) -> impl Iterator<Item = (&(CollectionId, EntityId), &Option<SequenceNumber>)> {
+    ) -> impl Iterator<Item = (&(CollectionId, EntityId), &Option<[u8; 32]>)> {
         self.reads.iter()
+    }
+
+    /// Gets the observed hash for an entity from the read set.
+    ///
+    /// Returns `Some(Some(hash))` if entity was read and existed,
+    /// `Some(None)` if entity was read and did not exist,
+    /// `None` if entity was never read in this transaction.
+    #[must_use]
+    pub fn get_read_hash(
+        &self,
+        collection_id: CollectionId,
+        entity_id: EntityId,
+    ) -> Option<Option<[u8; 32]>> {
+        self.reads.get(&(collection_id, entity_id)).copied()
     }
 
     /// Marks the transaction as committed.
@@ -371,7 +435,7 @@ mod tests {
         txn.delete(collection, entity).unwrap();
 
         let write = txn.get_pending_write(collection, entity);
-        assert!(matches!(write, Some(PendingWrite::Delete)));
+        assert!(matches!(write, Some(PendingWrite::Delete { .. })));
     }
 
     #[test]
@@ -410,16 +474,17 @@ mod tests {
     }
 
     #[test]
-    fn record_read_tracks_observed_sequence() {
+    fn record_read_tracks_observed_hash() {
         let mut txn = create_txn();
         let collection = CollectionId::new(1);
         let entity = EntityId::new();
 
-        txn.record_read(collection, entity, Some(SequenceNumber::new(5)));
+        let test_hash = compute_content_hash(b"test data");
+        txn.record_read(collection, entity, Some(test_hash));
 
         let reads: Vec<_> = txn.read_set().collect();
         assert_eq!(reads.len(), 1);
-        assert_eq!(reads[0].1, &Some(SequenceNumber::new(5)));
+        assert_eq!(reads[0].1, &Some(test_hash));
     }
 
     #[test]
@@ -429,10 +494,57 @@ mod tests {
         let entity = EntityId::new();
 
         txn.put(collection, entity, vec![1]).unwrap();
-        txn.record_read(collection, entity, Some(SequenceNumber::new(5)));
+        let test_hash = compute_content_hash(b"test data");
+        txn.record_read(collection, entity, Some(test_hash));
 
         // Should not be in read set since we wrote to it
         let reads: Vec<_> = txn.read_set().collect();
         assert!(reads.is_empty());
+    }
+
+    #[test]
+    fn put_captures_before_hash_from_read_set() {
+        let mut txn = create_txn();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // First record a read
+        let test_hash = compute_content_hash(b"original data");
+        txn.record_read(collection, entity, Some(test_hash));
+
+        // Now write to the entity
+        txn.put(collection, entity, vec![1, 2, 3]).unwrap();
+
+        // The pending write should have captured the before_hash
+        if let Some(PendingWrite::Put { before_hash, .. }) =
+            txn.get_pending_write(collection, entity)
+        {
+            assert_eq!(*before_hash, Some(test_hash));
+        } else {
+            panic!("expected Put");
+        }
+    }
+
+    #[test]
+    fn delete_captures_before_hash_from_read_set() {
+        let mut txn = create_txn();
+        let collection = CollectionId::new(1);
+        let entity = EntityId::new();
+
+        // First record a read
+        let test_hash = compute_content_hash(b"original data");
+        txn.record_read(collection, entity, Some(test_hash));
+
+        // Now delete the entity
+        txn.delete(collection, entity).unwrap();
+
+        // The pending write should have captured the before_hash
+        if let Some(PendingWrite::Delete { before_hash }) =
+            txn.get_pending_write(collection, entity)
+        {
+            assert_eq!(*before_hash, Some(test_hash));
+        } else {
+            panic!("expected Delete");
+        }
     }
 }

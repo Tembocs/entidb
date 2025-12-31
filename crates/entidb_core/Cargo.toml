@@ -23,6 +23,7 @@ thiserror.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 tracing.workspace = true
+sha2.workspace = true
 fs2 = { workspace = true, optional = true }
 
 # Optional encryption dependencies
