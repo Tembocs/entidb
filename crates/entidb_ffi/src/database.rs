@@ -237,9 +237,16 @@ pub unsafe extern "C" fn entidb_collection(
         }
     };
 
-    let id = db.collection(name_str);
-    *out_collection_id = EntiDbCollectionId::new(id.as_u32());
-    EntiDbResult::Ok
+    match db.create_collection(name_str) {
+        Ok(id) => {
+            *out_collection_id = EntiDbCollectionId::new(id.as_u32());
+            EntiDbResult::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            EntiDbResult::Error
+        }
+    }
 }
 
 /// Puts an entity in a collection.
@@ -3135,7 +3142,7 @@ pub unsafe extern "C" fn entidb_get_schema_version(
     let db = &*(handle as *mut entidb_core::Database);
 
     // Use a special metadata collection for schema version
-    let meta_collection = db.collection("__entidb_meta__");
+    let meta_collection = db.collection_unchecked("__entidb_meta__");
     let version_key = entidb_core::EntityId::from_bytes([
         0x5c, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, // "schema_ve"
         0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, 0x00, // "rsion\0\0\0"
@@ -3186,7 +3193,7 @@ pub unsafe extern "C" fn entidb_set_schema_version(
     let db = &*(handle as *mut entidb_core::Database);
 
     // Use a special metadata collection for schema version
-    let meta_collection = db.collection("__entidb_meta__");
+    let meta_collection = db.collection_unchecked("__entidb_meta__");
     let version_key = entidb_core::EntityId::from_bytes([
         0x5c, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, // "schema_ve"
         0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, 0x00, // "rsion\0\0\0"

@@ -935,7 +935,7 @@ impl Database {
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_fts_index_with_config(coll, name, min_token_length, max_token_length, !case_sensitive)
+            .create_fts_index_with_config(coll, name, min_token_length, max_token_length, case_sensitive)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 

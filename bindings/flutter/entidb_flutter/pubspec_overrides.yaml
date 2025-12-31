@@ -1,0 +1,6 @@
+# Local development overrides
+# This file is used to override dependencies for local development.
+# It should be git-ignored and not published.
+dependency_overrides:
+  entidb_dart:
+    path: ../../dart/entidb_dart
