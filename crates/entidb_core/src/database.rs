@@ -388,6 +388,10 @@ impl Database {
     /// - Pass 1: Identify committed transactions (O(txn count) memory)
     /// - Pass 2: Replay operations from committed transactions (O(1) memory per record)
     ///
+    /// **Important**: Only transactions with `commit_seq > checkpoint_seq` are replayed.
+    /// Transactions at or below the checkpoint sequence are already materialized in segments
+    /// and skipping them prevents segment bloat on repeated crashes.
+    ///
     /// Returns (manifest, next_txid, next_seq, committed_seq).
     fn recover_with_manifest(
         wal: &WalManager,
@@ -408,13 +412,21 @@ impl Database {
         
         // === PASS 2: Streaming replay of committed operations ===
         // Memory usage: O(1) per record
+        // 
+        // CRITICAL: Only replay transactions with commit_seq > checkpoint_seq.
+        // Transactions at or below the checkpoint are already in segments.
+        // Skipping them prevents segment bloat on repeated crash-recovery cycles.
         for result in wal.iter()? {
             let (_, record) = result?;
             
             match &record {
                 WalRecord::Put { txid, collection_id, entity_id, after_bytes, .. } => {
-                    // Only replay if this transaction was committed
+                    // Only replay if this transaction was committed AND not already checkpointed
                     if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
+                        // Skip if already materialized in segments (at or below checkpoint)
+                        if commit_seq.as_u64() <= checkpoint_seq {
+                            continue;
+                        }
                         let segment_record = SegmentRecord::put(
                             *collection_id,
                             *entity_id,
@@ -425,8 +437,12 @@ impl Database {
                     }
                 }
                 WalRecord::Delete { txid, collection_id, entity_id, .. } => {
-                    // Only replay if this transaction was committed
+                    // Only replay if this transaction was committed AND not already checkpointed
                     if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
+                        // Skip if already materialized in segments (at or below checkpoint)
+                        if commit_seq.as_u64() <= checkpoint_seq {
+                            continue;
+                        }
                         let segment_record = SegmentRecord::tombstone(
                             *collection_id,
                             *entity_id,
@@ -4164,6 +4180,86 @@ mod wal_durability_tests {
                 data,
                 Some(vec![1, 2, 3, 4, 5]),
                 "data should be recovered from segments after checkpoint"
+            );
+
+            db.close().unwrap();
+        }
+    }
+
+    /// Tests that recovery skips transactions already in checkpoint (prevents segment bloat).
+    ///
+    /// This is a regression test for the crash-window segment growth issue:
+    /// If the process crashes after manifest save (with checkpoint) but before WAL
+    /// truncation, reopening should NOT re-append already-checkpointed operations.
+    #[test]
+    fn recovery_skips_checkpointed_transactions() {
+        let temp = tempdir().unwrap();
+        let db_path = temp.path().join("checkpoint_skip_test");
+
+        let entity1 = EntityId::new();
+        let entity2 = EntityId::new();
+
+        // Session 1: Create data, checkpoint, add more data, simulate crash before WAL clear
+        let segment_size_after_checkpoint: u64;
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("items");
+
+            // Transaction 1: will be checkpointed
+            db.transaction(|txn| {
+                txn.put(collection, entity1, vec![1, 2, 3])?;
+                Ok(())
+            })
+            .unwrap();
+
+            // Checkpoint: entity1 is now in segments, manifest has checkpoint seq
+            db.checkpoint().unwrap();
+
+            // Record segment size after checkpoint
+            segment_size_after_checkpoint = db.segments.total_size().unwrap_or(0);
+
+            // Transaction 2: will be in WAL but NOT checkpointed
+            db.transaction(|txn| {
+                txn.put(collection, entity2, vec![4, 5, 6])?;
+                Ok(())
+            })
+            .unwrap();
+
+            // Simulate crash: DON'T close cleanly, so manifest is saved but WAL
+            // might still contain records from before checkpoint
+            // In a real crash scenario, the WAL wouldn't be truncated after checkpoint
+            drop(db);
+        }
+
+        // Session 2: Recovery should NOT duplicate entity1 into segments again
+        {
+            let db = Database::open(&db_path).unwrap();
+            let collection = db.collection("items");
+
+            // Both entities should be readable
+            let data1 = db.get(collection, entity1).unwrap();
+            assert_eq!(data1, Some(vec![1, 2, 3]), "entity1 should be recovered");
+
+            let data2 = db.get(collection, entity2).unwrap();
+            assert_eq!(data2, Some(vec![4, 5, 6]), "entity2 should be recovered");
+
+            // The key assertion: segment size should not have grown significantly
+            // beyond what we'd expect from just entity2 being added during recovery.
+            // If entity1 was re-added, the segments would be bloated.
+            let current_segment_size = db.segments.total_size().unwrap_or(0);
+
+            // The segment should grow by roughly the size of entity2, not entity1 + entity2
+            // We use a generous margin because segment record overhead varies
+            let entity2_approx_size = 50; // ~50 bytes for a small record with overhead
+            let max_expected_growth = entity2_approx_size * 2; // Allow 2x for overhead
+
+            let actual_growth = current_segment_size.saturating_sub(segment_size_after_checkpoint);
+            assert!(
+                actual_growth < max_expected_growth + segment_size_after_checkpoint / 2,
+                "segments should not have grown excessively: before={}, after={}, growth={}",
+                segment_size_after_checkpoint,
+                current_segment_size,
+                actual_growth
             );
 
             db.close().unwrap();

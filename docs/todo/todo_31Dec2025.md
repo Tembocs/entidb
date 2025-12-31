@@ -109,7 +109,7 @@ Scope: Rust core + storage + bindings surface, focusing on crash safety, determi
 ## “Go/No-Go” checklist for starting implementation
 
 - [x] Enforce no `panic!`/`unwrap`/`expect` in non-test code (repo policy + CI gate).
-- [ ] Recovery skips re-applying txns with `commit_seq <= last_checkpoint`.
+- [x] Recovery skips re-applying txns with `commit_seq <= last_checkpoint`.
 - [ ] Encryption backend redesigned to prevent nonce reuse under truncation/rewrites.
 - [ ] Index definitions persisted in manifest and restored on open.
 - [ ] Conflict detection implemented (before-hash + typed conflict error).
