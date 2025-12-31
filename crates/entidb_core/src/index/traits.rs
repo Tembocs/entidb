@@ -38,7 +38,9 @@ impl IndexKey for i64 {
                 message: "expected 8 bytes for i64".into(),
             });
         }
-        let arr: [u8; 8] = bytes.try_into().unwrap();
+        let arr: [u8; 8] = bytes.try_into().map_err(|_| crate::error::CoreError::InvalidFormat {
+            message: "expected 8 bytes for i64".into(),
+        })?;
         Ok(i64::from_be_bytes(arr))
     }
 }

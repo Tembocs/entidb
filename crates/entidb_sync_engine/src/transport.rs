@@ -4,6 +4,7 @@ use crate::error::{SyncError, SyncResult};
 use entidb_sync_protocol::{
     HandshakeRequest, HandshakeResponse, PullRequest, PullResponse, PushRequest, PushResponse,
 };
+use parking_lot::Mutex;
 
 /// A sync transport handles network communication with the sync server.
 ///
@@ -52,9 +53,9 @@ pub enum SyncResponse {
 #[derive(Debug, Default)]
 pub struct MockTransport {
     connected: std::sync::atomic::AtomicBool,
-    handshake_response: std::sync::Mutex<Option<HandshakeResponse>>,
-    pull_response: std::sync::Mutex<Option<PullResponse>>,
-    push_response: std::sync::Mutex<Option<PushResponse>>,
+    handshake_response: Mutex<Option<HandshakeResponse>>,
+    pull_response: Mutex<Option<PullResponse>>,
+    push_response: Mutex<Option<PushResponse>>,
 }
 
 impl MockTransport {
@@ -62,25 +63,25 @@ impl MockTransport {
     pub fn new() -> Self {
         Self {
             connected: std::sync::atomic::AtomicBool::new(true),
-            handshake_response: std::sync::Mutex::new(None),
-            pull_response: std::sync::Mutex::new(None),
-            push_response: std::sync::Mutex::new(None),
+            handshake_response: Mutex::new(None),
+            pull_response: Mutex::new(None),
+            push_response: Mutex::new(None),
         }
     }
 
     /// Sets the handshake response.
     pub fn set_handshake_response(&self, response: HandshakeResponse) {
-        *self.handshake_response.lock().unwrap() = Some(response);
+        *self.handshake_response.lock() = Some(response);
     }
 
     /// Sets the pull response.
     pub fn set_pull_response(&self, response: PullResponse) {
-        *self.pull_response.lock().unwrap() = Some(response);
+        *self.pull_response.lock() = Some(response);
     }
 
     /// Sets the push response.
     pub fn set_push_response(&self, response: PushResponse) {
-        *self.push_response.lock().unwrap() = Some(response);
+        *self.push_response.lock() = Some(response);
     }
 
     /// Sets the connected state.
@@ -97,7 +98,6 @@ impl SyncTransport for MockTransport {
         }
         self.handshake_response
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| SyncError::Protocol("No mock handshake response set".into()))
     }
@@ -108,7 +108,6 @@ impl SyncTransport for MockTransport {
         }
         self.pull_response
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| SyncError::Protocol("No mock pull response set".into()))
     }
@@ -119,7 +118,6 @@ impl SyncTransport for MockTransport {
         }
         self.push_response
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| SyncError::Protocol("No mock push response set".into()))
     }

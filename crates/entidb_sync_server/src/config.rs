@@ -70,7 +70,7 @@ impl ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self::new("127.0.0.1:8080".parse().unwrap())
+        Self::new(SocketAddr::from(([127, 0, 0, 1], 8080)))
     }
 }
 

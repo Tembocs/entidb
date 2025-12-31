@@ -80,6 +80,7 @@ impl Manifest {
             if existing.collection_id == def.collection_id
                 && existing.field_path == def.field_path
                 && existing.kind == def.kind
+                && existing.unique == def.unique
             {
                 return existing.id;
             }

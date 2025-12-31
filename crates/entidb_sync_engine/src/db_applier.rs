@@ -8,8 +8,9 @@ use crate::error::SyncResult;
 use crate::state::SyncApplier;
 use entidb_core::{CollectionId, Database, EntityId};
 use entidb_sync_protocol::{OperationType, SyncOperation};
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Metadata for sync state.
 const SYNC_COLLECTION_ID: u32 = 0xFFFF_FF00;
@@ -112,7 +113,7 @@ impl DatabaseApplier {
     /// This is called by the local database when changes are committed.
     pub fn add_pending(&self, mut operation: SyncOperation) {
         operation.op_id = self.next_op_id.fetch_add(1, Ordering::SeqCst);
-        self.pending.write().unwrap().push(operation);
+        self.pending.write().push(operation);
     }
 
     /// Creates a sync operation from a local change.
@@ -166,7 +167,7 @@ impl SyncApplier for DatabaseApplier {
     }
 
     fn get_pending_operations(&self, limit: u32) -> SyncResult<Vec<SyncOperation>> {
-        let pending = self.pending.read().unwrap();
+        let pending = self.pending.read();
         let ack_watermark = self.acknowledged_up_to.load(Ordering::SeqCst);
 
         Ok(pending
@@ -181,7 +182,7 @@ impl SyncApplier for DatabaseApplier {
         self.acknowledged_up_to.store(up_to_op_id, Ordering::SeqCst);
 
         // Clean up acknowledged operations
-        let mut pending = self.pending.write().unwrap();
+        let mut pending = self.pending.write();
         pending.retain(|op| op.op_id > up_to_op_id);
 
         Ok(())

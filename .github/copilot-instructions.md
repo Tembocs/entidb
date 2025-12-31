@@ -67,3 +67,9 @@ Verify:
 - [ ] WAL append-only preserved
 - [ ] Segment immutability preserved
 - [ ] Binding parity maintained
+
+## Reliability guardrails (MUST)
+
+- In all non-test, non-example, non-benchmark code paths (including bindings/FFI surface), do **not** use `panic!`, `unwrap()`, or `expect()`.
+- Instead, return a typed error (`Result`) with enough context to diagnose the failure.
+- `panic!`/`unwrap`/`expect` are allowed only in `#[cfg(test)]` code, tests, examples, and benchmarks.

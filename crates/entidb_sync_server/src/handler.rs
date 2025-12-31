@@ -6,8 +6,9 @@ use crate::oplog::ServerOplog;
 use entidb_sync_protocol::{
     HandshakeRequest, HandshakeResponse, PullRequest, PullResponse, PushRequest, PushResponse,
 };
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Context for request handling.
 pub struct HandlerContext {
@@ -49,17 +50,17 @@ impl HandlerContext {
             last_cursor: cursor,
             authenticated: true,
         };
-        self.sessions.write().unwrap().insert(device_id, session);
+        self.sessions.write().insert(device_id, session);
     }
 
     /// Gets a device session.
     fn get_session(&self, device_id: &[u8; 16]) -> Option<DeviceSession> {
-        self.sessions.read().unwrap().get(device_id).cloned()
+        self.sessions.read().get(device_id).cloned()
     }
 
     /// Updates session cursor.
     fn update_cursor(&self, device_id: &[u8; 16], cursor: u64) {
-        if let Some(session) = self.sessions.write().unwrap().get_mut(device_id) {
+        if let Some(session) = self.sessions.write().get_mut(device_id) {
             session.last_cursor = cursor;
         }
     }

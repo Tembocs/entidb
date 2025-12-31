@@ -267,7 +267,7 @@ impl Database {
         let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
 
         // Create index engine with persisted definitions from manifest
-        let mut index_engine = IndexEngine::new(IndexEngineConfig::default());
+        let index_engine = IndexEngine::new(IndexEngineConfig::default());
         for idx_def in &recovered_manifest.indexes {
             index_engine.register_index(idx_def.clone());
         }
@@ -328,7 +328,7 @@ impl Database {
         let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
 
         // Create index engine with persisted definitions from manifest
-        let mut index_engine = IndexEngine::new(IndexEngineConfig::default());
+        let index_engine = IndexEngine::new(IndexEngineConfig::default());
         for idx_def in &manifest.indexes {
             index_engine.register_index(idx_def.clone());
         }
@@ -787,20 +787,18 @@ impl Database {
     /// If this is a persistent database (opened via `open()` or `open_with_config()`),
     /// the manifest is automatically saved to disk when a new collection is created.
     ///
-    /// # Panics
-    ///
-    /// Panics if manifest persistence fails for a new collection in a persistent database.
-    /// Use [`create_collection`](Self::create_collection) for fallible collection creation.
-    ///
     /// # Deprecated
     ///
     /// This method is provided for backward compatibility. Prefer `create_collection()`
     /// which returns a `Result` and allows proper error handling.
+    ///
+    /// This method never panics. If manifest persistence fails in a persistent database,
+    /// it falls back to an in-memory-only collection ID (equivalent to
+    /// [`collection_unchecked`](Self::collection_unchecked)).
     #[deprecated(since = "0.2.0", note = "use create_collection() for proper error handling")]
     pub fn collection(&self, name: &str) -> CollectionId {
-        self.create_collection(name).unwrap_or_else(|e| {
-            panic!("collection creation failed for '{}': {}", name, e)
-        })
+        self.create_collection(name)
+            .unwrap_or_else(|_e| self.collection_unchecked(name))
     }
 
     /// Gets or creates a collection ID for a name, ignoring persistence errors.
@@ -1195,6 +1193,91 @@ impl Database {
     // Index Management
     // ========================================================================
 
+    fn create_index_persisted(
+        &self,
+        collection_id: CollectionId,
+        field_path: Vec<String>,
+        kind: crate::index::IndexKind,
+        unique: bool,
+        created_at_seq: SequenceNumber,
+    ) -> CoreResult<u64> {
+        self.ensure_open()?;
+
+        // Fast path: already exists in manifest
+        {
+            let manifest = self.manifest.read();
+            if let Some(existing) = manifest
+                .indexes
+                .iter()
+                .find(|d| {
+                    d.collection_id == collection_id
+                        && d.field_path == field_path
+                        && d.kind == kind
+                        && d.unique == unique
+                })
+                .cloned()
+            {
+                let existing_id = existing.id;
+                // Ensure IndexEngine has it registered (recovery path should do this,
+                // but keep it safe for in-process creation ordering).
+                self.index_engine.register_index(existing);
+                return Ok(existing_id);
+            }
+        }
+
+        // Slow path: add to manifest and persist (if file-backed)
+        let (new_id, def_for_engine) = {
+            let mut manifest = self.manifest.write();
+
+            let def = crate::index::IndexDefinition {
+                id: 0,
+                collection_id,
+                field_path: field_path.clone(),
+                kind,
+                unique,
+                created_at_seq,
+            };
+
+            let id = manifest.add_index(def);
+
+            #[cfg(feature = "std")]
+            if let Some(ref dir) = self.dir {
+                if let Err(e) = dir.save_manifest(&manifest) {
+                    // Roll back in-memory manifest mutation.
+                    let _ = manifest.remove_index(id);
+                    manifest.next_index_id = id;
+                    return Err(CoreError::manifest_persist_failed(format!(
+                        "failed to persist index definition {:?} on collection {}: {}",
+                        field_path,
+                        collection_id.as_u32(),
+                        e
+                    )));
+                }
+            }
+
+            let def_for_engine = crate::index::IndexDefinition {
+                id,
+                collection_id,
+                field_path,
+                kind,
+                unique,
+                created_at_seq,
+            };
+
+            (id, def_for_engine)
+        };
+
+        // Register + (re)build indexes from current persisted records.
+        self.index_engine.register_index(def_for_engine);
+        if let Ok(all_records) = self.segments.scan_all() {
+            if !all_records.is_empty() {
+                self.index_engine.rebuild_from_records(&all_records);
+            }
+        }
+
+        Ok(new_id)
+    }
+
     /// Creates a hash index for fast equality lookups.
     ///
     /// Hash indexes provide O(1) lookup by exact key match. They are ideal for:
@@ -1221,9 +1304,17 @@ impl Database {
         unique: bool,
     ) -> CoreResult<()> {
         self.ensure_open()?;
-        
-        // Use IndexEngine for new index creation (persisted + transactional)
-        self.index_engine.create_hash_index_legacy(collection_id, name, unique)?;
+
+        // Persist definition in manifest + register in IndexEngine
+        let field_path = vec![name.to_string()];
+        let created_at_seq = self.txn_manager.committed_seq();
+        let _id = self.create_index_persisted(
+            collection_id,
+            field_path,
+            crate::index::IndexKind::Hash,
+            unique,
+            created_at_seq,
+        )?;
         
         // Also maintain legacy in-memory index for backward compatibility
         let key = (collection_id.as_u32(), name.to_string());
@@ -1270,8 +1361,16 @@ impl Database {
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
-        // Use IndexEngine for new index creation (persisted + transactional)
-        self.index_engine.create_btree_index_legacy(collection_id, name, unique)?;
+        // Persist definition in manifest + register in IndexEngine
+        let field_path = vec![name.to_string()];
+        let created_at_seq = self.txn_manager.committed_seq();
+        let _id = self.create_index_persisted(
+            collection_id,
+            field_path,
+            crate::index::IndexKind::BTree,
+            unique,
+            created_at_seq,
+        )?;
 
         // Also maintain legacy in-memory index for backward compatibility
         let key = (collection_id.as_u32(), name.to_string());
@@ -4221,13 +4320,7 @@ mod index_rebuild_tests {
     }
 
     /// Tests that index definitions persist in manifest and are restored.
-    /// 
-    /// NOTE: This test is currently ignored because index definitions created via
-    /// `index_engine.create_index()` are not automatically persisted to manifest.
-    /// This is a known gap documented in docs/critique.md (#5: Index invariants).
-    /// The test documents the expected behavior for when this is implemented.
     #[test]
-    #[ignore = "index definitions are not yet persisted to manifest (critique #5)"]
     fn index_definitions_persist_in_manifest() {
         let temp = tempdir().unwrap();
         let db_path = temp.path().join("index_manifest_test");
@@ -4235,33 +4328,13 @@ mod index_rebuild_tests {
         // Session 1: Create indexes
         {
             let db = Database::open(&db_path).unwrap();
-            let users = db.collection("users");
-            let posts = db.collection("posts");
+            let users = db.create_collection("users").unwrap();
+            let posts = db.create_collection("posts").unwrap();
 
             // Create multiple indexes
-            db.index_engine.create_index(
-                users,
-                vec!["email".to_string()],
-                crate::index::IndexKind::Hash,
-                true,
-                SequenceNumber::new(0),
-            ).unwrap();
-
-            db.index_engine.create_index(
-                users,
-                vec!["age".to_string()],
-                crate::index::IndexKind::BTree,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
-
-            db.index_engine.create_index(
-                posts,
-                vec!["author_id".to_string()],
-                crate::index::IndexKind::Hash,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
+            db.create_hash_index(users, "email", true).unwrap();
+            db.create_btree_index(users, "age", false).unwrap();
+            db.create_hash_index(posts, "author_id", false).unwrap();
 
             // Verify definitions exist
             let defs = db.index_engine.definitions();

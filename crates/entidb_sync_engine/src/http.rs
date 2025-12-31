@@ -9,8 +9,8 @@ use crate::transport::SyncTransport;
 use entidb_sync_protocol::{
     HandshakeRequest, HandshakeResponse, PullRequest, PullResponse, PushRequest, PushResponse,
 };
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
 
 /// HTTP client abstraction.
 ///
@@ -57,15 +57,15 @@ impl<C: HttpClient> HttpTransport<C> {
 
     /// Returns the last error message.
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.read().unwrap().clone()
+        self.last_error.read().clone()
     }
 
     fn set_error(&self, err: &str) {
-        *self.last_error.write().unwrap() = Some(err.to_string());
+        *self.last_error.write() = Some(err.to_string());
     }
 
     fn clear_error(&self) {
-        *self.last_error.write().unwrap() = None;
+        *self.last_error.write() = None;
     }
 
     fn post_cbor<Req, Res>(&self, endpoint: &str, request: &Req) -> SyncResult<Res>
@@ -224,7 +224,7 @@ mod tests {
         }
 
         fn set_response(&self, resp: Vec<u8>) {
-            *self.response.write().unwrap() = Some(resp);
+            *self.response.write() = Some(resp);
         }
 
         fn set_healthy(&self, healthy: bool) {
@@ -236,7 +236,6 @@ mod tests {
         fn post(&self, _url: &str, _body: Vec<u8>) -> Result<Vec<u8>, String> {
             self.response
                 .read()
-                .unwrap()
                 .clone()
                 .ok_or_else(|| "No response set".into())
         }

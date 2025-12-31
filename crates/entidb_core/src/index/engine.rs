@@ -225,7 +225,7 @@ impl IndexEngine {
     }
 
     /// Registers an index from a persisted definition (used during recovery).
-    pub fn register_index(&mut self, def: IndexDefinition) {
+    pub fn register_index(&self, def: IndexDefinition) {
         let key = (def.collection_id, def.field_path.clone());
         
         // Skip if already exists
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn test_register_index_from_definition() {
-        let mut engine = IndexEngine::new(IndexEngineConfig::default());
+        let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
         
         let def = IndexDefinition {

@@ -7,8 +7,9 @@ use entidb_sync_protocol::{
     Conflict, ConflictPolicy, HandshakeRequest, LogicalOplog, PullRequest, PushRequest,
     SyncOperation,
 };
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The current state of the sync engine.
@@ -128,22 +129,22 @@ impl<T: SyncTransport, A: SyncApplier> SyncEngine<T, A> {
 
     /// Gets the current state.
     pub fn state(&self) -> SyncState {
-        *self.state.read().unwrap()
+        *self.state.read()
     }
 
     /// Gets the current stats.
     pub fn stats(&self) -> SyncStats {
-        self.stats.read().unwrap().clone()
+        self.stats.read().clone()
     }
 
     /// Sets the conflict policy.
     pub fn set_conflict_policy(&self, policy: ConflictPolicy) {
-        *self.conflict_policy.write().unwrap() = policy;
+        *self.conflict_policy.write() = policy;
     }
 
     /// Gets the conflict policy.
     pub fn conflict_policy(&self) -> ConflictPolicy {
-        *self.conflict_policy.read().unwrap()
+        *self.conflict_policy.read()
     }
 
     /// Cancels any ongoing sync operation.
@@ -167,7 +168,7 @@ impl<T: SyncTransport, A: SyncApplier> SyncEngine<T, A> {
 
     /// Sets the state.
     fn set_state(&self, state: SyncState) {
-        *self.state.write().unwrap() = state;
+        *self.state.write() = state;
     }
 
     /// Performs a full sync cycle: pull then push.
@@ -252,7 +253,7 @@ impl<T: SyncTransport, A: SyncApplier> SyncEngine<T, A> {
 
         // Update stats
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write();
             stats.cycles_completed += 1;
             stats.operations_pulled += result.pulled;
             stats.operations_pushed += result.pushed;
@@ -276,7 +277,7 @@ impl<T: SyncTransport, A: SyncApplier> SyncEngine<T, A> {
                 let delay = retry_config.delay_for_attempt(attempt);
                 std::thread::sleep(delay);
 
-                self.stats.write().unwrap().retries += 1;
+                self.stats.write().retries += 1;
             }
 
             self.check_cancelled()?;
@@ -405,7 +406,7 @@ impl<T: SyncTransport, A: SyncApplier> SyncEngine<T, A> {
     /// Handles an error by updating state and stats.
     fn handle_error(&self, error: &SyncError) {
         self.set_state(SyncState::Error);
-        self.stats.write().unwrap().last_error = Some(error.to_string());
+        self.stats.write().last_error = Some(error.to_string());
     }
 }
 
@@ -426,12 +427,12 @@ impl MemorySyncApplier {
 
     /// Adds a pending operation.
     pub fn add_pending(&self, operation: SyncOperation) {
-        self.oplog.write().unwrap().append(operation);
+        self.oplog.write().append(operation);
     }
 
     /// Gets all applied operations.
     pub fn applied_operations(&self) -> Vec<SyncOperation> {
-        self.applied_operations.read().unwrap().clone()
+        self.applied_operations.read().clone()
     }
 }
 
@@ -445,7 +446,6 @@ impl SyncApplier for MemorySyncApplier {
     fn apply_remote_operations(&self, operations: &[SyncOperation]) -> SyncResult<()> {
         self.applied_operations
             .write()
-            .unwrap()
             .extend(operations.iter().cloned());
         Ok(())
     }
@@ -454,7 +454,6 @@ impl SyncApplier for MemorySyncApplier {
         Ok(self
             .oplog
             .read()
-            .unwrap()
             .pending_batch(limit as usize)
             .into_iter()
             .cloned()
@@ -462,16 +461,16 @@ impl SyncApplier for MemorySyncApplier {
     }
 
     fn acknowledge_operations(&self, up_to_op_id: u64) -> SyncResult<()> {
-        self.oplog.write().unwrap().acknowledge_up_to(up_to_op_id);
+        self.oplog.write().acknowledge_up_to(up_to_op_id);
         Ok(())
     }
 
     fn get_server_cursor(&self) -> SyncResult<u64> {
-        Ok(self.oplog.read().unwrap().server_cursor())
+        Ok(self.oplog.read().server_cursor())
     }
 
     fn set_server_cursor(&self, cursor: u64) -> SyncResult<()> {
-        self.oplog.write().unwrap().set_server_cursor(cursor);
+        self.oplog.write().set_server_cursor(cursor);
         Ok(())
     }
 }

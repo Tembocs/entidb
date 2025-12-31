@@ -78,7 +78,14 @@ impl TokenValidator {
         data.extend_from_slice(&db_id);
         data.extend_from_slice(&timestamp.to_be_bytes());
 
-        let signature = self.sign(&data);
+        let signature = match self.sign(&data) {
+            Ok(sig) => sig,
+            Err(_e) => {
+                // In practice HMAC init should not fail for HMAC-SHA256, but avoid panicking.
+                // If it does fail, return an empty token to guarantee callers don't accept it.
+                return Vec::new();
+            }
+        };
 
         let mut token = data;
         token.extend_from_slice(&signature);
@@ -107,10 +114,26 @@ impl TokenValidator {
         }
 
         // Extract components
-        let device_id: [u8; 16] = token[0..16].try_into().unwrap();
-        let db_id: [u8; 16] = token[16..32].try_into().unwrap();
-        let timestamp_bytes: [u8; 8] = token[32..40].try_into().unwrap();
-        let signature: [u8; 32] = token[40..72].try_into().unwrap();
+        let device_id: [u8; 16] = token
+            .get(0..16)
+            .ok_or_else(|| ServerError::NotAuthorized("Invalid token format".into()))?
+            .try_into()
+            .map_err(|_| ServerError::NotAuthorized("Invalid token format".into()))?;
+        let db_id: [u8; 16] = token
+            .get(16..32)
+            .ok_or_else(|| ServerError::NotAuthorized("Invalid token format".into()))?
+            .try_into()
+            .map_err(|_| ServerError::NotAuthorized("Invalid token format".into()))?;
+        let timestamp_bytes: [u8; 8] = token
+            .get(32..40)
+            .ok_or_else(|| ServerError::NotAuthorized("Invalid token format".into()))?
+            .try_into()
+            .map_err(|_| ServerError::NotAuthorized("Invalid token format".into()))?;
+        let signature: [u8; 32] = token
+            .get(40..72)
+            .ok_or_else(|| ServerError::NotAuthorized("Invalid token format".into()))?
+            .try_into()
+            .map_err(|_| ServerError::NotAuthorized("Invalid token format".into()))?;
 
         // Verify device and db match
         if device_id != *expected_device_id {
@@ -121,7 +144,7 @@ impl TokenValidator {
         }
 
         // Verify signature
-        let expected_signature = self.sign(&token[0..40]);
+        let expected_signature = self.sign(&token[0..40])?;
         if signature != expected_signature.as_slice() {
             return Err(ServerError::NotAuthorized("Invalid signature".into()));
         }
@@ -142,12 +165,13 @@ impl TokenValidator {
     }
 
     /// Signs data with HMAC-SHA256.
-    fn sign(&self, data: &[u8]) -> [u8; 32] {
-        let mut mac =
-            HmacSha256::new_from_slice(&self.config.secret).expect("HMAC can take key of any size");
+    fn sign(&self, data: &[u8]) -> ServerResult<[u8; 32]> {
+        let mut mac = HmacSha256::new_from_slice(&self.config.secret).map_err(|e| {
+            ServerError::Internal(format!("HMAC initialization failed: {e}"))
+        })?;
         mac.update(data);
         let result = mac.finalize();
-        result.into_bytes().into()
+        Ok(result.into_bytes().into())
     }
 }
 

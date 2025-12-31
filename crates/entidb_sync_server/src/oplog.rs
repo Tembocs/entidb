@@ -2,8 +2,8 @@
 
 use crate::error::{ServerError, ServerResult};
 use entidb_sync_protocol::{Conflict, ConflictPolicy, SyncOperation};
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::RwLock;
 
 /// Server-side operation log.
 ///
@@ -45,12 +45,12 @@ impl ServerOplog {
 
     /// Returns the current cursor.
     pub fn cursor(&self) -> u64 {
-        *self.next_cursor.read().unwrap()
+        *self.next_cursor.read()
     }
 
     /// Returns operations since a given cursor.
     pub fn operations_since(&self, cursor: u64, limit: u32) -> Vec<SyncOperation> {
-        let ops = self.operations.read().unwrap();
+        let ops = self.operations.read();
         ops.iter()
             .filter(|op| op.sequence > cursor)
             .take(limit as usize)
@@ -60,7 +60,7 @@ impl ServerOplog {
 
     /// Returns true if there are more operations after the given cursor + limit.
     pub fn has_more_after(&self, cursor: u64, limit: u32) -> bool {
-        let ops = self.operations.read().unwrap();
+        let ops = self.operations.read();
         let count = ops.iter().filter(|op| op.sequence > cursor).count();
         count > limit as usize
     }
@@ -85,8 +85,8 @@ impl ServerOplog {
 
         let mut conflicts = Vec::new();
         let mut accepted = Vec::new();
-        let mut versions = self.entity_versions.write().unwrap();
-        let mut next = self.next_cursor.write().unwrap();
+        let mut versions = self.entity_versions.write();
+        let mut next = self.next_cursor.write();
 
         for mut op in operations {
             let key = (op.collection_id, op.entity_id);
@@ -114,7 +114,7 @@ impl ServerOplog {
         }
 
         // Append accepted operations
-        let mut ops = self.operations.write().unwrap();
+        let mut ops = self.operations.write();
         ops.extend(accepted);
 
         Ok((*next, conflicts))
@@ -128,7 +128,7 @@ impl ServerOplog {
         _versions: &HashMap<(u32, [u8; 16]), (u64, Option<[u8; 32]>)>,
     ) -> Conflict {
         // Find server's current payload for this entity
-        let ops = self.operations.read().unwrap();
+        let ops = self.operations.read();
         let server_payload = ops
             .iter()
             .rev()
@@ -163,20 +163,20 @@ impl ServerOplog {
 
     /// Returns the number of operations.
     pub fn len(&self) -> usize {
-        self.operations.read().unwrap().len()
+        self.operations.read().len()
     }
 
     /// Returns true if the oplog is empty.
     pub fn is_empty(&self) -> bool {
-        self.operations.read().unwrap().is_empty()
+        self.operations.read().is_empty()
     }
 
     /// Clears all operations (for testing).
     #[cfg(test)]
     pub fn clear(&self) {
-        self.operations.write().unwrap().clear();
-        self.entity_versions.write().unwrap().clear();
-        *self.next_cursor.write().unwrap() = 1;
+        self.operations.write().clear();
+        self.entity_versions.write().clear();
+        *self.next_cursor.write() = 1;
     }
 }
 

@@ -52,6 +52,13 @@ EntiDB implements its own storage engine from scratch.
 
 All behavior must be explicit and predictable.
 
+### 2.4 No panics/unwraps in production paths
+
+- In all non-test, non-example, non-benchmark code paths (Rust core, storage backends, sync layers, and bindings/FFI surface), **do not** use `panic!`, `unwrap()`, or `expect()`.
+- These are process-killing failures and are not acceptable in production-grade database code.
+- Use typed errors (`Result`) and propagate failures explicitly.
+- `panic!`/`unwrap`/`expect` are allowed only in tests, examples, and benchmarks.
+
 ---
 
 ## 3. Architectural constraints

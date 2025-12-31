@@ -365,7 +365,7 @@ impl Database {
 
     /// Gets or creates a collection by name.
     fn collection(&self, name: &str) -> Collection {
-        let id = self.inner.collection(name);
+        let id = self.inner.collection_unchecked(name);
         Collection {
             id: id.as_u32(),
             name: name.to_string(),
@@ -1177,7 +1177,9 @@ impl Database {
         match self.inner.get(meta_coll_id, key_id) {
             Ok(Some(bytes)) => {
                 if bytes.len() >= 8 {
-                    let arr: [u8; 8] = bytes[0..8].try_into().unwrap();
+                    let arr: [u8; 8] = bytes[0..8]
+                        .try_into()
+                        .map_err(|_| PyValueError::new_err("invalid schema_version encoding"))?;
                     Ok(u64::from_le_bytes(arr))
                 } else {
                     Ok(0)

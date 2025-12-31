@@ -17,6 +17,7 @@ entidb_sync_protocol.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+parking_lot.workspace = true
 hmac = "0.12"
 sha2 = "0.10"
 

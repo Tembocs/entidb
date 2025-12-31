@@ -158,15 +158,31 @@ impl Header {
         }
 
         // Verify version
-        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let version_bytes: [u8; 4] = bytes
+            .get(8..12)
+            .ok_or_else(|| StorageError::Encryption("header too short".to_string()))?
+            .try_into()
+            .map_err(|_| StorageError::Encryption("invalid header version bytes".to_string()))?;
+        let version = u32::from_le_bytes(version_bytes);
         if version != FORMAT_VERSION {
             return Err(StorageError::Encryption(format!(
                 "unsupported format version: {version}, expected {FORMAT_VERSION}"
             )));
         }
 
-        let block_size = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-        let logical_size = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+        let block_size_bytes: [u8; 4] = bytes
+            .get(12..16)
+            .ok_or_else(|| StorageError::Encryption("header too short".to_string()))?
+            .try_into()
+            .map_err(|_| StorageError::Encryption("invalid header block size bytes".to_string()))?;
+        let block_size = u32::from_le_bytes(block_size_bytes);
+
+        let logical_size_bytes: [u8; 8] = bytes
+            .get(16..24)
+            .ok_or_else(|| StorageError::Encryption("header too short".to_string()))?
+            .try_into()
+            .map_err(|_| StorageError::Encryption("invalid header logical size bytes".to_string()))?;
+        let logical_size = u64::from_le_bytes(logical_size_bytes);
 
         // Validate block size is reasonable (1KB to 1MB)
         if block_size < 1024 || block_size > 1024 * 1024 {
@@ -400,10 +416,19 @@ impl EncryptedBackend {
                                 "block too short during recovery".to_string()
                             ));
                         }
-                        
-                        let block_len = u32::from_le_bytes(
-                            block_data[..BLOCK_LEN_SIZE].try_into().unwrap()
-                        ) as u64;
+
+                        let block_len_bytes: [u8; 4] = block_data
+                            .get(..BLOCK_LEN_SIZE)
+                            .ok_or_else(|| {
+                                StorageError::Encryption("block too short during recovery".to_string())
+                            })?
+                            .try_into()
+                            .map_err(|_| {
+                                StorageError::Encryption(
+                                    "invalid block length prefix during recovery".to_string(),
+                                )
+                            })?;
+                        let block_len = u32::from_le_bytes(block_len_bytes) as u64;
                         
                         total_logical_size += block_len;
                     }
@@ -518,7 +543,12 @@ impl EncryptedBackend {
         }
 
         // Extract length prefix
-        let actual_len = u32::from_le_bytes(block_data[..BLOCK_LEN_SIZE].try_into().unwrap()) as usize;
+        let actual_len_bytes: [u8; 4] = block_data
+            .get(..BLOCK_LEN_SIZE)
+            .ok_or_else(|| StorageError::Encryption("decrypted block too short".to_string()))?
+            .try_into()
+            .map_err(|_| StorageError::Encryption("invalid decrypted block length prefix".to_string()))?;
+        let actual_len = u32::from_le_bytes(actual_len_bytes) as usize;
         
         if actual_len > self.block_size {
             return Err(StorageError::Encryption(format!(
