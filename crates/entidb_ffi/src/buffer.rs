@@ -17,16 +17,19 @@ pub struct EntiDbBuffer {
 
 impl EntiDbBuffer {
     /// Creates a new buffer from a Vec.
+    ///
+    /// This preserves the original Vec allocation (pointer, length, capacity)
+    /// so that `entidb_free_buffer` can correctly reconstruct and drop it.
     pub fn from_vec(vec: Vec<u8>) -> Self {
-        let mut vec = vec.into_boxed_slice();
+        let mut vec = std::mem::ManuallyDrop::new(vec);
         let data = vec.as_mut_ptr();
         let len = vec.len();
-        std::mem::forget(vec);
+        let capacity = vec.capacity();
 
         Self {
             data,
             len,
-            capacity: len,
+            capacity,
         }
     }
 
