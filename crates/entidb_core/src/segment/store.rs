@@ -6,6 +6,12 @@
 //! - Auto-sealing when segments exceed `max_segment_size`
 //! - Segment rotation (creating new segments)
 //! - Index maintenance across segments
+//!
+//! ## Streaming Iteration
+//!
+//! For memory-efficient iteration over large datasets, use [`SegmentManager::iter_all()`]
+//! which returns a [`SegmentRecordIterator`] that yields records one at a time without
+//! loading all records into memory.
 
 use crate::error::{CoreError, CoreResult};
 use crate::segment::record::SegmentRecord;
@@ -297,19 +303,26 @@ impl SegmentManager {
     /// Creates a segment manager with a single initial backend.
     ///
     /// This is a simpler constructor for use cases where you only need
-    /// a single segment (e.g., testing) or where rotation creates
-    /// new in-memory backends.
+    /// a single segment (e.g., testing).
     ///
-    /// For production use with file-based persistence, prefer `with_factory`
-    /// to properly handle segment rotation with file paths.
+    /// **WARNING**: This constructor disallows segment rotation. If the segment
+    /// would exceed `max_segment_size`, an error is returned instead of rotating
+    /// to a new segment. This prevents silent durability loss from in-memory
+    /// fallback.
+    ///
+    /// For production use with file-based persistence, use [`with_factory`] or
+    /// [`with_factory_and_existing`] to properly handle segment rotation.
     ///
     /// # Arguments
     ///
     /// * `backend` - Initial storage backend
-    /// * `max_segment_size` - Maximum size before auto-sealing
+    /// * `max_segment_size` - Maximum size before attempting rotation (which will error)
+    ///
+    /// # Panics
+    ///
+    /// Never panics; rotation attempts return an error.
+    #[doc(hidden)] // Hide from docs to discourage use; prefer with_factory for production
     pub fn new(backend: Box<dyn StorageBackend>, max_segment_size: u64) -> Self {
-        use entidb_storage::InMemoryBackend;
-
         let initial_id = 1;
         let initial_size = backend.size().unwrap_or(0);
 
@@ -327,10 +340,16 @@ impl SegmentManager {
             },
         );
 
-        // When using this constructor, new segments get in-memory backends
-        // (suitable for testing; production should use with_factory)
+        // Factory that errors on rotation to prevent silent durability loss
+        // Production code should use with_factory() instead
         Self {
-            backend_factory: Box::new(|_| Ok(Box::new(InMemoryBackend::new()))),
+            backend_factory: Box::new(|_segment_id| {
+                Err(CoreError::invalid_argument(
+                    "segment rotation not supported: SegmentManager::new() does not allow \
+                     rotation to preserve durability. Use SegmentManager::with_factory() for \
+                     production databases that need segment rotation."
+                ))
+            }),
             segments: RwLock::new(segments),
             segment_info: RwLock::new(segment_info),
             active_segment_id: RwLock::new(initial_id),
@@ -1040,6 +1059,180 @@ impl SegmentManager {
             .filter(|(_, seg)| seg.sealed)
             .map(|(&id, _)| id)
             .collect()
+    }
+
+    /// Creates a streaming iterator over all segment records.
+    ///
+    /// This method is memory-efficient as it reads records one at a time
+    /// rather than loading all records into memory. Use this for:
+    /// - Index rebuilding on database open
+    /// - Large database scans
+    /// - Memory-constrained environments
+    ///
+    /// # Returns
+    ///
+    /// A [`SegmentRecordIterator`] that yields `CoreResult<SegmentRecord>` for each record.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// for record_result in manager.iter_all()? {
+    ///     let record = record_result?;
+    ///     // Process record...
+    /// }
+    /// ```
+    pub fn iter_all(&self) -> CoreResult<SegmentRecordIterator> {
+        let segments = self.segments.read();
+        let mut segment_ids: Vec<_> = segments.keys().copied().collect();
+        segment_ids.sort();
+
+        // Collect backend handles for iteration
+        let backends: Vec<_> = segment_ids
+            .iter()
+            .filter_map(|&id| segments.get(&id).map(|b| (id, Arc::clone(b))))
+            .collect();
+
+        Ok(SegmentRecordIterator::new(backends))
+    }
+}
+
+/// Streaming iterator over segment records.
+///
+/// This iterator reads records one at a time from segment backends,
+/// avoiding the memory overhead of loading all records at once.
+/// It is designed for:
+/// - Memory-efficient index rebuilding
+/// - Streaming large dataset scans
+/// - Bounded-memory operations
+///
+/// # Errors
+///
+/// Each call to `next()` may return a `CoreResult<SegmentRecord>`.
+/// Errors indicate I/O failures or corrupt segment data.
+pub struct SegmentRecordIterator {
+    /// Backends for each segment, in order (segment_id, backend).
+    backends: Vec<(u64, Arc<RwLock<Box<dyn StorageBackend>>>)>,
+    /// Current segment index in `backends`.
+    current_segment: usize,
+    /// Current offset within the current segment.
+    current_offset: u64,
+    /// Size of the current segment.
+    current_size: u64,
+    /// Whether the iterator is exhausted.
+    exhausted: bool,
+}
+
+impl SegmentRecordIterator {
+    /// Creates a new iterator over the given backends.
+    fn new(backends: Vec<(u64, Arc<RwLock<Box<dyn StorageBackend>>>)>) -> Self {
+        let mut iter = Self {
+            backends,
+            current_segment: 0,
+            current_offset: 0,
+            current_size: 0,
+            exhausted: false,
+        };
+        // Initialize first segment size
+        iter.advance_to_valid_segment();
+        iter
+    }
+
+    /// Advances to the next non-empty segment if current is exhausted.
+    fn advance_to_valid_segment(&mut self) {
+        while self.current_segment < self.backends.len() {
+            let backend = &self.backends[self.current_segment].1.read();
+            match backend.size() {
+                Ok(size) => {
+                    self.current_size = size;
+                    if self.current_offset < size {
+                        return; // Valid position
+                    }
+                    // Segment exhausted, move to next
+                    self.current_segment += 1;
+                    self.current_offset = 0;
+                }
+                Err(_) => {
+                    // Skip segments with size errors
+                    self.current_segment += 1;
+                    self.current_offset = 0;
+                }
+            }
+        }
+        // No more valid segments
+        self.exhausted = true;
+    }
+}
+
+impl Iterator for SegmentRecordIterator {
+    type Item = CoreResult<SegmentRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.exhausted {
+                return None;
+            }
+
+            // Ensure we're at a valid position
+            self.advance_to_valid_segment();
+            if self.exhausted {
+                return None;
+            }
+
+            // Scope the lock to avoid borrow conflicts
+            let result = {
+                let backend = self.backends[self.current_segment].1.read();
+
+                // Check if we can read the length field
+                if self.current_offset + 4 > self.current_size {
+                    // Need to advance to next segment
+                    None
+                } else {
+                    // Read record length
+                    let len_bytes = match backend.read_at(self.current_offset, 4) {
+                        Ok(bytes) => bytes,
+                        Err(e) => return Some(Err(CoreError::Storage(e))),
+                    };
+
+                    let record_len = u32::from_le_bytes([
+                        len_bytes[0],
+                        len_bytes[1],
+                        len_bytes[2],
+                        len_bytes[3],
+                    ]) as usize;
+
+                    // Check if record fits
+                    if self.current_offset + record_len as u64 > self.current_size {
+                        // Need to advance to next segment
+                        None
+                    } else {
+                        // Read and decode the full record
+                        let data = match backend.read_at(self.current_offset, record_len) {
+                            Ok(bytes) => bytes,
+                            Err(e) => return Some(Err(CoreError::Storage(e))),
+                        };
+
+                        let record = match SegmentRecord::decode(&data) {
+                            Ok(r) => r,
+                            Err(e) => return Some(Err(e)),
+                        };
+
+                        self.current_offset += record_len as u64;
+                        Some(record)
+                    }
+                }
+            };
+            // Lock is released here
+
+            match result {
+                Some(record) => return Some(Ok(record)),
+                None => {
+                    // Advance to next segment and continue loop
+                    self.current_segment += 1;
+                    self.current_offset = 0;
+                    // Loop will call advance_to_valid_segment
+                }
+            }
+        }
     }
 }
 

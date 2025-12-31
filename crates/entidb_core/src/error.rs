@@ -172,6 +172,15 @@ pub enum CoreError {
         /// Underlying error message.
         source_message: String,
     },
+
+    /// Invalid argument provided.
+    ///
+    /// This error occurs when an invalid argument is passed to an API.
+    #[error("invalid argument: {message}")]
+    InvalidArgument {
+        /// Description of the argument issue.
+        message: String,
+    },
 }
 
 impl CoreError {
@@ -261,6 +270,13 @@ impl CoreError {
         Self::SegmentFileCreationFailed {
             path: path.into(),
             source_message: source.into(),
+        }
+    }
+
+    /// Creates an invalid argument error.
+    pub fn invalid_argument(message: impl Into<String>) -> Self {
+        Self::InvalidArgument {
+            message: message.into(),
         }
     }
 }

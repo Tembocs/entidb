@@ -13,5 +13,4 @@ encryption = ["entidb_core/encryption"]
 
 [dependencies]
 entidb_core.workspace = true
-entidb_storage.workspace = true
 pyo3.workspace = true

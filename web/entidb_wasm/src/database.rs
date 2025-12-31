@@ -150,8 +150,14 @@ impl Database {
             .await
             .map_err(|e| JsValue::from_str(&format!("Failed to load segments: {}", e)))?;
 
+        // Configure for web: use very large segment size to disable rotation.
+        // Web storage uses a single file approach with in-memory backend,
+        // so we cannot create multiple segment files. Setting max_segment_size
+        // to u64::MAX effectively prevents rotation.
+        let config = entidb_core::Config::default().max_segment_size(u64::MAX);
+
         let db = CoreDatabase::open_with_backends(
-            entidb_core::Config::default(),
+            config,
             Box::new(wal_backend),
             Box::new(segment_backend),
         )

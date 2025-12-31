@@ -36,8 +36,14 @@ impl WalManager {
     /// Appends a record to the WAL.
     ///
     /// Returns the offset where the record was written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The record payload exceeds the maximum size (4 GiB)
+    /// - I/O errors occur during write
     pub fn append(&self, record: &WalRecord) -> CoreResult<u64> {
-        let payload = record.encode_payload();
+        let payload = record.encode_payload()?;
         let record_type = record.record_type();
 
         // Build the full record with envelope

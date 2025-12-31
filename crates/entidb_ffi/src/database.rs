@@ -3,11 +3,19 @@
 use crate::buffer::EntiDbBuffer;
 use crate::error::{clear_last_error, set_last_error, EntiDbResult};
 use crate::types::{EntiDbCollectionId, EntiDbConfig, EntiDbEntityId, EntiDbHandle};
-use entidb_storage::FileBackend;
 use std::ffi::CStr;
 use std::path::Path;
 
 /// Opens a database.
+///
+/// This function opens a database using the same directory-based layout as the Rust core:
+/// - LOCK file for single-writer guarantee
+/// - MANIFEST for metadata persistence
+/// - WAL/ directory for write-ahead log
+/// - SEGMENTS/ directory for segment files with proper rotation
+///
+/// This ensures binding parity: Dart, Python, and Rust all observe identical
+/// durability, locking, and metadata behavior.
 ///
 /// # Arguments
 ///
@@ -49,59 +57,19 @@ pub unsafe extern "C" fn entidb_open(
 
         let path = Path::new(path_str);
 
-        // Create directory structure if needed
-        if config.create_if_missing {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        set_last_error(format!("failed to create directory: {e}"));
-                        return EntiDbResult::Error;
-                    }
-                }
-            }
-        }
+        // Build core config matching the FFI config
+        let core_config = entidb_core::Config::default()
+            .create_if_missing(config.create_if_missing)
+            .sync_on_commit(config.sync_on_commit)
+            .max_segment_size(if config.max_segment_size > 0 {
+                config.max_segment_size
+            } else {
+                256 * 1024 * 1024 // Default 256MB
+            });
 
-        // Open file backends for WAL and segments
-        let wal_path = path.join("wal.log");
-        let segment_path = path.join("segments.dat");
-
-        let wal_backend = if config.create_if_missing {
-            FileBackend::open_with_create_dirs(&wal_path)
-        } else {
-            FileBackend::open(&wal_path)
-        };
-
-        let wal_backend = match wal_backend {
-            Ok(b) => Box::new(b) as Box<dyn entidb_storage::StorageBackend>,
-            Err(e) => {
-                set_last_error(format!("failed to open WAL: {e}"));
-                return EntiDbResult::Error;
-            }
-        };
-
-        let segment_backend = if config.create_if_missing {
-            FileBackend::open_with_create_dirs(&segment_path)
-        } else {
-            FileBackend::open(&segment_path)
-        };
-
-        let segment_backend = match segment_backend {
-            Ok(b) => Box::new(b) as Box<dyn entidb_storage::StorageBackend>,
-            Err(e) => {
-                set_last_error(format!("failed to open segments: {e}"));
-                return EntiDbResult::Error;
-            }
-        };
-
-        // Build core config
-        let mut core_config = entidb_core::Config::default();
-        if config.max_segment_size > 0 {
-            core_config.max_segment_size = config.max_segment_size;
-        }
-        core_config.sync_on_commit = config.sync_on_commit;
-
-        // Open database with file backends
-        match entidb_core::Database::open_with_backends(core_config, wal_backend, segment_backend) {
+        // Open database using the same directory-based path as Rust core
+        // This ensures: LOCK file, MANIFEST, SEGMENTS/ layout, proper segment rotation
+        match entidb_core::Database::open_with_config(path, core_config) {
             Ok(db) => {
                 let boxed = Box::new(db);
                 *out_handle = Box::into_raw(boxed) as *mut EntiDbHandle;
@@ -109,6 +77,10 @@ pub unsafe extern "C" fn entidb_open(
             }
             Err(e) => {
                 set_last_error(e.to_string());
+                // Map specific errors to appropriate result codes
+                if e.to_string().contains("locked") {
+                    return EntiDbResult::Locked;
+                }
                 EntiDbResult::Error
             }
         }

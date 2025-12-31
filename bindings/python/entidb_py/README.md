@@ -8,12 +8,28 @@ Python bindings for EntiDB - an embedded entity database engine.
 pip install entidb
 ```
 
-Or build from source:
+Or build from source using [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+cd bindings/python/entidb_py
+uv pip install maturin
+uv run --python 3.13 maturin develop
+```
+
+Or with pip:
 
 ```bash
 cd bindings/python/entidb_py
 pip install maturin
 maturin develop
+```
+
+## Running Tests
+
+```bash
+cd bindings/python/entidb_py
+uv pip install pytest
+uv run --python 3.13 pytest -v
 ```
 
 ## Usage

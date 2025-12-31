@@ -131,8 +131,19 @@ impl WalRecord {
         }
     }
 
+    /// Maximum size for entity payload in a WAL record.
+    ///
+    /// Payloads larger than this will be rejected with an error.
+    /// This limit exists because the WAL format uses a 4-byte length field.
+    pub const MAX_PAYLOAD_SIZE: usize = u32::MAX as usize;
+
     /// Serializes the record payload (without envelope).
-    pub fn encode_payload(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `after_bytes` in a `Put` record exceeds [`MAX_PAYLOAD_SIZE`].
+    /// This prevents creating malformed WAL records that cannot be correctly decoded.
+    pub fn encode_payload(&self) -> CoreResult<Vec<u8>> {
         let mut buf = Vec::new();
 
         match self {
@@ -147,6 +158,15 @@ impl WalRecord {
                 before_hash,
                 after_bytes,
             } => {
+                // Validate payload size before encoding to prevent corruption
+                if after_bytes.len() > Self::MAX_PAYLOAD_SIZE {
+                    return Err(CoreError::invalid_argument(format!(
+                        "entity payload too large: {} bytes exceeds maximum of {} bytes",
+                        after_bytes.len(),
+                        Self::MAX_PAYLOAD_SIZE
+                    )));
+                }
+
                 buf.extend_from_slice(&txid.as_u64().to_le_bytes());
                 buf.extend_from_slice(&collection_id.as_u32().to_le_bytes());
                 buf.extend_from_slice(entity_id);
@@ -158,7 +178,8 @@ impl WalRecord {
                     buf.push(0);
                 }
                 // after_bytes: 4 byte length + data
-                let len = u32::try_from(after_bytes.len()).unwrap_or(u32::MAX);
+                // Safe: we validated len <= u32::MAX above
+                let len = after_bytes.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
                 buf.extend_from_slice(after_bytes);
             }
@@ -190,7 +211,7 @@ impl WalRecord {
             }
         }
 
-        buf
+        Ok(buf)
     }
 
     /// Deserializes a record from its type and payload.
@@ -405,7 +426,7 @@ mod tests {
         let record = WalRecord::Begin {
             txid: TransactionId::new(42),
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Begin, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -419,7 +440,7 @@ mod tests {
             before_hash: Some([0xAB; 32]),
             after_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Put, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -433,7 +454,7 @@ mod tests {
             before_hash: None,
             after_bytes: vec![1, 2, 3],
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Put, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -446,7 +467,7 @@ mod tests {
             entity_id: [0xFF; 16],
             before_hash: None,
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Delete, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -457,7 +478,7 @@ mod tests {
             txid: TransactionId::new(7),
             sequence: SequenceNumber::new(100),
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Commit, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -467,7 +488,7 @@ mod tests {
         let record = WalRecord::Abort {
             txid: TransactionId::new(8),
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Abort, &payload).unwrap();
         assert_eq!(record, decoded);
     }
@@ -477,7 +498,7 @@ mod tests {
         let record = WalRecord::Checkpoint {
             sequence: SequenceNumber::new(500),
         };
-        let payload = record.encode_payload();
+        let payload = record.encode_payload().unwrap();
         let decoded = WalRecord::decode_payload(WalRecordType::Checkpoint, &payload).unwrap();
         assert_eq!(record, decoded);
     }

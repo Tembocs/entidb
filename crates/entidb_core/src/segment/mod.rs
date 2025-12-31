@@ -31,5 +31,5 @@ mod store;
 pub use compaction::{CompactionConfig, CompactionResult, Compactor};
 pub use record::{Segment, SegmentRecord};
 #[allow(unused_imports)]
-pub use store::{SegmentInfo, SegmentManager};
+pub use store::{SegmentInfo, SegmentManager, SegmentRecordIterator};
 

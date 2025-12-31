@@ -556,6 +556,96 @@ impl IndexEngine {
         }
     }
 
+    /// Rebuilds all indexes from a streaming segment record iterator.
+    ///
+    /// This method is memory-efficient: it processes records one at a time
+    /// while maintaining only the necessary state for determining latest versions.
+    /// Use this for large databases where `rebuild_from_records` would OOM.
+    ///
+    /// # Arguments
+    ///
+    /// * `records` - An iterator yielding `CoreResult<SegmentRecord>` items
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error encountered while reading records.
+    pub fn rebuild_from_iterator<I>(&self, records: I) -> CoreResult<()>
+    where
+        I: Iterator<Item = CoreResult<SegmentRecord>>,
+    {
+        use std::collections::HashMap;
+
+        // Phase 1: Stream through records, keeping only latest version info per entity
+        // We store the actual record content since we need the payload for indexing
+        let mut latest_records: HashMap<(CollectionId, [u8; 16]), SegmentRecord> = HashMap::new();
+
+        for record_result in records {
+            let record = record_result?;
+            let key = (record.collection_id, record.entity_id);
+
+            latest_records
+                .entry(key)
+                .and_modify(|existing| {
+                    if record.sequence > existing.sequence {
+                        *existing = record.clone();
+                    }
+                })
+                .or_insert(record);
+        }
+
+        // Clear existing index data
+        {
+            let mut hash_indexes = self.hash_indexes.write();
+            for index in hash_indexes.values_mut() {
+                index.clear();
+            }
+        }
+        {
+            let mut btree_indexes = self.btree_indexes.write();
+            for index in btree_indexes.values_mut() {
+                index.clear();
+            }
+        }
+
+        // Rebuild from latest records
+        let defs = self.definitions.read();
+
+        for ((_coll_id, entity_id_bytes), record) in latest_records {
+            if record.is_tombstone() {
+                continue; // Skip deleted entities
+            }
+
+            let entity_id = EntityId::from(entity_id_bytes);
+
+            // For each index on this collection
+            for def in defs.values() {
+                if def.collection_id != record.collection_id {
+                    continue;
+                }
+
+                // Extract key from payload based on field_path
+                if let Some(key) = self.extract_key_from_cbor(&record.payload, &def.field_path) {
+                    match def.kind {
+                        IndexKind::Hash => {
+                            let mut indexes = self.hash_indexes.write();
+                            if let Some(index) = indexes.get_mut(&def.id) {
+                                let _ = index.insert(key, entity_id);
+                            }
+                        }
+                        IndexKind::BTree => {
+                            let mut indexes = self.btree_indexes.write();
+                            if let Some(index) = indexes.get_mut(&def.id) {
+                                let _ = index.insert(key, entity_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Extracts a key value from CBOR payload given a field path.
     ///
     /// Returns the key as bytes for indexing.
