@@ -113,4 +113,4 @@ Scope: Rust core + storage + bindings surface, focusing on crash safety, determi
 - [x] Encryption backend redesigned to prevent nonce reuse under truncation/rewrites.
 - [x] Index definitions persisted in manifest and restored on open.
 - [x] Conflict detection implemented (before-hash + typed conflict error).
-- [ ] Recovery policy documented + regression tests.
+- [x] Recovery policy documented + regression tests.

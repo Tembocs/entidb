@@ -180,6 +180,15 @@ impl WalManager {
     pub fn clear(&self) -> CoreResult<()> {
         self.truncate(0)
     }
+
+    /// Returns the backend for testing purposes.
+    ///
+    /// This allows tests to directly manipulate the underlying storage
+    /// to simulate crash scenarios like truncated writes or corruption.
+    #[cfg(test)]
+    pub(crate) fn get_backend_for_testing(&self) -> Arc<Mutex<Box<dyn StorageBackend>>> {
+        Arc::clone(&self.backend)
+    }
 }
 
 impl std::fmt::Debug for WalManager {

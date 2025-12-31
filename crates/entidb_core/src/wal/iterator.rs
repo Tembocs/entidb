@@ -5,6 +5,28 @@
 //!
 //! This is essential for handling large WALs during recovery without
 //! risking out-of-memory conditions.
+//!
+//! # Recovery Policy
+//!
+//! The iterator implements EntiDB's recovery policy which distinguishes between
+//! **tolerated** conditions (crash mid-write) and **fatal** conditions (corruption):
+//!
+//! ## Tolerated (returns `Ok(None)`)
+//!
+//! - Truncated header: fewer than 11 bytes remain at end of WAL
+//! - Truncated payload: record length exceeds available bytes
+//!
+//! These represent incomplete writes that were interrupted before fsync.
+//! The partial record is safely discarded.
+//!
+//! ## Fatal (returns `Err(...)`)
+//!
+//! - CRC mismatch: `Err(ChecksumMismatch)` - data corruption detected
+//! - Invalid magic: `Err(WalCorruption)` - not a valid WAL record
+//! - Unknown type: `Err(WalCorruption)` - unrecognized record type
+//! - Future version: `Err(WalCorruption)` - unsupported format version
+//!
+//! Fatal errors abort database open to prevent silent data loss.
 
 use crate::error::{CoreError, CoreResult};
 use crate::wal::record::{compute_crc32, WalRecord, WalRecordType, WAL_MAGIC, WAL_VERSION};
@@ -569,5 +591,239 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 5);
+    }
+
+    // ==========================================================================
+    // Recovery policy tests: verify truncation vs corruption handling
+    // ==========================================================================
+
+    #[test]
+    fn recovery_policy_truncated_header_tolerated() {
+        // Regression test: truncated header (incomplete magic/version/type/length)
+        // should be treated as clean end-of-log, not corruption.
+        //
+        // This represents a crash that occurred mid-write before the header
+        // was fully written. The partial bytes are safely discarded.
+
+        // Create a WAL with one complete record
+        let record = WalRecord::Begin {
+            txid: TransactionId::new(42),
+        };
+        let wal = create_wal_with_records(&[record.clone()]);
+
+        // Get the raw bytes and append incomplete header bytes (5 bytes < 11 header)
+        let backend = wal.get_backend_for_testing();
+        {
+            let mut guard = backend.lock();
+            // Append partial header: just magic + 1 byte (5 bytes total, less than 11)
+            guard.append(&[0xDB, 0xED, 0x01, 0x01, 0x00]).unwrap();
+        }
+
+        // Iterator should return the valid record then Ok(None), not an error
+        let records: Vec<_> = wal.iter().unwrap().collect();
+        assert_eq!(records.len(), 1, "Should return exactly one record");
+        assert!(records[0].is_ok(), "The valid record should parse successfully");
+        assert_eq!(records[0].as_ref().unwrap().1, record);
+    }
+
+    #[test]
+    fn recovery_policy_truncated_payload_tolerated() {
+        // Regression test: complete header but truncated payload
+        // should be treated as clean end-of-log, not corruption.
+        //
+        // This represents a crash after the header was written but before
+        // the full payload + CRC was fsynced.
+
+        let record = WalRecord::Begin {
+            txid: TransactionId::new(1),
+        };
+        let wal = create_wal_with_records(&[record.clone()]);
+
+        // Append a valid header that claims 1000 bytes of payload, but only write 10
+        let backend = wal.get_backend_for_testing();
+        {
+            let mut guard = backend.lock();
+            // magic (4) + version (2) + type (1) + length (4) = 11 bytes header
+            // Type 0x01 = Begin, length = 1000 (but we only write 10 payload bytes)
+            // WAL_MAGIC = b"EWAL" = [0x45, 0x57, 0x41, 0x4C]
+            #[rustfmt::skip]
+            let incomplete_record: &[u8] = &[
+                b'E', b'W', b'A', b'L',  // magic = "EWAL"
+                0x01, 0x00,              // version = 1 (little-endian)
+                0x01,                    // type = Begin
+                0xE8, 0x03, 0x00, 0x00,  // length = 1000 (little-endian)
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, // only 10 bytes
+            ];
+            guard.append(incomplete_record).unwrap();
+        }
+
+        // Iterator should return the valid record then Ok(None) for the truncated one
+        let records: Vec<_> = wal.iter().unwrap().collect();
+        assert_eq!(records.len(), 1, "Should return exactly one record");
+        assert!(records[0].is_ok(), "The valid record should parse successfully");
+    }
+
+    #[test]
+    fn recovery_policy_crc_mismatch_is_fatal() {
+        // Regression test: CRC mismatch MUST return an error, not be tolerated.
+        //
+        // Unlike truncation (crash mid-write), a CRC mismatch indicates actual
+        // data corruption (bit rot, storage failure, etc.) and the database
+        // MUST NOT open to prevent silent data loss.
+
+        let record = WalRecord::Begin {
+            txid: TransactionId::new(1),
+        };
+        let wal = create_wal_with_records(&[record]);
+
+        // Append a record with invalid CRC
+        let backend = wal.get_backend_for_testing();
+        {
+            let mut guard = backend.lock();
+            // Complete record with wrong CRC:
+            // magic (4) + version (2) + type (1) + length (4) + payload (8 for Begin) + CRC (4)
+            // Begin payload: txid as u64 = 999
+            // WAL_MAGIC = b"EWAL" = [0x45, 0x57, 0x41, 0x4C]
+            #[rustfmt::skip]
+            let bad_crc_record: &[u8] = &[
+                b'E', b'W', b'A', b'L',  // magic = "EWAL"
+                0x01, 0x00,              // version = 1
+                0x01,                    // type = Begin
+                0x08, 0x00, 0x00, 0x00,  // length = 8 (txid is u64)
+                0xE7, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // txid = 999
+                0xDE, 0xAD, 0xBE, 0xEF,  // WRONG CRC - this should fail
+            ];
+            guard.append(bad_crc_record).unwrap();
+        }
+
+        // Iterator should return the first valid record, then error on the corrupted one
+        let mut iter = wal.iter().unwrap();
+
+        // First record should be OK
+        let first = iter.next();
+        assert!(first.is_some());
+        assert!(first.unwrap().is_ok(), "First record should be valid");
+
+        // Second record should be an error (CRC mismatch)
+        let second = iter.next();
+        assert!(second.is_some(), "Should attempt to read second record");
+        let err = second.unwrap();
+        assert!(err.is_err(), "CRC mismatch must be an error, not tolerated");
+
+        // Verify it's specifically a ChecksumMismatch error
+        match err {
+            Err(CoreError::ChecksumMismatch { .. }) => {
+                // Expected - this is the correct behavior
+            }
+            Err(other) => {
+                panic!("Expected ChecksumMismatch error, got: {:?}", other);
+            }
+            Ok(_) => {
+                panic!("CRC mismatch was incorrectly tolerated - this is a bug!");
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_policy_invalid_magic_is_fatal() {
+        // Invalid magic bytes should be a fatal error, not tolerated
+
+        let record = WalRecord::Begin {
+            txid: TransactionId::new(1),
+        };
+        let wal = create_wal_with_records(&[record]);
+
+        let backend = wal.get_backend_for_testing();
+        {
+            let mut guard = backend.lock();
+            // Record with invalid magic (not "EWAL")
+            #[rustfmt::skip]
+            let bad_magic: &[u8] = &[
+                0xBA, 0xD0, 0x00, 0x00,  // WRONG magic (should be b"EWAL")
+                0x01, 0x00,              // version = 1
+                0x01,                    // type = Begin
+                0x08, 0x00, 0x00, 0x00,  // length = 8
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // txid = 1
+                0x00, 0x00, 0x00, 0x00,  // some CRC (doesn't matter, magic check first)
+            ];
+            guard.append(bad_magic).unwrap();
+        }
+
+        let mut iter = wal.iter().unwrap();
+        let _ = iter.next(); // First valid record
+
+        let second = iter.next();
+        assert!(second.is_some());
+        assert!(second.unwrap().is_err(), "Invalid magic must be an error");
+    }
+
+    #[test]
+    fn recovery_uncommitted_txn_not_applied_after_truncation() {
+        // Integration test: verify that truncation at the tail correctly
+        // results in uncommitted transactions being excluded from recovery.
+        //
+        // Scenario:
+        // 1. Write: BEGIN(1), PUT(1), COMMIT(1) - complete transaction
+        // 2. Write: BEGIN(2), PUT(2) - incomplete transaction (no COMMIT)
+        // 3. Truncate the WAL mid-way through transaction 2
+        //
+        // Recovery should only see transaction 1 as committed.
+
+        let records = vec![
+            WalRecord::Begin {
+                txid: TransactionId::new(1),
+            },
+            WalRecord::Put {
+                txid: TransactionId::new(1),
+                collection_id: CollectionId::new(1),
+                entity_id: [1; 16],
+                before_hash: None,
+                after_bytes: vec![0xAA, 0xBB, 0xCC],
+            },
+            WalRecord::Commit {
+                txid: TransactionId::new(1),
+                sequence: SequenceNumber::new(1),
+            },
+            // Uncommitted transaction 2
+            WalRecord::Begin {
+                txid: TransactionId::new(2),
+            },
+            WalRecord::Put {
+                txid: TransactionId::new(2),
+                collection_id: CollectionId::new(1),
+                entity_id: [2; 16],
+                before_hash: None,
+                after_bytes: vec![0xDD, 0xEE, 0xFF],
+            },
+            // No COMMIT for transaction 2
+        ];
+
+        let wal = create_wal_with_records(&records);
+
+        // Append truncated bytes to simulate crash mid-write of next record
+        let backend = wal.get_backend_for_testing();
+        {
+            let mut guard = backend.lock();
+            // Partial header
+            guard.append(&[0xDB, 0xED, 0x01]).unwrap();
+        }
+
+        // Use StreamingRecovery to identify committed transactions
+        let mut recovery = StreamingRecovery::new(0);
+        recovery.scan_committed(wal.iter().unwrap()).unwrap();
+
+        // Transaction 1 should be committed, transaction 2 should NOT
+        assert!(
+            recovery.is_committed(&TransactionId::new(1)),
+            "Transaction 1 should be committed"
+        );
+        assert!(
+            !recovery.is_committed(&TransactionId::new(2)),
+            "Transaction 2 should NOT be committed (missing COMMIT)"
+        );
+
+        // Verify we can determine the correct next transaction ID
+        assert_eq!(recovery.next_txid(), 3, "Next txid should be 3");
+        assert_eq!(recovery.next_seq(), 2, "Next sequence should be 2");
     }
 }

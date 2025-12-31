@@ -16,4 +16,4 @@ mod manager;
 mod state;
 
 pub use manager::TransactionManager;
-pub use state::{compute_content_hash, PendingWrite, Transaction, WriteTransaction};
+pub use state::{PendingWrite, Transaction, WriteTransaction};
