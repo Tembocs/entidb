@@ -8,7 +8,8 @@
 //! - All data is encrypted in fixed-size blocks (default 4KB plaintext)
 //! - Each block is encrypted with AES-256-GCM
 //! - Block structure: `nonce (12 bytes) || ciphertext (block_size) || tag (16 bytes)`
-//! - Nonces are derived deterministically from block number for AC-01 compliance
+//! - Nonces are derived deterministically from (epoch, block_number) for AC-01 compliance
+//! - **Epoch** increments on every truncate(0), preventing nonce reuse after rewrites
 //! - Keys are never stored; must be provided by the application
 //! - Keys are zeroized on drop
 //!
@@ -27,19 +28,22 @@
 //!
 //! The header contains:
 //! - Magic bytes (8 bytes): "ENTIDBEC"
-//! - Version (4 bytes): format version
+//! - Version (4 bytes): format version (v2 adds epoch)
 //! - Block size (4 bytes): plaintext block size
 //! - Logical size (8 bytes): total plaintext bytes written
-//! - Reserved (8 bytes): for future use
+//! - Epoch (8 bytes): increments on truncate to prevent nonce reuse
 //!
-//! ## Deterministic Nonces
+//! ## Deterministic Nonces with Epoch Protection
 //!
 //! For AC-01 (determinism) compliance, nonces are derived from:
 //! - A key-derived nonce key (via HMAC-like construction)
+//! - The current epoch (increments on truncate)
 //! - The block number
 //!
-//! This ensures the same block number always produces the same nonce,
-//! while different keys produce different nonce sequences.
+//! This ensures the same (epoch, block_number) pair always produces the same nonce,
+//! while different keys produce different nonce sequences. The epoch mechanism
+//! prevents the catastrophic AES-GCM nonce-reuse vulnerability that would occur
+//! if the same block number were encrypted with different plaintext after truncation.
 
 use crate::backend::StorageBackend;
 use crate::error::{StorageError, StorageResult};
@@ -62,7 +66,8 @@ const HEADER_SIZE: usize = 32;
 /// Magic bytes identifying encrypted EntiDB storage.
 const MAGIC: &[u8; 8] = b"ENTIDBEC";
 /// Current format version.
-const FORMAT_VERSION: u32 = 1;
+/// v2: Added epoch field to prevent nonce reuse after truncate.
+const FORMAT_VERSION: u32 = 2;
 /// Size of the length prefix in each block (stores actual plaintext length).
 const BLOCK_LEN_SIZE: usize = 4;
 
@@ -125,6 +130,9 @@ struct Header {
     block_size: u32,
     /// Total logical (plaintext) bytes written.
     logical_size: u64,
+    /// Epoch counter that increments on truncate/reinit.
+    /// Prevents nonce reuse when blocks are rewritten after truncation.
+    epoch: u64,
 }
 
 impl Header {
@@ -132,6 +140,7 @@ impl Header {
         Self {
             block_size,
             logical_size: 0,
+            epoch: 0,
         }
     }
 
@@ -141,7 +150,7 @@ impl Header {
         buf[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
         buf[12..16].copy_from_slice(&self.block_size.to_le_bytes());
         buf[16..24].copy_from_slice(&self.logical_size.to_le_bytes());
-        // bytes 24..32 reserved
+        buf[24..32].copy_from_slice(&self.epoch.to_le_bytes());
         buf
     }
 
@@ -184,6 +193,13 @@ impl Header {
             .map_err(|_| StorageError::Encryption("invalid header logical size bytes".to_string()))?;
         let logical_size = u64::from_le_bytes(logical_size_bytes);
 
+        let epoch_bytes: [u8; 8] = bytes
+            .get(24..32)
+            .ok_or_else(|| StorageError::Encryption("header too short".to_string()))?
+            .try_into()
+            .map_err(|_| StorageError::Encryption("invalid header epoch bytes".to_string()))?;
+        let epoch = u64::from_le_bytes(epoch_bytes);
+
         // Validate block size is reasonable (1KB to 1MB)
         if block_size < 1024 || block_size > 1024 * 1024 {
             return Err(StorageError::Encryption(format!(
@@ -194,6 +210,7 @@ impl Header {
         Ok(Self {
             block_size,
             logical_size,
+            epoch,
         })
     }
 }
@@ -231,25 +248,29 @@ fn derive_nonce_key(key: &[u8; KEY_SIZE]) -> [u8; KEY_SIZE] {
     nonce_key
 }
 
-/// Derives a deterministic nonce for a given block number.
+/// Derives a deterministic nonce for a given block number and epoch.
 ///
 /// # Security
 ///
-/// - The nonce is unique per (key, block_number) pair
-/// - Same key + block = same nonce (determinism for AC-01)
+/// - The nonce is unique per (key, epoch, block_number) tuple
+/// - Same key + epoch + block = same nonce (determinism for AC-01)
 /// - Different keys produce completely different nonce sequences
-/// - Block numbers must never be reused with the same key for different data
-fn derive_nonce(nonce_key: &[u8; KEY_SIZE], block_number: u64) -> [u8; NONCE_SIZE] {
+/// - Epoch changes on truncate/reinit, ensuring nonces are never reused
+///   for different plaintext under the same key
+fn derive_nonce(nonce_key: &[u8; KEY_SIZE], epoch: u64, block_number: u64) -> [u8; NONCE_SIZE] {
     let mut nonce = [0u8; NONCE_SIZE];
     let block_bytes = block_number.to_le_bytes();
+    let epoch_bytes = epoch.to_le_bytes();
 
-    // Mix block number with nonce key
+    // Mix block number and epoch with nonce key
     for i in 0..NONCE_SIZE {
         let key_byte = nonce_key[i % KEY_SIZE];
         let block_byte = block_bytes[i % 8];
-        // Additional mixing with position
+        let epoch_byte = epoch_bytes[i % 8];
+        // Additional mixing with position and epoch
         nonce[i] = key_byte
             .wrapping_add(block_byte)
+            .wrapping_add(epoch_byte.rotate_right(3))
             .wrapping_add((i as u8).wrapping_mul(17))
             .rotate_left((block_number % 7) as u32 + 1);
     }
@@ -397,7 +418,7 @@ impl EncryptedBackend {
                         let nonce_bytes = &encrypted[..NONCE_SIZE];
                         let ciphertext = &encrypted[NONCE_SIZE..];
                         
-                        let expected_nonce = derive_nonce(&nonce_key, block_num);
+                        let expected_nonce = derive_nonce(&nonce_key, header.epoch, block_num);
                         if nonce_bytes != expected_nonce {
                             return Err(StorageError::Encryption(format!(
                                 "nonce mismatch for block {block_num} during recovery"
@@ -473,7 +494,7 @@ impl EncryptedBackend {
     /// 
     /// Block format: [length (4 bytes, little-endian)][padded plaintext]
     /// The length stores the actual number of valid bytes in this block.
-    fn encrypt_block(&self, block_number: u64, plaintext: &[u8]) -> StorageResult<Vec<u8>> {
+    fn encrypt_block(&self, epoch: u64, block_number: u64, plaintext: &[u8]) -> StorageResult<Vec<u8>> {
         if plaintext.len() > self.block_size {
             return Err(StorageError::Encryption(format!(
                 "block too large: {} > {}",
@@ -490,7 +511,7 @@ impl EncryptedBackend {
         // Pad to full block size
         block_data.resize(BLOCK_LEN_SIZE + self.block_size, 0);
 
-        let nonce_bytes = derive_nonce(&self.nonce_key, block_number);
+        let nonce_bytes = derive_nonce(&self.nonce_key, epoch, block_number);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = self
@@ -507,7 +528,7 @@ impl EncryptedBackend {
     }
 
     /// Decrypts a single block and returns (plaintext, actual_length).
-    fn decrypt_block(&self, block_number: u64, encrypted: &[u8]) -> StorageResult<(Vec<u8>, usize)> {
+    fn decrypt_block(&self, epoch: u64, block_number: u64, encrypted: &[u8]) -> StorageResult<(Vec<u8>, usize)> {
         if encrypted.len() < NONCE_SIZE + TAG_SIZE + BLOCK_LEN_SIZE {
             return Err(StorageError::Encryption(
                 "encrypted block too short".to_string(),
@@ -518,7 +539,7 @@ impl EncryptedBackend {
         let ciphertext = &encrypted[NONCE_SIZE..];
 
         // Verify nonce matches expected (detect block reordering/tampering)
-        let expected_nonce = derive_nonce(&self.nonce_key, block_number);
+        let expected_nonce = derive_nonce(&self.nonce_key, epoch, block_number);
         if nonce_bytes != expected_nonce {
             return Err(StorageError::Encryption(format!(
                 "nonce mismatch for block {block_number} - possible data corruption or wrong key"
@@ -572,7 +593,8 @@ impl EncryptedBackend {
         let encrypted = inner.read_at(physical_offset, encrypted_size)?;
         drop(inner);
 
-        self.decrypt_block(block_number, &encrypted)
+        let epoch = self.header.read().epoch;
+        self.decrypt_block(epoch, block_number, &encrypted)
     }
 
     /// Flushes the write buffer, encrypting any pending data.
@@ -584,9 +606,10 @@ impl EncryptedBackend {
 
         let mut header = self.header.write();
         let block_number = header.logical_size / self.block_size as u64;
+        let epoch = header.epoch;
 
         // Encrypt the buffer (may be partial block)
-        let encrypted = self.encrypt_block(block_number, &buffer)?;
+        let encrypted = self.encrypt_block(epoch, block_number, &buffer)?;
 
         // Write encrypted block
         let physical_offset = self.block_physical_offset(block_number);
@@ -743,12 +766,20 @@ impl StorageBackend for EncryptedBackend {
 
     fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
         if new_size == 0 {
-            // Clear everything and reinitialize
+            // Clear everything and reinitialize with incremented epoch
+            // The epoch increment is CRITICAL for security: it ensures nonces
+            // are never reused for different plaintext under the same key.
+            let old_epoch = self.header.read().epoch;
+            let new_epoch = old_epoch.checked_add(1).ok_or_else(|| {
+                StorageError::Encryption("epoch overflow - cannot truncate".to_string())
+            })?;
+
             let mut inner = self.inner.write();
             inner.truncate(0)?;
 
-            // Reinitialize with header
-            let header = Header::new(self.block_size as u32);
+            // Reinitialize with header using new epoch
+            let mut header = Header::new(self.block_size as u32);
+            header.epoch = new_epoch;
             inner.append(&header.encode())?;
             inner.flush()?;
 
@@ -1073,12 +1104,16 @@ mod tests {
     fn nonce_derivation_is_deterministic() {
         let nonce_key = derive_nonce_key(&[0x42u8; KEY_SIZE]);
 
-        let nonce1 = derive_nonce(&nonce_key, 0);
-        let nonce2 = derive_nonce(&nonce_key, 0);
+        let nonce1 = derive_nonce(&nonce_key, 0, 0);
+        let nonce2 = derive_nonce(&nonce_key, 0, 0);
         assert_eq!(nonce1, nonce2);
 
-        let nonce3 = derive_nonce(&nonce_key, 1);
+        let nonce3 = derive_nonce(&nonce_key, 0, 1);
         assert_ne!(nonce1, nonce3, "Different blocks must have different nonces");
+
+        // Different epochs produce different nonces
+        let nonce4 = derive_nonce(&nonce_key, 1, 0);
+        assert_ne!(nonce1, nonce4, "Different epochs must have different nonces");
     }
 
     #[test]
@@ -1110,5 +1145,96 @@ mod tests {
         // Read various portions
         let portion = backend.read_at(50000, 1000).unwrap();
         assert_eq!(portion, &data[50000..51000]);
+    }
+
+    /// Regression test: After truncate(0), nonces must differ from before truncation.
+    /// This prevents the catastrophic AES-GCM nonce reuse vulnerability where
+    /// encrypting different plaintext with the same key and nonce leaks the XOR
+    /// of the plaintexts and allows tag forgery.
+    #[test]
+    fn truncate_increments_epoch_preventing_nonce_reuse() {
+        let inner = InMemoryBackend::new();
+        let mut backend =
+            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+
+        // Write some data
+        let data1 = b"first data payload";
+        backend.append(data1).unwrap();
+        backend.flush().unwrap();
+
+        // Capture epoch before truncate
+        let epoch_before = backend.header.read().epoch;
+        assert_eq!(epoch_before, 0, "Initial epoch should be 0");
+
+        // Truncate and write different data
+        backend.truncate(0).unwrap();
+        
+        // Epoch must have incremented
+        let epoch_after = backend.header.read().epoch;
+        assert_eq!(epoch_after, 1, "Epoch should increment after truncate");
+
+        // Write different data to the same block position
+        let data2 = b"second different data!";
+        backend.append(data2).unwrap();
+        backend.flush().unwrap();
+
+        // Verify data reads correctly
+        let read_back = backend.read_at(0, data2.len()).unwrap();
+        assert_eq!(&read_back, data2);
+
+        // The key security property: nonces derived with different epochs must differ
+        let nonce_key = derive_nonce_key(test_key().as_bytes());
+        let nonce_epoch0_block0 = derive_nonce(&nonce_key, 0, 0);
+        let nonce_epoch1_block0 = derive_nonce(&nonce_key, 1, 0);
+        assert_ne!(
+            nonce_epoch0_block0, nonce_epoch1_block0,
+            "Nonces must differ after epoch increment to prevent AES-GCM nonce reuse"
+        );
+    }
+
+    /// Verify epoch survives reopen (persistence).
+    #[test]
+    fn epoch_persists_across_reopen() {
+        let key = test_key();
+
+        // Create, write, truncate, write again
+        let raw_data = {
+            let inner = InMemoryBackend::new();
+            let mut backend =
+                EncryptedBackend::with_block_size(Box::new(inner), key.clone(), 1024).unwrap();
+
+            backend.append(b"first").unwrap();
+            backend.flush().unwrap();
+            
+            // Truncate multiple times to increment epoch
+            backend.truncate(0).unwrap();
+            backend.append(b"second").unwrap();
+            backend.flush().unwrap();
+            
+            backend.truncate(0).unwrap();
+            backend.append(b"third").unwrap();
+            backend.flush().unwrap();
+
+            // Epoch should now be 2
+            assert_eq!(backend.header.read().epoch, 2);
+
+            // Extract raw bytes
+            let inner = backend.inner.read();
+            inner.read_at(0, inner.size().unwrap() as usize).unwrap()
+        };
+
+        // Reopen
+        let mut reopened_inner = InMemoryBackend::new();
+        reopened_inner.append(&raw_data).unwrap();
+
+        let reopened =
+            EncryptedBackend::with_block_size(Box::new(reopened_inner), key, 1024).unwrap();
+        
+        // Epoch should be preserved
+        assert_eq!(reopened.header.read().epoch, 2, "Epoch must persist across reopen");
+        
+        // Data should be readable
+        let read_back = reopened.read_at(0, 5).unwrap();
+        assert_eq!(&read_back, b"third");
     }
 }
