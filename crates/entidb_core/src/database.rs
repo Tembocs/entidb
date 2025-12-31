@@ -2683,15 +2683,15 @@ mod index_tests {
     }
 
     #[test]
-    fn duplicate_index_creation_fails() {
+    fn duplicate_index_creation_is_idempotent() {
         let db = create_db();
         let collection = db.collection("users");
 
         db.create_hash_index(collection, "email", true).unwrap();
 
-        // Creating same index again should fail
+        // Creating same index again is idempotent (no-op), returns Ok
         let result = db.create_hash_index(collection, "email", true);
-        assert!(result.is_err());
+        assert!(result.is_ok(), "duplicate index creation should be idempotent");
     }
 
     #[test]
