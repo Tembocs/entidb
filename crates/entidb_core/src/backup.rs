@@ -41,6 +41,20 @@ const HEADER_SIZE: usize = 4 + 2 + 8 + 8 + 4;
 /// Footer size (checksum).
 const FOOTER_SIZE: usize = 4;
 
+/// Safely converts a slice to a fixed-size array.
+///
+/// This is safe because we validate the data length before calling.
+#[inline]
+fn slice_to_array_8(slice: &[u8]) -> [u8; 8] {
+    [slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7]]
+}
+
+/// Safely converts a slice to a 4-byte array.
+#[inline]
+fn slice_to_array_4(slice: &[u8]) -> [u8; 4] {
+    [slice[0], slice[1], slice[2], slice[3]]
+}
+
 /// Configuration for backup operations.
 #[derive(Debug, Clone)]
 pub struct BackupConfig {
@@ -197,17 +211,15 @@ impl BackupManager {
             )));
         }
 
-        let timestamp = u64::from_le_bytes(data[6..14].try_into().unwrap());
-        let sequence_val = u64::from_le_bytes(data[14..22].try_into().unwrap());
-        let record_count = u32::from_le_bytes(data[22..26].try_into().unwrap());
+        let timestamp = u64::from_le_bytes(slice_to_array_8(&data[6..14]));
+        let sequence_val = u64::from_le_bytes(slice_to_array_8(&data[14..22]));
+        let record_count = u32::from_le_bytes(slice_to_array_4(&data[22..26]));
 
         // Verify checksum
         let checksum_offset = data.len() - FOOTER_SIZE;
-        let stored_checksum = u32::from_le_bytes(
-            data[checksum_offset..checksum_offset + 4]
-                .try_into()
-                .unwrap(),
-        );
+        let stored_checksum = u32::from_le_bytes(slice_to_array_4(
+            &data[checksum_offset..checksum_offset + 4],
+        ));
         let computed_checksum = compute_crc32(&data[..checksum_offset]);
 
         if stored_checksum != computed_checksum {
@@ -257,9 +269,9 @@ impl BackupManager {
             )));
         }
 
-        let timestamp = u64::from_le_bytes(data[6..14].try_into().unwrap());
-        let sequence_val = u64::from_le_bytes(data[14..22].try_into().unwrap());
-        let record_count = u32::from_le_bytes(data[22..26].try_into().unwrap());
+        let timestamp = u64::from_le_bytes(slice_to_array_8(&data[6..14]));
+        let sequence_val = u64::from_le_bytes(slice_to_array_8(&data[14..22]));
+        let record_count = u32::from_le_bytes(slice_to_array_4(&data[22..26]));
 
         Ok(BackupMetadata {
             timestamp,
@@ -281,11 +293,9 @@ impl BackupManager {
 
         // Verify checksum
         let checksum_offset = data.len() - FOOTER_SIZE;
-        let stored_checksum = u32::from_le_bytes(
-            data[checksum_offset..checksum_offset + 4]
-                .try_into()
-                .unwrap(),
-        );
+        let stored_checksum = u32::from_le_bytes(slice_to_array_4(
+            &data[checksum_offset..checksum_offset + 4],
+        ));
         let computed_checksum = compute_crc32(&data[..checksum_offset]);
 
         Ok(stored_checksum == computed_checksum)

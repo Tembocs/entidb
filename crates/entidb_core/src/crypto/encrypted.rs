@@ -2,7 +2,7 @@
 
 use crate::error::{CoreError, CoreResult};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, generic_array::GenericArray},
     Aes256Gcm, Nonce,
 };
 use rand::RngCore;
@@ -105,8 +105,11 @@ impl CryptoManager {
     /// Creates a new crypto manager with the given key.
     #[must_use]
     pub fn new(key: EncryptionKey) -> Self {
-        let cipher = Aes256Gcm::new_from_slice(key.as_bytes())
-            .expect("key size is always valid");
+        // Use GenericArray::from_slice which converts our fixed-size key directly.
+        // This is infallible since EncryptionKey.bytes is always exactly KEY_SIZE (32) bytes,
+        // which matches AES-256's key size requirement.
+        let key_array = GenericArray::from_slice(key.as_bytes());
+        let cipher = Aes256Gcm::new(key_array);
         Self { cipher }
     }
 

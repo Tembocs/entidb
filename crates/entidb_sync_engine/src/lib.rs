@@ -30,6 +30,8 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+// Production code MUST NOT use panic!/unwrap()/expect() - see docs/invariants.md
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod config;
 mod db_applier;

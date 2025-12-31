@@ -254,13 +254,19 @@ impl SegmentManager {
         let mut segment_info = HashMap::new();
         let mut max_id = 0u64;
 
+        // Get the last segment ID once before the loop (safe since we checked non-empty above)
+        let last_segment_id = existing_segment_ids
+            .last()
+            .copied()
+            .unwrap_or(0);
+
         // Load all existing segments
         for &segment_id in &existing_segment_ids {
             let backend = backend_factory(segment_id)?;
             let size = backend.size().unwrap_or(0);
 
             // All existing segments except the last one are considered sealed
-            let is_last = segment_id == *existing_segment_ids.last().unwrap();
+            let is_last = segment_id == last_segment_id;
 
             segments.insert(segment_id, Arc::new(RwLock::new(backend)));
             segment_info.insert(
