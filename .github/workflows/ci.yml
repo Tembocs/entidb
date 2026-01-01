@@ -96,14 +96,14 @@ jobs:
           fail_ci_if_error: false
 
   msrv:
-    name: MSRV (1.75)
+    name: MSRV (1.82)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75
+      - uses: dtolnay/rust-toolchain@1.82
       - uses: Swatinem/rust-cache@v2
-      # Exclude entidb_py (Python binding tested separately) and entidb_bench (uses criterion which requires newer Rust)
-      - run: cargo check --workspace --all-targets --exclude entidb_py --exclude entidb_bench
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo check --workspace --all-targets --exclude entidb_py
 
   benchmarks:
     name: Benchmarks (dry run)
