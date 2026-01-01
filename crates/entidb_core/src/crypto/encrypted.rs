@@ -57,29 +57,31 @@ impl EncryptionKey {
         &self.bytes
     }
 
-    /// Derives a key from a password using HKDF.
+    /// Derives a key from a password using HKDF-SHA256.
     ///
     /// # Arguments
     ///
     /// * `password` - The password to derive from
     /// * `salt` - A unique salt for this database (should be random and stored)
+    ///
+    /// # Security Note
+    ///
+    /// HKDF is a key derivation function, not a password hashing function.
+    /// For maximum security with user-chosen passwords, consider using Argon2id
+    /// or PBKDF2 with a high iteration count. HKDF is appropriate when the input
+    /// key material already has high entropy (e.g., a randomly generated passphrase).
     pub fn derive_from_password(password: &[u8], salt: &[u8]) -> CoreResult<Self> {
-        // Simple HKDF-like derivation
-        // For production, consider using a proper password hashing function like Argon2
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use hkdf::Hkdf;
+        use sha2::Sha256;
+
+        // Use HKDF with SHA-256 for key derivation
+        // The salt is used as the HKDF salt, password as IKM (input key material)
+        let hk = Hkdf::<Sha256>::new(Some(salt), password);
 
         let mut bytes = [0u8; KEY_SIZE];
-
-        // Mix password and salt
-        for i in 0..KEY_SIZE {
-            let mut hasher = DefaultHasher::new();
-            password.hash(&mut hasher);
-            salt.hash(&mut hasher);
-            i.hash(&mut hasher);
-            let h = hasher.finish();
-            bytes[i] = h as u8;
-        }
+        // Use a fixed info string for the application context
+        hk.expand(b"entidb-encryption-key-v1", &mut bytes)
+            .map_err(|_| CoreError::key_derivation_failed("HKDF expand failed"))?;
 
         Ok(Self { bytes })
     }

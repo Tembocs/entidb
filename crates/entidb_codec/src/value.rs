@@ -53,16 +53,29 @@ impl Value {
             (Value::Null, Value::Null) => Ordering::Equal,
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
             (Value::Integer(a), Value::Integer(b)) => {
-                // For integers, we need to compare by their encoded form
-                // Positive integers come before negative integers in CBOR
+                // For integers, we need to compare by their canonical CBOR encoded form.
+                // In canonical CBOR, ordering is length-first, then lexicographic.
+                //
+                // For positive integers (major type 0): argument is the value itself.
+                // For negative integers (major type 1): argument is -1 - n (e.g., -1 -> 0, -2 -> 1).
+                //
+                // Since positive (type 0) and negative (type 1) have different major types,
+                // they are already separated by the major_type() comparison above.
+                // Here we only compare within the same sign.
                 match (a.signum(), b.signum()) {
-                    (s1, s2) if s1 >= 0 && s2 >= 0 => a.cmp(b),
-                    (s1, s2) if s1 < 0 && s2 < 0 => {
-                        // For negative integers, -1 encodes smallest, -2^63 largest
-                        // So we compare absolute values in reverse
-                        b.cmp(a)
+                    (s1, s2) if s1 >= 0 && s2 >= 0 => {
+                        // Both non-negative: compare by encoded length, then value
+                        Self::cmp_unsigned_canonical(*a as u64, *b as u64)
                     }
-                    (s1, _) if s1 >= 0 => Ordering::Less, // positive before negative
+                    (s1, s2) if s1 < 0 && s2 < 0 => {
+                        // Both negative: CBOR encodes -1-n as argument
+                        // -1 -> arg 0, -2 -> arg 1, -10 -> arg 9, etc.
+                        // Compare by encoded argument length, then lexicographic (ascending argument)
+                        let arg_a = (-1 - *a) as u64;
+                        let arg_b = (-1 - *b) as u64;
+                        Self::cmp_unsigned_canonical(arg_a, arg_b)
+                    }
+                    (s1, _) if s1 >= 0 => Ordering::Less, // positive (type 0) before negative (type 1)
                     _ => Ordering::Greater,
                 }
             }
@@ -115,6 +128,37 @@ impl Value {
                 }
             }
             _ => Ordering::Equal, // Should not happen with same major type
+        }
+    }
+
+    /// Compare two unsigned integers by their canonical CBOR encoding.
+    ///
+    /// Canonical CBOR uses shortest encoding, so values 0-23 encode in 1 byte,
+    /// 24-255 in 2 bytes, 256-65535 in 3 bytes, etc.
+    /// Comparison is length-first, then lexicographic (which equals numeric for same length).
+    fn cmp_unsigned_canonical(a: u64, b: u64) -> Ordering {
+        // Determine encoding length for each value
+        let len_a = Self::cbor_uint_encoded_len(a);
+        let len_b = Self::cbor_uint_encoded_len(b);
+
+        match len_a.cmp(&len_b) {
+            Ordering::Equal => a.cmp(&b), // Same length, compare numerically (= lexicographic for big-endian)
+            ord => ord,
+        }
+    }
+
+    /// Returns the encoded length (in bytes) of an unsigned integer in CBOR.
+    fn cbor_uint_encoded_len(n: u64) -> usize {
+        if n <= 23 {
+            1 // Argument fits in initial byte
+        } else if n <= 0xFF {
+            2 // 1 byte header + 1 byte argument
+        } else if n <= 0xFFFF {
+            3 // 1 byte header + 2 bytes argument
+        } else if n <= 0xFFFF_FFFF {
+            5 // 1 byte header + 4 bytes argument
+        } else {
+            9 // 1 byte header + 8 bytes argument
         }
     }
 

@@ -125,6 +125,13 @@ pub enum CoreError {
         actual: usize,
     },
 
+    /// Key derivation failed.
+    #[error("key derivation failed: {message}")]
+    KeyDerivationFailed {
+        /// Description of the failure.
+        message: String,
+    },
+
     /// Migration failed.
     #[error("migration failed: {message}")]
     MigrationFailed {
@@ -241,6 +248,13 @@ impl CoreError {
     /// Creates an invalid key size error.
     pub fn invalid_key_size(actual: usize, expected: usize) -> Self {
         Self::InvalidKeySize { expected, actual }
+    }
+
+    /// Creates a key derivation failed error.
+    pub fn key_derivation_failed(message: impl Into<String>) -> Self {
+        Self::KeyDerivationFailed {
+            message: message.into(),
+        }
     }
 
     /// Creates a migration failed error.

@@ -41,12 +41,17 @@ mod stub {
 
     impl EncryptionKey {
         /// Always returns an error when encryption is disabled.
-        pub fn generate() -> Self {
-            panic!("encryption feature not enabled");
+        pub fn generate() -> CoreResult<Self> {
+            Err(CoreError::encryption_not_enabled())
         }
 
         /// Always returns an error when encryption is disabled.
         pub fn from_bytes(_bytes: &[u8]) -> CoreResult<Self> {
+            Err(CoreError::encryption_not_enabled())
+        }
+
+        /// Always returns an error when encryption is disabled.
+        pub fn derive_from_password(_password: &[u8], _salt: &[u8]) -> CoreResult<Self> {
             Err(CoreError::encryption_not_enabled())
         }
     }
@@ -59,8 +64,8 @@ mod stub {
 
     impl CryptoManager {
         /// Always returns an error when encryption is disabled.
-        pub fn new(_key: EncryptionKey) -> Self {
-            panic!("encryption feature not enabled");
+        pub fn new(_key: EncryptionKey) -> CoreResult<Self> {
+            Err(CoreError::encryption_not_enabled())
         }
 
         /// Always returns an error when encryption is disabled.

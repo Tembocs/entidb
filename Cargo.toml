@@ -67,6 +67,7 @@ clap = { version = "4.4", features = ["derive"] }
 aes-gcm = "0.10"
 rand = "0.8"
 sha2 = "0.10"
+hkdf = "0.12"
 zeroize = { version = "1.7", features = ["derive"] }
 
 # Testing
