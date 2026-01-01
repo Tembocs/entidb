@@ -367,7 +367,7 @@ impl Transaction {
 
     /// Returns the read set for conflict detection.
     ///
-    /// Returns entries of (collection_id, entity_id) -> Option<hash>
+    /// Returns entries of (collection_id, entity_id) -> `Option<hash>`
     /// where `Some(hash)` means the entity existed with that content hash,
     /// and `None` means the entity did not exist.
     pub fn read_set(&self) -> impl Iterator<Item = (&(CollectionId, EntityId), &Option<[u8; 32]>)> {

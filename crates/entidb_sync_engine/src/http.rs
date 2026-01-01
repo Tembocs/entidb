@@ -29,7 +29,7 @@ pub trait HttpClient: Send + Sync {
 ///
 /// Uses CBOR encoding for request/response bodies.
 pub struct HttpTransport<C: HttpClient> {
-    /// Base URL of the sync server (e.g., "https://sync.example.com").
+    /// Base URL of the sync server (e.g., `https://sync.example.com`).
     base_url: String,
     /// HTTP client implementation.
     client: C,

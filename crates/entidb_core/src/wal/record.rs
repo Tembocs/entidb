@@ -141,7 +141,7 @@ impl WalRecord {
     ///
     /// # Errors
     ///
-    /// Returns an error if `after_bytes` in a `Put` record exceeds [`MAX_PAYLOAD_SIZE`].
+    /// Returns an error if `after_bytes` in a `Put` record exceeds [`Self::MAX_PAYLOAD_SIZE`].
     /// This prevents creating malformed WAL records that cannot be correctly decoded.
     pub fn encode_payload(&self) -> CoreResult<Vec<u8>> {
         let mut buf = Vec::new();

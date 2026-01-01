@@ -10,7 +10,7 @@
 //! ## Streaming Iteration
 //!
 //! For memory-efficient iteration over large datasets, use [`SegmentManager::iter_all()`]
-//! which returns a [`SegmentRecordIterator`] that yields records one at a time without
+//! which returns an iterator that yields records one at a time without
 //! loading all records into memory.
 
 use crate::error::{CoreError, CoreResult};
@@ -180,7 +180,7 @@ impl SegmentManager {
     /// Creates a new segment manager with a factory function.
     ///
     /// This will start with segment ID 1. For recovering existing segments
-    /// from disk, use [`with_factory_and_existing`] instead.
+    /// from disk, use [`Self::with_factory_and_existing`] instead.
     ///
     /// # Arguments
     ///
@@ -599,7 +599,7 @@ impl SegmentManager {
     /// Scans all records across all segments.
     ///
     /// **Warning:** This includes the active segment. For compaction, use
-    /// [`scan_sealed`] instead to avoid scanning data that may be concurrently
+    /// [`Self::scan_sealed`] instead to avoid scanning data that may be concurrently
     /// written.
     pub fn scan_all(&self) -> CoreResult<Vec<SegmentRecord>> {
         let segments = self.segments.read();
@@ -623,7 +623,7 @@ impl SegmentManager {
     /// preventing races with concurrent writes. The active segment continues
     /// to receive new writes while sealed segments are being compacted.
     ///
-    /// **Note:** For compaction, prefer using [`compact_sealed`] which performs
+    /// **Note:** For compaction, prefer using [`Self::compact_sealed`] which performs
     /// the scan and replacement atomically while holding the compaction lock.
     ///
     /// # Returns
@@ -1028,7 +1028,7 @@ impl SegmentManager {
     ///
     /// The active (unsealed) segment is preserved.
     ///
-    /// **Note:** For atomic compaction (scan + replace), prefer using [`compact_sealed`]
+    /// **Note:** For atomic compaction (scan + replace), prefer using [`Self::compact_sealed`]
     /// which holds the compaction lock throughout the entire operation.
     ///
     /// # Returns
@@ -1066,7 +1066,7 @@ impl SegmentManager {
     ///
     /// # Returns
     ///
-    /// A [`SegmentRecordIterator`] that yields `CoreResult<SegmentRecord>` for each record.
+    /// An iterator that yields `CoreResult<SegmentRecord>` for each record.
     ///
     /// # Example
     ///
