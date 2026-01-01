@@ -320,15 +320,13 @@ Agents **MUST** follow this ordered build plan:
 
 ### Storage layout
 ```
-entidb/
+<db_path>/
 ├─ MANIFEST          # Metadata (atomic write-then-rename)
-├─ WAL/
-│  ├─ wal-000001.log
-│  └─ wal-000002.log
-├─ SEGMENTS/
-│  ├─ seg-000001.dat
-│  └─ seg-000002.dat
-└─ LOCK              # Advisory lock for single-writer
+├─ LOCK              # Advisory lock for single-writer
+├─ wal.log           # Write-ahead log (single file)
+└─ SEGMENTS/
+   ├─ seg-000001.dat
+   └─ seg-000002.dat
 ```
 
 ### WAL record envelope

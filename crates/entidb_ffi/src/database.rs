@@ -886,33 +886,38 @@ pub enum EntiDbIndexType {
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string specifying the field to index
+///
+/// # Note
+///
+/// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
+/// index name. The engine manages index names internally.
 #[no_mangle]
 pub unsafe extern "C" fn entidb_create_hash_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     unique: bool,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
-    match db.create_hash_index(coll_id, name_str, unique) {
+    match db.create_hash_index(coll_id, field_str, unique) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -921,13 +926,13 @@ pub unsafe extern "C" fn entidb_create_hash_index(
     }
 }
 
-/// Creates a BTree index.
+/// Creates a BTree index on a field.
 ///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name to index
 /// * `unique` - Whether the index enforces unique constraint
 ///
 /// # Returns
@@ -937,33 +942,38 @@ pub unsafe extern "C" fn entidb_create_hash_index(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string specifying the field to index
+///
+/// # Note
+///
+/// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
+/// index name. The engine manages index names internally.
 #[no_mangle]
 pub unsafe extern "C" fn entidb_create_btree_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     unique: bool,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
-    match db.create_btree_index(coll_id, name_str, unique) {
+    match db.create_btree_index(coll_id, field_str, unique) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -978,7 +988,7 @@ pub unsafe extern "C" fn entidb_create_btree_index(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_hash_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `entity_id` - The entity ID to associate with the key
@@ -990,20 +1000,20 @@ pub unsafe extern "C" fn entidb_create_btree_index(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 #[no_mangle]
 pub unsafe extern "C" fn entidb_hash_index_insert(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     entity_id: EntiDbEntityId,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1014,11 +1024,11 @@ pub unsafe extern "C" fn entidb_hash_index_insert(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1032,7 +1042,7 @@ pub unsafe extern "C" fn entidb_hash_index_insert(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.hash_index_insert(coll_id, name_str, key_bytes, ent_id) {
+    match db.hash_index_insert(coll_id, field_str, key_bytes, ent_id) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1047,7 +1057,7 @@ pub unsafe extern "C" fn entidb_hash_index_insert(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_btree_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `entity_id` - The entity ID to associate with the key
@@ -1059,20 +1069,20 @@ pub unsafe extern "C" fn entidb_hash_index_insert(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 #[no_mangle]
 pub unsafe extern "C" fn entidb_btree_index_insert(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     entity_id: EntiDbEntityId,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1083,11 +1093,11 @@ pub unsafe extern "C" fn entidb_btree_index_insert(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1101,7 +1111,7 @@ pub unsafe extern "C" fn entidb_btree_index_insert(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.btree_index_insert(coll_id, name_str, key_bytes, ent_id) {
+    match db.btree_index_insert(coll_id, field_str, key_bytes, ent_id) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1116,7 +1126,7 @@ pub unsafe extern "C" fn entidb_btree_index_insert(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_hash_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `entity_id` - The entity ID to remove
@@ -1128,20 +1138,20 @@ pub unsafe extern "C" fn entidb_btree_index_insert(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 #[no_mangle]
 pub unsafe extern "C" fn entidb_hash_index_remove(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     entity_id: EntiDbEntityId,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1152,11 +1162,11 @@ pub unsafe extern "C" fn entidb_hash_index_remove(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1170,7 +1180,7 @@ pub unsafe extern "C" fn entidb_hash_index_remove(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.hash_index_remove(coll_id, name_str, key_bytes, ent_id) {
+    match db.hash_index_remove(coll_id, field_str, key_bytes, ent_id) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1185,7 +1195,7 @@ pub unsafe extern "C" fn entidb_hash_index_remove(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_btree_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `entity_id` - The entity ID to remove
@@ -1197,20 +1207,20 @@ pub unsafe extern "C" fn entidb_hash_index_remove(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 #[no_mangle]
 pub unsafe extern "C" fn entidb_btree_index_remove(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     entity_id: EntiDbEntityId,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1221,11 +1231,11 @@ pub unsafe extern "C" fn entidb_btree_index_remove(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1239,7 +1249,7 @@ pub unsafe extern "C" fn entidb_btree_index_remove(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.btree_index_remove(coll_id, name_str, key_bytes, ent_id) {
+    match db.btree_index_remove(coll_id, field_str, key_bytes, ent_id) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1254,7 +1264,7 @@ pub unsafe extern "C" fn entidb_btree_index_remove(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_hash_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
@@ -1266,21 +1276,21 @@ pub unsafe extern "C" fn entidb_btree_index_remove(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 /// - `out_buffer` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_hash_index_lookup(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     out_buffer: *mut EntiDbBuffer,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1291,11 +1301,11 @@ pub unsafe extern "C" fn entidb_hash_index_lookup(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1308,7 +1318,7 @@ pub unsafe extern "C" fn entidb_hash_index_lookup(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.hash_index_lookup(coll_id, name_str, key_bytes) {
+    match db.hash_index_lookup(coll_id, field_str, key_bytes) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -1332,7 +1342,7 @@ pub unsafe extern "C" fn entidb_hash_index_lookup(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_btree_index)
 /// * `key` - Pointer to key bytes
 /// * `key_len` - Length of key bytes
 /// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
@@ -1344,21 +1354,21 @@ pub unsafe extern "C" fn entidb_hash_index_lookup(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `key` must be valid for `key_len` bytes
 /// - `out_buffer` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_btree_index_lookup(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     key: *const u8,
     key_len: usize,
     out_buffer: *mut EntiDbBuffer,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
@@ -1369,11 +1379,11 @@ pub unsafe extern "C" fn entidb_btree_index_lookup(
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1386,7 +1396,7 @@ pub unsafe extern "C" fn entidb_btree_index_lookup(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.btree_index_lookup(coll_id, name_str, key_bytes) {
+    match db.btree_index_lookup(coll_id, field_str, key_bytes) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -1410,7 +1420,7 @@ pub unsafe extern "C" fn entidb_btree_index_lookup(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name (must match field used in create_btree_index)
 /// * `min_key` - Pointer to minimum key bytes (or null for unbounded)
 /// * `min_key_len` - Length of minimum key bytes
 /// * `max_key` - Pointer to maximum key bytes (or null for unbounded)
@@ -1424,7 +1434,7 @@ pub unsafe extern "C" fn entidb_btree_index_lookup(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `min_key` must be valid for `min_key_len` bytes if non-null
 /// - `max_key` must be valid for `max_key_len` bytes if non-null
 /// - `out_buffer` must be a valid pointer
@@ -1432,7 +1442,7 @@ pub unsafe extern "C" fn entidb_btree_index_lookup(
 pub unsafe extern "C" fn entidb_btree_index_range(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     min_key: *const u8,
     min_key_len: usize,
     max_key: *const u8,
@@ -1441,17 +1451,17 @@ pub unsafe extern "C" fn entidb_btree_index_range(
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1474,7 +1484,7 @@ pub unsafe extern "C" fn entidb_btree_index_range(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.btree_index_range(coll_id, name_str, min_key_bytes, max_key_bytes) {
+    match db.btree_index_range(coll_id, field_str, min_key_bytes, max_key_bytes) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -1498,7 +1508,7 @@ pub unsafe extern "C" fn entidb_btree_index_range(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name
 /// * `out_count` - Output pointer for the count
 ///
 /// # Returns
@@ -1508,35 +1518,35 @@ pub unsafe extern "C" fn entidb_btree_index_range(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `out_count` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_hash_index_len(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     out_count: *mut usize,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_count.is_null() {
+    if handle.is_null() || field.is_null() || out_count.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.hash_index_len(coll_id, name_str) {
+    match db.hash_index_len(coll_id, field_str) {
         Ok(count) => {
             *out_count = count;
             EntiDbResult::Ok
@@ -1554,7 +1564,7 @@ pub unsafe extern "C" fn entidb_hash_index_len(
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name
 /// * `out_count` - Output pointer for the count
 ///
 /// # Returns
@@ -1564,35 +1574,35 @@ pub unsafe extern "C" fn entidb_hash_index_len(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `out_count` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_btree_index_len(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     out_count: *mut usize,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_count.is_null() {
+    if handle.is_null() || field.is_null() || out_count.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.btree_index_len(coll_id, name_str) {
+    match db.btree_index_len(coll_id, field_str) {
         Ok(count) => {
             *out_count = count;
             EntiDbResult::Ok
@@ -1606,11 +1616,14 @@ pub unsafe extern "C" fn entidb_btree_index_len(
 
 /// Drops a hash index.
 ///
+/// The engine manages index names internally. Users specify the field that was indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name that was indexed
 ///
 /// # Returns
 ///
@@ -1619,33 +1632,33 @@ pub unsafe extern "C" fn entidb_btree_index_len(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_drop_hash_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.drop_hash_index(coll_id, name_str) {
+    match db.drop_hash_index(coll_id, field_str) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1656,11 +1669,14 @@ pub unsafe extern "C" fn entidb_drop_hash_index(
 
 /// Drops a BTree index.
 ///
+/// The engine manages index names internally. Users specify the field that was indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name that was indexed
 ///
 /// # Returns
 ///
@@ -1669,33 +1685,33 @@ pub unsafe extern "C" fn entidb_drop_hash_index(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_drop_btree_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.drop_btree_index(coll_id, name_str) {
+    match db.drop_btree_index(coll_id, field_str) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1708,11 +1724,14 @@ pub unsafe extern "C" fn entidb_drop_btree_index(
 
 /// Creates a Full-Text Search (FTS) index with default configuration.
 ///
+/// The engine manages index names internally. Users specify the field to index.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name to index
 ///
 /// # Returns
 ///
@@ -1721,32 +1740,32 @@ pub unsafe extern "C" fn entidb_drop_btree_index(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_create_fts_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
-    match db.create_fts_index(coll_id, name_str) {
+    match db.create_fts_index(coll_id, field_str) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1757,11 +1776,14 @@ pub unsafe extern "C" fn entidb_create_fts_index(
 
 /// Creates an FTS index with custom configuration.
 ///
+/// The engine manages index names internally. Users specify the field to index.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name to index
 /// * `min_token_length` - Minimum token length (tokens shorter are ignored)
 /// * `max_token_length` - Maximum token length (tokens longer are truncated)
 /// * `case_sensitive` - If true, searches are case-sensitive
@@ -1773,29 +1795,29 @@ pub unsafe extern "C" fn entidb_create_fts_index(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_create_fts_index_with_config(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     min_token_length: usize,
     max_token_length: usize,
     case_sensitive: bool,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1803,7 +1825,7 @@ pub unsafe extern "C" fn entidb_create_fts_index_with_config(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     match db.create_fts_index_with_config(
         coll_id,
-        name_str,
+        field_str,
         min_token_length,
         max_token_length,
         case_sensitive,
@@ -1818,11 +1840,14 @@ pub unsafe extern "C" fn entidb_create_fts_index_with_config(
 
 /// Indexes text content for an entity in an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field being indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being indexed
 /// * `entity_id` - The entity ID to associate with the text
 /// * `text` - Null-terminated text content to index
 ///
@@ -1833,29 +1858,29 @@ pub unsafe extern "C" fn entidb_create_fts_index_with_config(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `text` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_index_text(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     entity_id: EntiDbEntityId,
     text: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || text.is_null() {
+    if handle.is_null() || field.is_null() || text.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1872,7 +1897,7 @@ pub unsafe extern "C" fn entidb_fts_index_text(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.fts_index_text(coll_id, name_str, ent_id, text_str) {
+    match db.fts_index_text(coll_id, field_str, ent_id, text_str) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1883,11 +1908,14 @@ pub unsafe extern "C" fn entidb_fts_index_text(
 
 /// Removes an entity from an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field being indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being indexed
 /// * `entity_id` - The entity ID to remove
 ///
 /// # Returns
@@ -1897,27 +1925,27 @@ pub unsafe extern "C" fn entidb_fts_index_text(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_remove_entity(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     entity_id: EntiDbEntityId,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1925,7 +1953,7 @@ pub unsafe extern "C" fn entidb_fts_remove_entity(
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
     let ent_id = entidb_core::EntityId::from_bytes(entity_id.bytes);
 
-    match db.fts_remove_entity(coll_id, name_str, ent_id) {
+    match db.fts_remove_entity(coll_id, field_str, ent_id) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -1936,11 +1964,14 @@ pub unsafe extern "C" fn entidb_fts_remove_entity(
 
 /// Searches an FTS index using AND semantics (all terms must match).
 ///
+/// The engine manages index names internally. Users specify the field being searched.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being searched
 /// * `query` - Null-terminated search query (space-separated terms)
 /// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
 ///
@@ -1951,30 +1982,30 @@ pub unsafe extern "C" fn entidb_fts_remove_entity(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `query` must be a valid null-terminated UTF-8 string
 /// - `out_buffer` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_search(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     query: *const std::ffi::c_char,
     out_buffer: *mut EntiDbBuffer,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || query.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || query.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -1990,7 +2021,7 @@ pub unsafe extern "C" fn entidb_fts_search(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_search(coll_id, name_str, query_str) {
+    match db.fts_search(coll_id, field_str, query_str) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -2010,11 +2041,14 @@ pub unsafe extern "C" fn entidb_fts_search(
 
 /// Searches an FTS index using OR semantics (any term may match).
 ///
+/// The engine manages index names internally. Users specify the field being searched.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being searched
 /// * `query` - Null-terminated search query (space-separated terms)
 /// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
 ///
@@ -2025,30 +2059,30 @@ pub unsafe extern "C" fn entidb_fts_search(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `query` must be a valid null-terminated UTF-8 string
 /// - `out_buffer` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_search_any(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     query: *const std::ffi::c_char,
     out_buffer: *mut EntiDbBuffer,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || query.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || query.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -2064,7 +2098,7 @@ pub unsafe extern "C" fn entidb_fts_search_any(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_search_any(coll_id, name_str, query_str) {
+    match db.fts_search_any(coll_id, field_str, query_str) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -2084,11 +2118,14 @@ pub unsafe extern "C" fn entidb_fts_search_any(
 
 /// Searches an FTS index using prefix matching.
 ///
+/// The engine manages index names internally. Users specify the field being searched.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being searched
 /// * `prefix` - Null-terminated prefix to search for
 /// * `out_buffer` - Output buffer for entity IDs (16 bytes each)
 ///
@@ -2099,30 +2136,30 @@ pub unsafe extern "C" fn entidb_fts_search_any(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `prefix` must be a valid null-terminated UTF-8 string
 /// - `out_buffer` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_search_prefix(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     prefix: *const std::ffi::c_char,
     out_buffer: *mut EntiDbBuffer,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || prefix.is_null() || out_buffer.is_null() {
+    if handle.is_null() || field.is_null() || prefix.is_null() || out_buffer.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
@@ -2138,7 +2175,7 @@ pub unsafe extern "C" fn entidb_fts_search_prefix(
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_search_prefix(coll_id, name_str, prefix_str) {
+    match db.fts_search_prefix(coll_id, field_str, prefix_str) {
         Ok(entity_ids) => {
             // Serialize entity IDs as contiguous 16-byte blocks
             let mut result = Vec::with_capacity(entity_ids.len() * 16);
@@ -2158,11 +2195,14 @@ pub unsafe extern "C" fn entidb_fts_search_prefix(
 
 /// Gets the number of entities in an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field being indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being indexed
 /// * `out_count` - Output pointer for the count
 ///
 /// # Returns
@@ -2172,35 +2212,35 @@ pub unsafe extern "C" fn entidb_fts_search_prefix(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `out_count` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_index_len(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     out_count: *mut usize,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_count.is_null() {
+    if handle.is_null() || field.is_null() || out_count.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_index_len(coll_id, name_str) {
+    match db.fts_index_len(coll_id, field_str) {
         Ok(count) => {
             *out_count = count;
             EntiDbResult::Ok
@@ -2214,11 +2254,14 @@ pub unsafe extern "C" fn entidb_fts_index_len(
 
 /// Gets the number of unique tokens in an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field being indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being indexed
 /// * `out_count` - Output pointer for the count
 ///
 /// # Returns
@@ -2228,35 +2271,35 @@ pub unsafe extern "C" fn entidb_fts_index_len(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 /// - `out_count` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_unique_token_count(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
     out_count: *mut usize,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() || out_count.is_null() {
+    if handle.is_null() || field.is_null() || out_count.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_unique_token_count(coll_id, name_str) {
+    match db.fts_unique_token_count(coll_id, field_str) {
         Ok(count) => {
             *out_count = count;
             EntiDbResult::Ok
@@ -2270,11 +2313,14 @@ pub unsafe extern "C" fn entidb_fts_unique_token_count(
 
 /// Clears all entries from an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field being indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name being indexed
 ///
 /// # Returns
 ///
@@ -2283,33 +2329,33 @@ pub unsafe extern "C" fn entidb_fts_unique_token_count(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_fts_clear(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.fts_clear(coll_id, name_str) {
+    match db.fts_clear(coll_id, field_str) {
         Ok(()) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());
@@ -2320,11 +2366,14 @@ pub unsafe extern "C" fn entidb_fts_clear(
 
 /// Drops an FTS index.
 ///
+/// The engine manages index names internally. Users specify the field that was indexed.
+/// See `docs/access_paths.md` for engine-controlled access path semantics.
+///
 /// # Arguments
 ///
 /// * `handle` - The database handle
 /// * `collection_id` - The collection ID
-/// * `name` - Null-terminated index name
+/// * `field` - Null-terminated field name that was indexed
 ///
 /// # Returns
 ///
@@ -2333,33 +2382,33 @@ pub unsafe extern "C" fn entidb_fts_clear(
 /// # Safety
 ///
 /// - `handle` must be a valid database handle
-/// - `name` must be a valid null-terminated UTF-8 string
+/// - `field` must be a valid null-terminated UTF-8 string
 #[no_mangle]
 pub unsafe extern "C" fn entidb_drop_fts_index(
     handle: *mut EntiDbHandle,
     collection_id: EntiDbCollectionId,
-    name: *const std::ffi::c_char,
+    field: *const std::ffi::c_char,
 ) -> EntiDbResult {
     clear_last_error();
 
-    if handle.is_null() || name.is_null() {
+    if handle.is_null() || field.is_null() {
         set_last_error("null pointer argument");
         return EntiDbResult::NullPointer;
     }
 
     let db = &*(handle as *mut entidb_core::Database);
-    let name_cstr = CStr::from_ptr(name);
-    let name_str = match name_cstr.to_str() {
+    let field_cstr = CStr::from_ptr(field);
+    let field_str = match field_cstr.to_str() {
         Ok(s) => s,
         Err(_) => {
-            set_last_error("invalid UTF-8 in index name");
+            set_last_error("invalid UTF-8 in field name");
             return EntiDbResult::InvalidArgument;
         }
     };
 
     let coll_id = entidb_core::CollectionId::new(collection_id.id);
 
-    match db.drop_fts_index(coll_id, name_str) {
+    match db.drop_fts_index(coll_id, field_str) {
         Ok(_) => EntiDbResult::Ok,
         Err(e) => {
             set_last_error(e.to_string());

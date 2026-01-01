@@ -650,23 +650,23 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection to create the index on.
-    ///     name: The index name.
+    ///     field: The field name to index.
     ///     unique: Whether the index enforces unique keys.
     ///
     /// Example:
     /// ```python
     /// db.create_hash_index(users, "email", unique=True)
     /// ```
-    #[pyo3(signature = (collection, name, unique=false))]
+    #[pyo3(signature = (collection, field, unique=false))]
     fn create_hash_index(
         &self,
         collection: &Collection,
-        name: &str,
+        field: &str,
         unique: bool,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_hash_index(coll, name, unique)
+            .create_hash_index(coll, field, unique)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -674,23 +674,23 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection to create the index on.
-    ///     name: The index name.
+    ///     field: The field name to index.
     ///     unique: Whether the index enforces unique keys.
     ///
     /// Example:
     /// ```python
     /// db.create_btree_index(users, "age", unique=False)
     /// ```
-    #[pyo3(signature = (collection, name, unique=false))]
+    #[pyo3(signature = (collection, field, unique=false))]
     fn create_btree_index(
         &self,
         collection: &Collection,
-        name: &str,
+        field: &str,
         unique: bool,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_btree_index(coll, name, unique)
+            .create_btree_index(coll, field, unique)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -698,19 +698,19 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection the index belongs to.
-    ///     index_name: The name of the index.
+    ///     field: The field name being indexed.
     ///     key: The key bytes.
     ///     entity_id: The entity to associate with the key.
     fn hash_index_insert(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: &EntityId,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .hash_index_insert(coll, index_name, key.to_vec(), entity_id.inner)
+            .hash_index_insert(coll, field, key.to_vec(), entity_id.inner)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -718,19 +718,19 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection the index belongs to.
-    ///     index_name: The name of the index.
+    ///     field: The field name being indexed.
     ///     key: The key bytes (should use big-endian encoding for proper ordering).
     ///     entity_id: The entity to associate with the key.
     fn btree_index_insert(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: &EntityId,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .btree_index_insert(coll, index_name, key.to_vec(), entity_id.inner)
+            .btree_index_insert(coll, field, key.to_vec(), entity_id.inner)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -738,13 +738,13 @@ impl Database {
     fn hash_index_remove(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: &EntityId,
     ) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .hash_index_remove(coll, index_name, key, entity_id.inner)
+            .hash_index_remove(coll, field, key, entity_id.inner)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -752,13 +752,13 @@ impl Database {
     fn btree_index_remove(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: &EntityId,
     ) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .btree_index_remove(coll, index_name, key, entity_id.inner)
+            .btree_index_remove(coll, field, key, entity_id.inner)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -768,12 +768,12 @@ impl Database {
     fn hash_index_lookup(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
     ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .hash_index_lookup(coll, index_name, key)
+            .hash_index_lookup(coll, field, key)
             .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
@@ -784,12 +784,12 @@ impl Database {
     fn btree_index_lookup(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         key: &[u8],
     ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .btree_index_lookup(coll, index_name, key)
+            .btree_index_lookup(coll, field, key)
             .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
@@ -798,59 +798,59 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection the index belongs to.
-    ///     index_name: The name of the index.
+    ///     field: The field name being indexed.
     ///     min_key: Optional minimum key (inclusive). None for unbounded.
     ///     max_key: Optional maximum key (inclusive). None for unbounded.
     ///
     /// Returns a list of EntityIds in the range.
-    #[pyo3(signature = (collection, index_name, min_key=None, max_key=None))]
+    #[pyo3(signature = (collection, field, min_key=None, max_key=None))]
     fn btree_index_range(
         &self,
         collection: &Collection,
-        index_name: &str,
+        field: &str,
         min_key: Option<&[u8]>,
         max_key: Option<&[u8]>,
     ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .btree_index_range(coll, index_name, min_key, max_key)
+            .btree_index_range(coll, field, min_key, max_key)
             .map(|ids| ids.into_iter().map(|id| EntityId { inner: id }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Returns the number of entries in a hash index.
-    fn hash_index_len(&self, collection: &Collection, index_name: &str) -> PyResult<usize> {
+    fn hash_index_len(&self, collection: &Collection, field: &str) -> PyResult<usize> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .hash_index_len(coll, index_name)
+            .hash_index_len(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Returns the number of entries in a BTree index.
-    fn btree_index_len(&self, collection: &Collection, index_name: &str) -> PyResult<usize> {
+    fn btree_index_len(&self, collection: &Collection, field: &str) -> PyResult<usize> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .btree_index_len(coll, index_name)
+            .btree_index_len(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Drops a hash index.
     ///
     /// Returns True if the index existed and was dropped.
-    fn drop_hash_index(&self, collection: &Collection, index_name: &str) -> PyResult<bool> {
+    fn drop_hash_index(&self, collection: &Collection, field: &str) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .drop_hash_index(coll, index_name)
+            .drop_hash_index(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Drops a BTree index.
     ///
     /// Returns True if the index existed and was dropped.
-    fn drop_btree_index(&self, collection: &Collection, index_name: &str) -> PyResult<bool> {
+    fn drop_btree_index(&self, collection: &Collection, field: &str) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .drop_btree_index(coll, index_name)
+            .drop_btree_index(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -865,16 +865,16 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection to create the index on.
-    ///     name: The index name.
+    ///     field: The field name being indexed.
     ///
     /// Example:
     /// ```python
     /// db.create_fts_index(documents, "content")
     /// ```
-    fn create_fts_index(&self, collection: &Collection, name: &str) -> PyResult<()> {
+    fn create_fts_index(&self, collection: &Collection, field: &str) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_fts_index(coll, name)
+            .create_fts_index(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -882,7 +882,7 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection to create the index on.
-    ///     name: The index name.
+    ///     field: The field name being indexed.
     ///     min_token_length: Minimum token length (default 1).
     ///     max_token_length: Maximum token length (default 256).
     ///     case_sensitive: If True, matching is case-sensitive (default False).
@@ -892,18 +892,18 @@ impl Database {
     /// db.create_fts_index_with_config(documents, "content",
     ///     min_token_length=2, case_sensitive=True)
     /// ```
-    #[pyo3(signature = (collection, name, min_token_length=1, max_token_length=256, case_sensitive=false))]
+    #[pyo3(signature = (collection, field, min_token_length=1, max_token_length=256, case_sensitive=false))]
     fn create_fts_index_with_config(
         &self,
         collection: &Collection,
-        name: &str,
+        field: &str,
         min_token_length: usize,
         max_token_length: usize,
         case_sensitive: bool,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_fts_index_with_config(coll, name, min_token_length, max_token_length, case_sensitive)
+            .create_fts_index_with_config(coll, field, min_token_length, max_token_length, case_sensitive)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -913,7 +913,7 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection.
-    ///     name: The FTS index name.
+    ///     field: The field name being indexed.
     ///     entity_id: The entity to index.
     ///     text: The text content to index.
     ///
@@ -924,13 +924,13 @@ impl Database {
     fn fts_index_text(
         &self,
         collection: &Collection,
-        name: &str,
+        field: &str,
         entity_id: &EntityId,
         text: &str,
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_index_text(coll, name, entity_id.inner, text)
+            .fts_index_text(coll, field, entity_id.inner, text)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -940,17 +940,17 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection.
-    ///     name: The FTS index name.
+    ///     field: The field name being indexed.
     ///     entity_id: The entity to remove.
     fn fts_remove_entity(
         &self,
         collection: &Collection,
-        name: &str,
+        field: &str,
         entity_id: &EntityId,
     ) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_remove_entity(coll, name, entity_id.inner)
+            .fts_remove_entity(coll, field, entity_id.inner)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -960,7 +960,7 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection.
-    ///     name: The FTS index name.
+    ///     field: The field name being indexed.
     ///     query: The search query (whitespace-separated terms).
     ///
     /// Returns:
@@ -971,10 +971,10 @@ impl Database {
     /// results = db.fts_search(documents, "content", "hello world")
     /// # Returns entities containing both "hello" AND "world"
     /// ```
-    fn fts_search(&self, collection: &Collection, name: &str, query: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search(&self, collection: &Collection, field: &str, query: &str) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_search(coll, name, query)
+            .fts_search(coll, field, query)
             .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
@@ -985,7 +985,7 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection.
-    ///     name: The FTS index name.
+    ///     field: The field name being indexed.
     ///     query: The search query (whitespace-separated terms).
     ///
     /// Returns:
@@ -996,10 +996,10 @@ impl Database {
     /// results = db.fts_search_any(documents, "content", "hello world")
     /// # Returns entities containing "hello" OR "world" (or both)
     /// ```
-    fn fts_search_any(&self, collection: &Collection, name: &str, query: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search_any(&self, collection: &Collection, field: &str, query: &str) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_search_any(coll, name, query)
+            .fts_search_any(coll, field, query)
             .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
@@ -1010,7 +1010,7 @@ impl Database {
     ///
     /// Args:
     ///     collection: The collection.
-    ///     name: The FTS index name.
+    ///     field: The field name being indexed.
     ///     prefix: The prefix to search for.
     ///
     /// Returns:
@@ -1021,45 +1021,45 @@ impl Database {
     /// results = db.fts_search_prefix(documents, "content", "prog")
     /// # Returns entities with words like "program", "programming", etc.
     /// ```
-    fn fts_search_prefix(&self, collection: &Collection, name: &str, prefix: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search_prefix(&self, collection: &Collection, field: &str, prefix: &str) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_search_prefix(coll, name, prefix)
+            .fts_search_prefix(coll, field, prefix)
             .map(|ids| ids.into_iter().map(|inner| EntityId { inner }).collect())
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Returns the number of entities indexed in the FTS index.
-    fn fts_index_len(&self, collection: &Collection, name: &str) -> PyResult<usize> {
+    fn fts_index_len(&self, collection: &Collection, field: &str) -> PyResult<usize> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_index_len(coll, name)
+            .fts_index_len(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Returns the number of unique tokens in the FTS index.
-    fn fts_unique_token_count(&self, collection: &Collection, name: &str) -> PyResult<usize> {
+    fn fts_unique_token_count(&self, collection: &Collection, field: &str) -> PyResult<usize> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_unique_token_count(coll, name)
+            .fts_unique_token_count(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Clears all entries from an FTS index.
-    fn fts_clear(&self, collection: &Collection, name: &str) -> PyResult<()> {
+    fn fts_clear(&self, collection: &Collection, field: &str) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .fts_clear(coll, name)
+            .fts_clear(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Drops an FTS index.
     ///
     /// Returns True if the index existed and was dropped.
-    fn drop_fts_index(&self, collection: &Collection, name: &str) -> PyResult<bool> {
+    fn drop_fts_index(&self, collection: &Collection, field: &str) -> PyResult<bool> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .drop_fts_index(coll, name)
+            .drop_fts_index(coll, field)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 

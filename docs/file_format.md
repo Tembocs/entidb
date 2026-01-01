@@ -13,7 +13,12 @@ This document is **normative**. Any implementation of EntiDB **MUST** conform ex
 * **Major** version mismatch ⇒ database **MUST NOT** open.
 * **Minor** version mismatch ⇒ database **MAY** open read-only or perform controlled upgrade.
 
-### 1.2 Forward and backward guarantees
+### 1.2 Current format version
+
+* **Major**: 1
+* **Minor**: 0
+
+### 1.3 Forward and backward guarantees
 
 * WAL and segment readers **MUST** ignore unknown record types with higher minor versions.
 * Unknown fields **MUST NOT** alter interpretation of known fields.
@@ -23,15 +28,14 @@ This document is **normative**. Any implementation of EntiDB **MUST** conform ex
 ## 2. Storage layout
 
 ```
-entidb/
-├─ MANIFEST
-├─ WAL/
-│  ├─ wal-000001.log
-│  ├─ wal-000002.log
-├─ SEGMENTS/
-│  ├─ seg-000001.dat
-│  ├─ seg-000002.dat
-└─ LOCK
+<db_path>/
+├─ MANIFEST          # Metadata (collections, indexes, format version)
+├─ LOCK              # Advisory lock for single-writer
+├─ wal.log           # Write-ahead log (single file)
+└─ SEGMENTS/
+   ├─ seg-000001.dat
+   ├─ seg-000002.dat
+   └─ ...
 ```
 
 ### 2.1 MANIFEST
@@ -49,6 +53,17 @@ entidb/
 
 * Advisory lock.
 * Enforces single-writer invariant.
+
+### 2.3 wal.log
+
+* Single WAL file in the database root.
+* Contains all WAL records in append-only order.
+
+### 2.4 SEGMENTS/
+
+* Directory containing sealed segment files.
+* Each segment file is named `seg-NNNNNN.dat` where `NNNNNN` is a zero-padded sequence number.
+* Segments are immutable after sealing.
 
 ---
 

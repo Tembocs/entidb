@@ -882,11 +882,11 @@ final class Database {
   }
 
   /// Inserts a key-entity pair into a hash index.
-  void hashIndexInsert(Collection collection, String indexName, Uint8List key,
-      EntityId entityId) {
+  void hashIndexInsert(
+      Collection collection, String field, Uint8List key, EntityId entityId) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
@@ -897,10 +897,10 @@ final class Database {
       }
 
       final result = bindings.entidbHashIndexInsert(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, entityIdPtr.ref);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(entityIdPtr);
@@ -910,11 +910,11 @@ final class Database {
   /// Inserts a key-entity pair into a BTree index.
   ///
   /// Note: For proper ordering, use big-endian encoding for numeric keys.
-  void btreeIndexInsert(Collection collection, String indexName, Uint8List key,
-      EntityId entityId) {
+  void btreeIndexInsert(
+      Collection collection, String field, Uint8List key, EntityId entityId) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
@@ -925,10 +925,10 @@ final class Database {
       }
 
       final result = bindings.entidbBTreeIndexInsert(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, entityIdPtr.ref);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(entityIdPtr);
@@ -936,11 +936,11 @@ final class Database {
   }
 
   /// Removes a key-entity pair from a hash index.
-  void hashIndexRemove(Collection collection, String indexName, Uint8List key,
-      EntityId entityId) {
+  void hashIndexRemove(
+      Collection collection, String field, Uint8List key, EntityId entityId) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
@@ -951,10 +951,10 @@ final class Database {
       }
 
       final result = bindings.entidbHashIndexRemove(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, entityIdPtr.ref);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(entityIdPtr);
@@ -962,11 +962,11 @@ final class Database {
   }
 
   /// Removes a key-entity pair from a BTree index.
-  void btreeIndexRemove(Collection collection, String indexName, Uint8List key,
-      EntityId entityId) {
+  void btreeIndexRemove(
+      Collection collection, String field, Uint8List key, EntityId entityId) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
@@ -977,10 +977,10 @@ final class Database {
       }
 
       final result = bindings.entidbBTreeIndexRemove(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, entityIdPtr.ref);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, entityIdPtr.ref);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(entityIdPtr);
@@ -991,10 +991,10 @@ final class Database {
   ///
   /// Returns a list of EntityIds matching the key.
   List<EntityId> hashIndexLookup(
-      Collection collection, String indexName, Uint8List key) {
+      Collection collection, String field, Uint8List key) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final bufferPtr = calloc<EntiDbBuffer>();
@@ -1005,13 +1005,13 @@ final class Database {
       }
 
       final result = bindings.entidbHashIndexLookup(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, bufferPtr);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, bufferPtr);
       checkResult(result);
 
       return _parseEntityIds(bufferPtr);
     } finally {
       bindings.entidbFreeBuffer(bufferPtr.ref);
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(bufferPtr);
@@ -1022,10 +1022,10 @@ final class Database {
   ///
   /// Returns a list of EntityIds matching the key.
   List<EntityId> btreeIndexLookup(
-      Collection collection, String indexName, Uint8List key) {
+      Collection collection, String field, Uint8List key) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final keyPtr = calloc<Uint8>(key.length);
     final bufferPtr = calloc<EntiDbBuffer>();
@@ -1036,13 +1036,13 @@ final class Database {
       }
 
       final result = bindings.entidbBTreeIndexLookup(
-          _handle!, collId.ref, namePtr, keyPtr, key.length, bufferPtr);
+          _handle!, collId.ref, fieldPtr, keyPtr, key.length, bufferPtr);
       checkResult(result);
 
       return _parseEntityIds(bufferPtr);
     } finally {
       bindings.entidbFreeBuffer(bufferPtr.ref);
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(keyPtr);
       calloc.free(bufferPtr);
@@ -1054,20 +1054,20 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection the index belongs to.
-  /// - [indexName]: The name of the index.
+  /// - [field]: The field name the index is on.
   /// - [minKey]: Optional minimum key (inclusive). Null for unbounded.
   /// - [maxKey]: Optional maximum key (inclusive). Null for unbounded.
   ///
   /// Returns a list of EntityIds in the range.
   List<EntityId> btreeIndexRange(
     Collection collection,
-    String indexName, {
+    String field, {
     Uint8List? minKey,
     Uint8List? maxKey,
   }) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final bufferPtr = calloc<EntiDbBuffer>();
 
@@ -1096,7 +1096,7 @@ final class Database {
       final result = bindings.entidbBTreeIndexRange(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         minKeyPtr,
         minKeyLen,
         maxKeyPtr,
@@ -1108,7 +1108,7 @@ final class Database {
       return _parseEntityIds(bufferPtr);
     } finally {
       bindings.entidbFreeBuffer(bufferPtr.ref);
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       if (minKeyPtr != nullptr) calloc.free(minKeyPtr);
       if (maxKeyPtr != nullptr) calloc.free(maxKeyPtr);
@@ -1117,40 +1117,40 @@ final class Database {
   }
 
   /// Returns the number of entries in a hash index.
-  int hashIndexLen(Collection collection, String indexName) {
+  int hashIndexLen(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final countPtr = calloc<IntPtr>();
 
     try {
       final result =
-          bindings.entidbHashIndexLen(_handle!, collId.ref, namePtr, countPtr);
+          bindings.entidbHashIndexLen(_handle!, collId.ref, fieldPtr, countPtr);
       checkResult(result);
       return countPtr.value;
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(countPtr);
     }
   }
 
   /// Returns the number of entries in a BTree index.
-  int btreeIndexLen(Collection collection, String indexName) {
+  int btreeIndexLen(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final countPtr = calloc<IntPtr>();
 
     try {
-      final result =
-          bindings.entidbBTreeIndexLen(_handle!, collId.ref, namePtr, countPtr);
+      final result = bindings.entidbBTreeIndexLen(
+          _handle!, collId.ref, fieldPtr, countPtr);
       checkResult(result);
       return countPtr.value;
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(countPtr);
     }
@@ -1159,18 +1159,18 @@ final class Database {
   /// Drops a hash index.
   ///
   /// Throws if the index doesn't exist after the call (for safety).
-  void dropHashIndex(Collection collection, String indexName) {
+  void dropHashIndex(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
 
     try {
       final result =
-          bindings.entidbDropHashIndex(_handle!, collId.ref, namePtr);
+          bindings.entidbDropHashIndex(_handle!, collId.ref, fieldPtr);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
     }
   }
@@ -1178,18 +1178,18 @@ final class Database {
   /// Drops a BTree index.
   ///
   /// Throws if the index doesn't exist after the call (for safety).
-  void dropBTreeIndex(Collection collection, String indexName) {
+  void dropBTreeIndex(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
 
     try {
       final result =
-          bindings.entidbDropBTreeIndex(_handle!, collId.ref, namePtr);
+          bindings.entidbDropBTreeIndex(_handle!, collId.ref, fieldPtr);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
     }
   }
@@ -1283,7 +1283,7 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection containing the entity.
-  /// - [indexName]: The name of the FTS index.
+  /// - [field]: The field name the index is on.
   /// - [entityId]: The entity ID to associate with the text.
   /// - [text]: The text content to index.
   ///
@@ -1296,13 +1296,13 @@ final class Database {
   /// ```
   void ftsIndexText(
     Collection collection,
-    String indexName,
+    String field,
     EntityId entityId,
     String text,
   ) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final textPtr = text.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
@@ -1311,13 +1311,13 @@ final class Database {
       final result = bindings.entidbFtsIndexText(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         entityIdPtr.ref,
         textPtr,
       );
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(textPtr);
       calloc.free(collId);
       calloc.free(entityIdPtr);
@@ -1329,16 +1329,16 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection containing the entity.
-  /// - [indexName]: The name of the FTS index.
+  /// - [field]: The field name the index is on.
   /// - [entityId]: The entity ID to remove.
   void ftsRemoveEntity(
     Collection collection,
-    String indexName,
+    String field,
     EntityId entityId,
   ) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final entityIdPtr = EntiDbEntityId.allocate(entityId.bytes);
 
@@ -1346,12 +1346,12 @@ final class Database {
       final result = bindings.entidbFtsRemoveEntity(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         entityIdPtr.ref,
       );
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(entityIdPtr);
     }
@@ -1364,7 +1364,7 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection to search.
-  /// - [indexName]: The name of the FTS index.
+  /// - [field]: The field name the index is on.
   /// - [query]: Space-separated search terms.
   ///
   /// ## Returns
@@ -1379,12 +1379,12 @@ final class Database {
   /// ```
   List<EntityId> ftsSearch(
     Collection collection,
-    String indexName,
+    String field,
     String query,
   ) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final queryPtr = query.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final bufferPtr = calloc<EntiDbBuffer>();
@@ -1393,7 +1393,7 @@ final class Database {
       final result = bindings.entidbFtsSearch(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         queryPtr,
         bufferPtr,
       );
@@ -1404,7 +1404,7 @@ final class Database {
       if (bufferPtr.ref.data != nullptr) {
         bindings.entidbFreeBuffer(bufferPtr.ref);
       }
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(queryPtr);
       calloc.free(collId);
       calloc.free(bufferPtr);
@@ -1418,7 +1418,7 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection to search.
-  /// - [indexName]: The name of the FTS index.
+  /// - [field]: The field name the index is on.
   /// - [query]: Space-separated search terms.
   ///
   /// ## Returns
@@ -1433,12 +1433,12 @@ final class Database {
   /// ```
   List<EntityId> ftsSearchAny(
     Collection collection,
-    String indexName,
+    String field,
     String query,
   ) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final queryPtr = query.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final bufferPtr = calloc<EntiDbBuffer>();
@@ -1447,7 +1447,7 @@ final class Database {
       final result = bindings.entidbFtsSearchAny(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         queryPtr,
         bufferPtr,
       );
@@ -1458,7 +1458,7 @@ final class Database {
       if (bufferPtr.ref.data != nullptr) {
         bindings.entidbFreeBuffer(bufferPtr.ref);
       }
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(queryPtr);
       calloc.free(collId);
       calloc.free(bufferPtr);
@@ -1472,7 +1472,7 @@ final class Database {
   /// ## Parameters
   ///
   /// - [collection]: The collection to search.
-  /// - [indexName]: The name of the FTS index.
+  /// - [field]: The field name the index is on.
   /// - [prefix]: The prefix to search for.
   ///
   /// ## Returns
@@ -1487,12 +1487,12 @@ final class Database {
   /// ```
   List<EntityId> ftsSearchPrefix(
     Collection collection,
-    String indexName,
+    String field,
     String prefix,
   ) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final prefixPtr = prefix.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final bufferPtr = calloc<EntiDbBuffer>();
@@ -1501,7 +1501,7 @@ final class Database {
       final result = bindings.entidbFtsSearchPrefix(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         prefixPtr,
         bufferPtr,
       );
@@ -1512,7 +1512,7 @@ final class Database {
       if (bufferPtr.ref.data != nullptr) {
         bindings.entidbFreeBuffer(bufferPtr.ref);
       }
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(prefixPtr);
       calloc.free(collId);
       calloc.free(bufferPtr);
@@ -1520,10 +1520,10 @@ final class Database {
   }
 
   /// Gets the number of entities indexed in an FTS index.
-  int ftsIndexLen(Collection collection, String indexName) {
+  int ftsIndexLen(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final countPtr = calloc<IntPtr>();
 
@@ -1531,24 +1531,24 @@ final class Database {
       final result = bindings.entidbFtsIndexLen(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         countPtr,
       );
       checkResult(result);
 
       return countPtr.value;
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(countPtr);
     }
   }
 
   /// Gets the number of unique tokens in an FTS index.
-  int ftsUniqueTokenCount(Collection collection, String indexName) {
+  int ftsUniqueTokenCount(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
     final countPtr = calloc<IntPtr>();
 
@@ -1556,14 +1556,14 @@ final class Database {
       final result = bindings.entidbFtsUniqueTokenCount(
         _handle!,
         collId.ref,
-        namePtr,
+        fieldPtr,
         countPtr,
       );
       checkResult(result);
 
       return countPtr.value;
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
       calloc.free(countPtr);
     }
@@ -1572,33 +1572,34 @@ final class Database {
   /// Clears all entries from an FTS index.
   ///
   /// The index structure remains but all indexed content is removed.
-  void ftsClear(Collection collection, String indexName) {
+  void ftsClear(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
 
     try {
-      final result = bindings.entidbFtsClear(_handle!, collId.ref, namePtr);
+      final result = bindings.entidbFtsClear(_handle!, collId.ref, fieldPtr);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
     }
   }
 
   /// Drops an FTS index.
-  void dropFtsIndex(Collection collection, String indexName) {
+  void dropFtsIndex(Collection collection, String field) {
     _ensureOpen();
 
-    final namePtr = indexName.toNativeUtf8();
+    final fieldPtr = field.toNativeUtf8();
     final collId = EntiDbCollectionId.allocate(collection.id);
 
     try {
-      final result = bindings.entidbDropFtsIndex(_handle!, collId.ref, namePtr);
+      final result =
+          bindings.entidbDropFtsIndex(_handle!, collId.ref, fieldPtr);
       checkResult(result);
     } finally {
-      calloc.free(namePtr);
+      calloc.free(fieldPtr);
       calloc.free(collId);
     }
   }

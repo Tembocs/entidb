@@ -273,9 +273,11 @@ impl Database {
         }
 
         // Rebuild indexes from segment records using streaming iterator
-        // This is memory-efficient: records are processed one at a time
+        // This is memory-efficient: records are processed one at a time.
+        // If rebuild fails, indexes are marked as invalid and lookups through
+        // them will fail with a hard error until a successful rebuild occurs.
         if let Ok(record_iter) = segments.iter_all() {
-            // Ignore errors during index rebuild - indexes can be rebuilt later
+            // Errors are handled by marking indexes invalid; database still opens
             let _ = index_engine.rebuild_from_iterator(record_iter);
         }
 
@@ -350,7 +352,8 @@ impl Database {
         }
 
         // Rebuild indexes from segment records using streaming iterator
-        // (open_with_backends is mainly for testing, but still benefits from streaming)
+        // If rebuild fails, indexes are marked as invalid and lookups through
+        // them will fail with a hard error until a successful rebuild occurs.
         if let Ok(record_iter) = segments.iter_all() {
             let _ = index_engine.rebuild_from_iterator(record_iter);
         }
@@ -1027,9 +1030,6 @@ impl Database {
         let compactor = Compactor::new(config);
         let current_seq = self.committed_seq();
 
-        // Get sealed segment IDs before compaction (for file deletion)
-        let sealed_ids = self.segments.sealed_segment_ids();
-
         // Track compaction statistics across the closure
         use std::cell::RefCell;
         let stats = RefCell::new(None);
@@ -1063,12 +1063,12 @@ impl Database {
                 Ok(compacted)
             })?;
 
-        // Delete the old segment files from disk
+        // Delete the old segment files from disk (exactly the ones that were removed)
         #[cfg(feature = "std")]
         if let Some(ref dir) = self.dir {
             if !removed_ids.is_empty() {
-                // Delete the old segment files
-                let _ = dir.delete_segment_files(&sealed_ids);
+                // Delete exactly the segment files that were replaced by compaction
+                dir.delete_segment_files(&removed_ids)?;
             }
         }
 
@@ -1380,17 +1380,18 @@ impl Database {
             (id, def_for_engine)
         };
 
-        // Register and rebuild indexes from current persisted records using streaming
+        // Register and rebuild indexes from current persisted records using streaming.
+        // If rebuild fails, the index is marked as invalid and lookups through
+        // it will fail with a hard error until a successful rebuild occurs.
         self.index_engine.register_index(def_for_engine);
         if let Ok(record_iter) = self.segments.iter_all() {
-            // Index rebuild errors are non-fatal; the index can be rebuilt later
             let _ = self.index_engine.rebuild_from_iterator(record_iter);
         }
 
         Ok(new_id)
     }
 
-    /// Creates a hash index for fast equality lookups.
+    /// Creates a hash index for fast equality lookups on a field.
     ///
     /// Hash indexes provide O(1) lookup by exact key match. They are ideal for:
     /// - Unique identifier lookups
@@ -1400,25 +1401,30 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection to index
-    /// * `name` - A unique name for this index within the collection
+    /// * `field` - The field to index (engine derives internal index name from this)
     /// * `unique` - Whether the index should enforce uniqueness
     ///
     /// # Example
     ///
     /// ```ignore
     /// let users = db.collection("users");
-    /// db.create_hash_index(users, "email", true)?; // Unique email index
+    /// db.create_hash_index(users, "email", true)?; // Unique index on email field
     /// ```
+    ///
+    /// # Note
+    ///
+    /// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
+    /// index name. The engine manages index names internally.
     pub fn create_hash_index(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         unique: bool,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
         // Persist definition in manifest + register in IndexEngine
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let created_at_seq = self.txn_manager.committed_seq();
         let _id = self.create_index_persisted(
             collection_id,
@@ -1429,7 +1435,7 @@ impl Database {
         )?;
         
         // Also maintain legacy in-memory index for backward compatibility
-        let key = (collection_id.as_u32(), name.to_string());
+        let key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.hash_indexes.write();
 
         if indexes.contains_key(&key) {
@@ -1437,16 +1443,16 @@ impl Database {
         }
 
         let spec = if unique {
-            IndexSpec::new(collection_id, name).unique()
+            IndexSpec::new(collection_id, field).unique()
         } else {
-            IndexSpec::new(collection_id, name)
+            IndexSpec::new(collection_id, field)
         };
 
         indexes.insert(key, HashIndex::new(spec));
         Ok(())
     }
 
-    /// Creates a BTree index for ordered traversal and range queries.
+    /// Creates a BTree index for ordered traversal and range queries on a field.
     ///
     /// BTree indexes support:
     /// - Equality lookups
@@ -1456,25 +1462,30 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection to index
-    /// * `name` - A unique name for this index within the collection
+    /// * `field` - The field to index (engine derives internal index name from this)
     /// * `unique` - Whether the index should enforce uniqueness
     ///
     /// # Example
     ///
     /// ```ignore
     /// let users = db.collection("users");
-    /// db.create_btree_index(users, "age", false)?; // Non-unique age index
+    /// db.create_btree_index(users, "age", false)?; // Non-unique index on age field
     /// ```
+    ///
+    /// # Note
+    ///
+    /// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
+    /// index name. The engine manages index names internally.
     pub fn create_btree_index(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         unique: bool,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
         // Persist definition in manifest + register in IndexEngine
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let created_at_seq = self.txn_manager.committed_seq();
         let _id = self.create_index_persisted(
             collection_id,
@@ -1485,7 +1496,7 @@ impl Database {
         )?;
 
         // Also maintain legacy in-memory index for backward compatibility
-        let key = (collection_id.as_u32(), name.to_string());
+        let key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.btree_indexes.write();
 
         if indexes.contains_key(&key) {
@@ -1493,9 +1504,9 @@ impl Database {
         }
 
         let spec = if unique {
-            IndexSpec::new(collection_id, name).unique()
+            IndexSpec::new(collection_id, field).unique()
         } else {
-            IndexSpec::new(collection_id, name)
+            IndexSpec::new(collection_id, field)
         };
 
         indexes.insert(key, BTreeIndex::new(spec));
@@ -1509,23 +1520,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the hash index
+    /// * `field` - The indexed field (must match the field used in `create_hash_index`)
     /// * `key` - The indexed key value as bytes
     /// * `entity_id` - The entity ID to associate with this key
     pub fn hash_index_insert(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: Vec<u8>,
         entity_id: EntityId,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance (supports transactional updates)
-        self.index_engine.hash_index_insert_legacy(collection_id, index_name, key.clone(), entity_id)?;
+        self.index_engine.hash_index_insert_legacy(collection_id, field, key.clone(), entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.hash_indexes.write();
 
         // Legacy index may not exist if only using IndexEngine
@@ -1540,23 +1551,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the hash index
+    /// * `field` - The indexed field (must match the field used in `create_hash_index`)
     /// * `key` - The indexed key value as bytes
     /// * `entity_id` - The entity ID to remove
     pub fn hash_index_remove(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: EntityId,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.hash_index_remove_legacy(collection_id, index_name, key, entity_id)?;
+        self.index_engine.hash_index_remove_legacy(collection_id, field, key, entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.hash_indexes.write();
 
         if let Some(index) = indexes.get_mut(&idx_key) {
@@ -1570,7 +1581,7 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the hash index
+    /// * `field` - The indexed field (must match the field used in `create_hash_index`)
     /// * `key` - The key to look up
     ///
     /// # Returns
@@ -1579,14 +1590,14 @@ impl Database {
     pub fn hash_index_lookup(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
         self.stats.record_index_lookup();
         
         // Use IndexEngine for lookups (authoritative source)
-        self.index_engine.hash_index_lookup_legacy(collection_id, index_name, key)
+        self.index_engine.hash_index_lookup_legacy(collection_id, field, key)
     }
 
     /// Inserts an entry into a BTree index.
@@ -1594,23 +1605,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the BTree index
+    /// * `field` - The indexed field (must match the field used in `create_btree_index`)
     /// * `key` - The indexed key value as bytes
     /// * `entity_id` - The entity ID to associate with this key
     pub fn btree_index_insert(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: Vec<u8>,
         entity_id: EntityId,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.btree_index_insert_legacy(collection_id, index_name, key.clone(), entity_id)?;
+        self.index_engine.btree_index_insert_legacy(collection_id, field, key.clone(), entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.btree_indexes.write();
 
         if let Some(index) = indexes.get_mut(&idx_key) {
@@ -1624,23 +1635,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the BTree index
+    /// * `field` - The indexed field (must match the field used in `create_btree_index`)
     /// * `key` - The indexed key value as bytes
     /// * `entity_id` - The entity ID to remove
     pub fn btree_index_remove(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: &[u8],
         entity_id: EntityId,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.btree_index_remove_legacy(collection_id, index_name, key, entity_id)?;
+        self.index_engine.btree_index_remove_legacy(collection_id, field, key, entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.btree_indexes.write();
 
         if let Some(index) = indexes.get_mut(&idx_key) {
@@ -1654,7 +1665,7 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the BTree index
+    /// * `field` - The indexed field (must match the field used in `create_btree_index`)
     /// * `key` - The key to look up
     ///
     /// # Returns
@@ -1663,14 +1674,14 @@ impl Database {
     pub fn btree_index_lookup(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
         self.stats.record_index_lookup();
 
         // Use IndexEngine for lookups (authoritative source)
-        self.index_engine.btree_index_lookup_legacy(collection_id, index_name, key)
+        self.index_engine.btree_index_lookup_legacy(collection_id, field, key)
     }
 
     /// Performs a range query on a BTree index.
@@ -1680,7 +1691,7 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the BTree index
+    /// * `field` - The indexed field (must match the field used in `create_btree_index`)
     /// * `min_key` - The minimum key (inclusive), or None for unbounded
     /// * `max_key` - The maximum key (inclusive), or None for unbounded
     ///
@@ -1690,7 +1701,7 @@ impl Database {
     pub fn btree_index_range(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         min_key: Option<&[u8]>,
         max_key: Option<&[u8]>,
     ) -> CoreResult<Vec<EntityId>> {
@@ -1698,46 +1709,61 @@ impl Database {
         self.stats.record_index_lookup(); // Range query is still an index operation
 
         // Use IndexEngine for range lookups
-        self.index_engine.btree_index_range_legacy(collection_id, index_name, min_key, max_key)
+        self.index_engine.btree_index_range_legacy(collection_id, field, min_key, max_key)
     }
 
     /// Returns the number of entries in a hash index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn hash_index_len(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
         // Use IndexEngine for index length
-        self.index_engine.hash_index_len_legacy(collection_id, index_name)
+        self.index_engine.hash_index_len_legacy(collection_id, field)
     }
 
     /// Returns the number of entries in a BTree index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn btree_index_len(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
         // Use IndexEngine for index length
-        self.index_engine.btree_index_len_legacy(collection_id, index_name)
+        self.index_engine.btree_index_len_legacy(collection_id, field)
     }
 
     /// Drops a hash index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn drop_hash_index(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Drop from IndexEngine (authoritative)
-        let result = self.index_engine.drop_hash_index_legacy(collection_id, index_name);
+        let result = self.index_engine.drop_hash_index_legacy(collection_id, field);
 
         // Also remove from legacy in-memory index
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.hash_indexes.write();
         indexes.remove(&idx_key);
 
@@ -1745,18 +1771,23 @@ impl Database {
     }
 
     /// Drops a BTree index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn drop_btree_index(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Drop from IndexEngine (authoritative)
-        let result = self.index_engine.drop_btree_index_legacy(collection_id, index_name);
+        let result = self.index_engine.drop_btree_index_legacy(collection_id, field);
 
         // Also remove from legacy in-memory index
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.btree_indexes.write();
         indexes.remove(&idx_key);
 
@@ -1767,7 +1798,7 @@ impl Database {
     // Full-Text Search (FTS) Index Operations
     // ========================================================================
 
-    /// Creates a full-text search (FTS) index for token-based text search.
+    /// Creates a full-text search (FTS) index for token-based text search on a field.
     ///
     /// FTS indexes support:
     /// - Tokenization (whitespace, punctuation splitting)
@@ -1778,33 +1809,38 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection to index
-    /// * `name` - A unique name for this index within the collection
+    /// * `field` - The field to index (engine derives internal index name from this)
     ///
     /// # Example
     ///
     /// ```ignore
     /// let articles = db.collection("articles");
-    /// db.create_fts_index(articles, "content_fts")?;
+    /// db.create_fts_index(articles, "content")?; // FTS index on content field
     /// ```
+    ///
+    /// # Note
+    ///
+    /// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
+    /// index name. The engine manages index names internally.
     pub fn create_fts_index(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
-        let key = (collection_id.as_u32(), name.to_string());
+        let key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         if indexes.contains_key(&key) {
             return Err(CoreError::invalid_format(format!(
-                "FTS index '{}' already exists on collection {}",
-                name,
+                "FTS index on field '{}' already exists on collection {}",
+                field,
                 collection_id.as_u32()
             )));
         }
 
-        let spec = FtsIndexSpec::new(collection_id, name);
+        let spec = FtsIndexSpec::new(collection_id, field);
         indexes.insert(key, FtsIndex::new(spec));
         Ok(())
     }
@@ -1814,27 +1850,27 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection to index
-    /// * `name` - A unique name for this index within the collection
+    /// * `field` - The field to index (engine derives internal index name from this)
     /// * `min_token_length` - Minimum token length to index
     /// * `max_token_length` - Maximum token length to index
     /// * `case_sensitive` - Whether to perform case-sensitive matching
     pub fn create_fts_index_with_config(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         min_token_length: usize,
         max_token_length: usize,
         case_sensitive: bool,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
-        let key = (collection_id.as_u32(), name.to_string());
+        let key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         if indexes.contains_key(&key) {
             return Err(CoreError::invalid_format(format!(
-                "FTS index '{}' already exists on collection {}",
-                name,
+                "FTS index on field '{}' already exists on collection {}",
+                field,
                 collection_id.as_u32()
             )));
         }
@@ -1846,7 +1882,7 @@ impl Database {
             tokenizer = tokenizer.case_sensitive();
         }
 
-        let spec = FtsIndexSpec::new(collection_id, name).with_tokenizer(tokenizer);
+        let spec = FtsIndexSpec::new(collection_id, field).with_tokenizer(tokenizer);
         indexes.insert(key, FtsIndex::new(spec));
         Ok(())
     }
@@ -1858,25 +1894,25 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the FTS index
+    /// * `field` - The indexed field (must match the field used in `create_fts_index`)
     /// * `entity_id` - The entity to index
     /// * `text` - The text to index
     pub fn fts_index_text(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         entity_id: EntityId,
         text: &str,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         let index = indexes.get_mut(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -1891,7 +1927,7 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the FTS index
+    /// * `field` - The indexed field (must match the field used in `create_fts_index`)
     /// * `entity_id` - The entity to remove
     ///
     /// # Returns
@@ -1900,18 +1936,18 @@ impl Database {
     pub fn fts_remove_entity(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         entity_id: EntityId,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         let index = indexes.get_mut(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -1926,23 +1962,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the FTS index
+    /// * `field` - The indexed field (must match the field used in `create_fts_index`)
     /// * `query` - The search query (tokenized the same way as indexed text)
     pub fn fts_search(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         query: &str,
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let indexes = self.fts_indexes.read();
 
         let index = indexes.get(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -1958,23 +1994,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the FTS index
+    /// * `field` - The indexed field (must match the field used in `create_fts_index`)
     /// * `query` - The search query (tokenized the same way as indexed text)
     pub fn fts_search_any(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         query: &str,
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let indexes = self.fts_indexes.read();
 
         let index = indexes.get(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -1990,23 +2026,23 @@ impl Database {
     /// # Arguments
     ///
     /// * `collection_id` - The collection
-    /// * `index_name` - The name of the FTS index
+    /// * `field` - The indexed field (must match the field used in `create_fts_index`)
     /// * `prefix` - The prefix to search for
     pub fn fts_search_prefix(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
         prefix: &str,
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let indexes = self.fts_indexes.read();
 
         let index = indexes.get(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -2016,20 +2052,25 @@ impl Database {
     }
 
     /// Returns the number of indexed entities in an FTS index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn fts_index_len(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let indexes = self.fts_indexes.read();
 
         let index = indexes.get(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -2038,20 +2079,25 @@ impl Database {
     }
 
     /// Returns the number of unique tokens in an FTS index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn fts_unique_token_count(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let indexes = self.fts_indexes.read();
 
         let index = indexes.get(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -2060,20 +2106,25 @@ impl Database {
     }
 
     /// Clears an FTS index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn fts_clear(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<()> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         let index = indexes.get_mut(&idx_key).ok_or_else(|| {
             CoreError::invalid_operation(format!(
-                "FTS index '{}' not found on collection {}",
-                index_name,
+                "FTS index on field '{}' not found on collection {}",
+                field,
                 collection_id.as_u32()
             ))
         })?;
@@ -2083,14 +2134,19 @@ impl Database {
     }
 
     /// Drops an FTS index.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_id` - The collection
+    /// * `field` - The indexed field
     pub fn drop_fts_index(
         &self,
         collection_id: CollectionId,
-        index_name: &str,
+        field: &str,
     ) -> CoreResult<bool> {
         self.ensure_open()?;
 
-        let idx_key = (collection_id.as_u32(), index_name.to_string());
+        let idx_key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.fts_indexes.write();
 
         Ok(indexes.remove(&idx_key).is_some())

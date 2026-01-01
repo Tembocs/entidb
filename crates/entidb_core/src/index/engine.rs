@@ -155,6 +155,9 @@ pub struct IndexEngine {
     next_index_id: AtomicU64,
     /// Statistics.
     stats: RwLock<IndexStats>,
+    /// Set of index IDs that are in an invalid state (rebuild failed).
+    /// Lookups through invalid indexes will fail with a hard error.
+    invalid_indexes: RwLock<std::collections::HashSet<u64>>,
 }
 
 // Allow dead_code for methods reserved for future transactional integration.
@@ -172,6 +175,7 @@ impl IndexEngine {
             field_index_map: RwLock::new(HashMap::new()),
             next_index_id: AtomicU64::new(1),
             stats: RwLock::new(IndexStats::default()),
+            invalid_indexes: RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -215,6 +219,7 @@ impl IndexEngine {
             field_index_map: RwLock::new(field_map),
             next_index_id: AtomicU64::new(max_id + 1),
             stats: RwLock::new(IndexStats::default()),
+            invalid_indexes: RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -332,8 +337,22 @@ impl IndexEngine {
         self.definitions.write().remove(&id);
         self.hash_indexes.write().remove(&id);
         self.btree_indexes.write().remove(&id);
+        self.invalid_indexes.write().remove(&id);
 
         Ok(true)
+    }
+
+    /// Marks a specific index as valid (successfully rebuilt).
+    ///
+    /// This is called after a successful index rebuild for a newly created index.
+    pub fn mark_index_valid(&self, index_id: u64) {
+        self.invalid_indexes.write().remove(&index_id);
+    }
+
+    /// Checks if an index is in a valid state.
+    #[must_use]
+    pub fn is_index_valid(&self, index_id: u64) -> bool {
+        !self.invalid_indexes.read().contains(&index_id)
     }
 
     /// Gets the index ID for a field path, if an index exists.
@@ -415,6 +434,15 @@ impl IndexEngine {
             }
         };
 
+        // Check if index is valid (successfully rebuilt)
+        if self.invalid_indexes.read().contains(&index_id) {
+            return Err(CoreError::invalid_operation(format!(
+                "index on field {:?} is in an invalid state (rebuild failed); \
+                 rebuild indexes before querying",
+                field_path
+            )));
+        }
+
         self.stats.write().lookups += 1;
 
         // Try hash index first
@@ -461,6 +489,15 @@ impl IndexEngine {
                 )));
             }
         };
+
+        // Check if index is valid (successfully rebuilt)
+        if self.invalid_indexes.read().contains(&index_id) {
+            return Err(CoreError::invalid_operation(format!(
+                "index on field {:?} is in an invalid state (rebuild failed); \
+                 rebuild indexes before querying",
+                field_path
+            )));
+        }
 
         self.stats.write().lookups += 1;
 
@@ -562,6 +599,10 @@ impl IndexEngine {
     /// while maintaining only the necessary state for determining latest versions.
     /// Use this for large databases where `rebuild_from_records` would OOM.
     ///
+    /// On success, all indexes are marked as valid. On failure, all indexes
+    /// are marked as invalid and lookups through them will fail with a hard error
+    /// until a successful rebuild occurs.
+    ///
     /// # Arguments
     ///
     /// * `records` - An iterator yielding `CoreResult<SegmentRecord>` items
@@ -575,12 +616,28 @@ impl IndexEngine {
     {
         use std::collections::HashMap;
 
+        // Mark all indexes as invalid at the start of rebuild.
+        // They will be marked valid only on successful completion.
+        {
+            let defs = self.definitions.read();
+            let mut invalid = self.invalid_indexes.write();
+            for id in defs.keys() {
+                invalid.insert(*id);
+            }
+        }
+
         // Phase 1: Stream through records, keeping only latest version info per entity
         // We store the actual record content since we need the payload for indexing
         let mut latest_records: HashMap<(CollectionId, [u8; 16]), SegmentRecord> = HashMap::new();
 
         for record_result in records {
-            let record = record_result?;
+            let record = match record_result {
+                Ok(r) => r,
+                Err(e) => {
+                    // On error, indexes remain invalid - return the error
+                    return Err(e);
+                }
+            };
             let key = (record.collection_id, record.entity_id);
 
             latest_records
@@ -640,6 +697,15 @@ impl IndexEngine {
                         }
                     }
                 }
+            }
+        }
+
+        // Rebuild successful - mark all indexes as valid
+        {
+            let defs = self.definitions.read();
+            let mut invalid = self.invalid_indexes.write();
+            for id in defs.keys() {
+                invalid.remove(id);
             }
         }
 
@@ -739,16 +805,16 @@ impl IndexEngine {
         Ok(())
     }
 
-    /// Inserts into hash index by name (legacy API).
+    /// Inserts into hash index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn hash_index_insert_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: Vec<u8>,
         entity_id: EntityId,
     ) -> CoreResult<()> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -756,8 +822,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "hash index '{}' not found on collection {}",
-                    name,
+                    "hash index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -771,16 +837,16 @@ impl IndexEngine {
         index.insert(key, entity_id)
     }
 
-    /// Removes from hash index by name (legacy API).
+    /// Removes from hash index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn hash_index_remove_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: &[u8],
         entity_id: EntityId,
     ) -> CoreResult<bool> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -788,8 +854,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "hash index '{}' not found on collection {}",
-                    name,
+                    "hash index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -803,15 +869,15 @@ impl IndexEngine {
         index.remove(&key.to_vec(), entity_id)
     }
 
-    /// Looks up in hash index by name (legacy API).
+    /// Looks up in hash index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn hash_index_lookup_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -819,8 +885,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "hash index '{}' not found on collection {}",
-                    name,
+                    "hash index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -835,14 +901,14 @@ impl IndexEngine {
         index.lookup(&key.to_vec())
     }
 
-    /// Gets hash index length by name (legacy API).
+    /// Gets hash index length by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn hash_index_len_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -850,8 +916,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "hash index '{}' not found on collection {}",
-                    name,
+                    "hash index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -865,27 +931,27 @@ impl IndexEngine {
         Ok(index.len())
     }
 
-    /// Drops hash index by name (legacy API).
+    /// Drops hash index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn drop_hash_index_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
     ) -> CoreResult<bool> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         self.drop_index(collection_id, &field_path)
     }
 
-    /// Creates btree index insert by name (legacy API).
+    /// Inserts into btree index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn btree_index_insert_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: Vec<u8>,
         entity_id: EntityId,
     ) -> CoreResult<()> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -893,8 +959,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "btree index '{}' not found on collection {}",
-                    name,
+                    "btree index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -908,16 +974,16 @@ impl IndexEngine {
         index.insert(key, entity_id)
     }
 
-    /// Removes from btree index by name (legacy API).
+    /// Removes from btree index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn btree_index_remove_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: &[u8],
         entity_id: EntityId,
     ) -> CoreResult<bool> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -925,8 +991,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "btree index '{}' not found on collection {}",
-                    name,
+                    "btree index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -940,15 +1006,15 @@ impl IndexEngine {
         index.remove(&key.to_vec(), entity_id)
     }
 
-    /// Looks up in btree index by name (legacy API).
+    /// Looks up in btree index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn btree_index_lookup_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         key: &[u8],
     ) -> CoreResult<Vec<EntityId>> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -956,8 +1022,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "btree index '{}' not found on collection {}",
-                    name,
+                    "btree index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -972,16 +1038,16 @@ impl IndexEngine {
         index.lookup(&key.to_vec())
     }
 
-    /// Range query on btree index by name (legacy API).
+    /// Range query on btree index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn btree_index_range_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
         min_key: Option<&[u8]>,
         max_key: Option<&[u8]>,
     ) -> CoreResult<Vec<EntityId>> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -989,8 +1055,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "btree index '{}' not found on collection {}",
-                    name,
+                    "btree index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -1016,14 +1082,14 @@ impl IndexEngine {
         index.range((start, end))
     }
 
-    /// Gets btree index length by name (legacy API).
+    /// Gets btree index length by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn btree_index_len_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
     ) -> CoreResult<usize> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
         
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
@@ -1031,8 +1097,8 @@ impl IndexEngine {
             Some(id) => id,
             None => {
                 return Err(CoreError::invalid_format(format!(
-                    "btree index '{}' not found on collection {}",
-                    name,
+                    "btree index on field '{}' not found on collection {}",
+                    field,
                     collection_id.as_u32()
                 )));
             }
@@ -1046,14 +1112,14 @@ impl IndexEngine {
         Ok(index.len())
     }
 
-    /// Drops btree index by name (legacy API).
+    /// Drops btree index by field (legacy API for backward compatibility).
     #[doc(hidden)]
     pub fn drop_btree_index_legacy(
         &self,
         collection_id: CollectionId,
-        name: &str,
+        field: &str,
     ) -> CoreResult<bool> {
-        let field_path = vec![name.to_string()];
+        let field_path = vec![field.to_string()];
         self.drop_index(collection_id, &field_path)
     }
 }
