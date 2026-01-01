@@ -2,7 +2,7 @@
 //!
 //! This module provides the main JavaScript-facing API for EntiDB.
 
-use crate::backend::{PersistentBackend, StorageType, WasmMemoryBackend};
+use crate::backend::{PersistentBackend, SharedPersistentBackend, StorageType};
 use crate::entity::{Collection, EntityId};
 use entidb_core::{Database as CoreDatabase, EntityId as CoreEntityId};
 use js_sys::Array;
@@ -79,6 +79,12 @@ pub struct Database {
     storage_type: StorageType,
     /// Whether the database has unsaved changes.
     dirty: Rc<RefCell<bool>>,
+    /// WAL backend for persistence (None for in-memory databases).
+    /// This is an Arc to the same PersistentBackend used by CoreDatabase.
+    wal_backend: Option<std::sync::Arc<std::sync::RwLock<PersistentBackend>>>,
+    /// Segment backend for persistence (None for in-memory databases).
+    /// This is an Arc to the same PersistentBackend used by CoreDatabase.
+    segment_backend: Option<std::sync::Arc<std::sync::RwLock<PersistentBackend>>>,
 }
 
 #[wasm_bindgen]
@@ -98,6 +104,8 @@ impl Database {
             db_name: None,
             storage_type: StorageType::Memory,
             dirty: Rc::new(RefCell::new(false)),
+            wal_backend: None,
+            segment_backend: None,
         })
     }
 
@@ -142,13 +150,23 @@ impl Database {
         storage_type: StorageType,
     ) -> Result<Database, JsValue> {
         // Load WAL and segment backends from persistent storage
-        let wal_backend = PersistentBackend::open_with_type(name, "wal.log", storage_type)
+        let wal_persistent = PersistentBackend::open_with_type(name, "wal.log", storage_type)
             .await
             .map_err(|e| JsValue::from_str(&format!("Failed to load WAL: {}", e)))?;
 
-        let segment_backend = PersistentBackend::open_with_type(name, "segments.dat", storage_type)
+        let segment_persistent = PersistentBackend::open_with_type(name, "segments.dat", storage_type)
             .await
             .map_err(|e| JsValue::from_str(&format!("Failed to load segments: {}", e)))?;
+
+        // Wrap backends in SharedPersistentBackend for shared ownership.
+        // This allows us to:
+        // 1. Pass the backend to CoreDatabase (which needs Box<dyn StorageBackend>)
+        // 2. Retain access via the Arc for calling save() later
+        let wal_backend = SharedPersistentBackend::new(wal_persistent);
+        let wal_arc = wal_backend.shared(); // Get Arc for later save()
+        
+        let segment_backend = SharedPersistentBackend::new(segment_persistent);
+        let segment_arc = segment_backend.shared(); // Get Arc for later save()
 
         // Configure for web: use very large segment size to disable rotation.
         // Web storage uses a single file approach with in-memory backend,
@@ -169,6 +187,8 @@ impl Database {
             db_name: Some(name.to_string()),
             storage_type,
             dirty: Rc::new(RefCell::new(false)),
+            wal_backend: Some(wal_arc),
+            segment_backend: Some(segment_arc),
         })
     }
 
@@ -472,31 +492,52 @@ impl Database {
     /// **Important:** Changes are NOT automatically persisted.
     /// Call this method before closing the page or when you want
     /// to ensure data is saved.
+    ///
+    /// This method ensures that all committed data is written to durable
+    /// storage. It first creates a checkpoint, then persists the WAL and
+    /// segment data to OPFS or IndexedDB. A commit is not considered
+    /// durable until save() completes successfully.
     #[wasm_bindgen]
     pub fn save(&self) -> js_sys::Promise {
-        let db_name = self.db_name.clone();
         let storage_type = self.storage_type;
         let dirty = Rc::clone(&self.dirty);
 
-        // We need to checkpoint and get the backend data
+        // Clone the backend Arcs for use in the async closure
+        let wal_backend = self.wal_backend.clone();
+        let segment_backend = self.segment_backend.clone();
+
+        // Create a checkpoint to ensure all committed data is flushed to the backends
         if let Err(e) = self.checkpoint() {
             return js_sys::Promise::reject(&e);
         }
 
         future_to_promise(async move {
-            if db_name.is_none() || storage_type == StorageType::Memory {
+            if storage_type == StorageType::Memory {
                 // Nothing to save for in-memory databases
                 return Ok(JsValue::UNDEFINED);
             }
 
-            if !*dirty.borrow() {
-                // No changes to save
-                return Ok(JsValue::UNDEFINED);
+            // Persist the WAL backend to durable storage
+            if let Some(wal_arc) = wal_backend {
+                let backend = wal_arc.read().map_err(|_| {
+                    JsValue::from_str("Failed to acquire lock on WAL backend for save")
+                })?;
+                backend.save().await.map_err(|e| {
+                    JsValue::from_str(&format!("Failed to save WAL: {}", e))
+                })?;
             }
 
-            // Note: The actual save happens through the PersistentBackend's flush
-            // which is called during checkpoint. This method is here for the API
-            // and to ensure the user explicitly saves.
+            // Persist the segment backend to durable storage
+            if let Some(segment_arc) = segment_backend {
+                let backend = segment_arc.read().map_err(|_| {
+                    JsValue::from_str("Failed to acquire lock on segment backend for save")
+                })?;
+                backend.save().await.map_err(|e| {
+                    JsValue::from_str(&format!("Failed to save segments: {}", e))
+                })?;
+            }
+
+            // Clear the dirty flag only after successful persistence
             *dirty.borrow_mut() = false;
             Ok(JsValue::UNDEFINED)
         })

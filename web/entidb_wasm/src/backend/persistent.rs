@@ -130,9 +130,13 @@ impl PersistentBackend {
 
     /// Saves data to persistent storage.
     pub async fn save(&self) -> WasmResult<()> {
-        if !*self.dirty.read().unwrap() {
+        let is_dirty = self.dirty.read().map_err(|_| {
+            WasmError::Storage("Lock poisoned while checking dirty flag".to_string())
+        })?;
+        if !*is_dirty {
             return Ok(());
         }
+        drop(is_dirty); // Release read lock before potentially acquiring write lock
 
         // Read all data from memory backend
         let size = self.memory.size().map_err(|e| {
@@ -140,7 +144,10 @@ impl PersistentBackend {
         })? as usize;
 
         if size == 0 {
-            *self.dirty.write().unwrap() = false;
+            let mut dirty = self.dirty.write().map_err(|_| {
+                WasmError::Storage("Lock poisoned while clearing dirty flag".to_string())
+            })?;
+            *dirty = false;
             return Ok(());
         }
 
@@ -165,7 +172,10 @@ impl PersistentBackend {
             }
         }
 
-        *self.dirty.write().unwrap() = false;
+        let mut dirty = self.dirty.write().map_err(|_| {
+            WasmError::Storage("Lock poisoned while clearing dirty flag".to_string())
+        })?;
+        *dirty = false;
         Ok(())
     }
 
@@ -214,7 +224,14 @@ impl StorageBackend for PersistentBackend {
     }
 
     fn append(&mut self, data: &[u8]) -> StorageResult<u64> {
-        *self.dirty.write().unwrap() = true;
+        let mut dirty = self.dirty.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        *dirty = true;
+        drop(dirty);
         self.memory.append(data)
     }
 
@@ -235,7 +252,116 @@ impl StorageBackend for PersistentBackend {
     }
 
     fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
-        *self.dirty.write().unwrap() = true;
+        let mut dirty = self.dirty.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        *dirty = true;
+        drop(dirty);
         self.memory.truncate(new_size)
+    }
+}
+
+/// A shared wrapper around `PersistentBackend` that implements `StorageBackend`.
+///
+/// This allows multiple owners (the WASM `Database` and the `CoreDatabase`) to
+/// share access to the same underlying storage, which is required for the WASM
+/// `Database::save()` method to persist the data stored by the core.
+use std::sync::Arc;
+
+/// Wrapper that provides shared access to a `PersistentBackend`.
+///
+/// This implements `StorageBackend` by delegating to the inner `PersistentBackend`,
+/// using interior mutability through `RwLock` for mutation operations.
+pub struct SharedPersistentBackend {
+    inner: Arc<std::sync::RwLock<PersistentBackend>>,
+}
+
+impl SharedPersistentBackend {
+    /// Creates a new shared backend wrapping the given `PersistentBackend`.
+    pub fn new(backend: PersistentBackend) -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(backend)),
+        }
+    }
+
+    /// Returns a clone of the inner Arc for shared access.
+    pub fn shared(&self) -> Arc<std::sync::RwLock<PersistentBackend>> {
+        Arc::clone(&self.inner)
+    }
+
+    /// Saves data to persistent storage asynchronously.
+    ///
+    /// This is the method that must be called to actually persist data
+    /// to OPFS or IndexedDB.
+    pub async fn save(&self) -> WasmResult<()> {
+        let backend = self.inner.read().map_err(|_| {
+            WasmError::Storage("Lock poisoned while reading backend for save".to_string())
+        })?;
+        backend.save().await
+    }
+}
+
+impl StorageBackend for SharedPersistentBackend {
+    fn read_at(&self, offset: u64, len: usize) -> StorageResult<Vec<u8>> {
+        let backend = self.inner.read().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.read_at(offset, len)
+    }
+
+    fn append(&mut self, data: &[u8]) -> StorageResult<u64> {
+        let mut backend = self.inner.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.append(data)
+    }
+
+    fn flush(&mut self) -> StorageResult<()> {
+        let mut backend = self.inner.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.flush()
+    }
+
+    fn size(&self) -> StorageResult<u64> {
+        let backend = self.inner.read().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.size()
+    }
+
+    fn sync(&mut self) -> StorageResult<()> {
+        let mut backend = self.inner.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.sync()
+    }
+
+    fn truncate(&mut self, new_size: u64) -> StorageResult<()> {
+        let mut backend = self.inner.write().map_err(|_| {
+            entidb_storage::StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "lock poisoned",
+            ))
+        })?;
+        backend.truncate(new_size)
     }
 }
