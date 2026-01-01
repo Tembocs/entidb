@@ -164,7 +164,8 @@ impl PersistentBackend {
             }
             StorageType::IndexedDb => {
                 let backend = IndexedDbBackend::open(&self.db_name, &self.file_name).await?;
-                backend.append_async(&data).await?;
+                // Write all data (overwrites existing) - fixes append corruption bug
+                backend.write_all(&data).await?;
                 backend.flush_async().await?;
             }
             StorageType::Memory => {

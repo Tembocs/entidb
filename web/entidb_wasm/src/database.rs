@@ -49,23 +49,38 @@ impl From<JsStorageType> for StorageType {
 /// This is the main entry point for interacting with EntiDB from JavaScript.
 /// It provides methods for storing and retrieving entities.
 ///
+/// ## Durability Model
+///
+/// EntiDB WASM uses a **two-phase durability** model for performance:
+///
+/// 1. **Fast operations** (`put`, `delete`): Write to in-memory WAL only.
+///    These are fast but NOT durable - data may be lost if the browser crashes
+///    or the tab is closed before `save()` is called.
+///
+/// 2. **Durable operations** (`putDurable`, `deleteDurable`, `save`): Persist
+///    data to OPFS/IndexedDB. These are async and slower, but guarantee that
+///    data survives browser crashes.
+///
+/// **Choose your approach:**
+/// - For high-throughput batching: Use `put`/`delete`, then call `save()` periodically
+/// - For critical single writes: Use `putDurable`/`deleteDurable`
+///
 /// ## Example
 ///
 /// ```javascript
-/// // In-memory database (no persistence)
-/// const db = await Database.openMemory();
-///
 /// // Persistent database (auto-selects OPFS or IndexedDB)
 /// const db = await Database.open("mydb");
 ///
 /// const users = db.collection("users");
 /// const id = EntityId.generate();
+///
+/// // Option 1: Fast batch writes with explicit save
 /// db.put(users, id, new Uint8Array([1, 2, 3]));
+/// db.put(users, id2, new Uint8Array([4, 5, 6]));
+/// await db.save(); // Persist all changes
 ///
-/// const data = db.get(users, id);
-///
-/// // Save to persistent storage (important!)
-/// await db.save();
+/// // Option 2: Durable single write
+/// await db.putDurable(users, id3, new Uint8Array([7, 8, 9]));
 ///
 /// db.close();
 /// ```
@@ -149,6 +164,9 @@ impl Database {
         name: &str,
         storage_type: StorageType,
     ) -> Result<Database, JsValue> {
+        // Load manifest from persistent storage (if exists)
+        let manifest = Self::load_manifest(name, storage_type).await?;
+
         // Load WAL and segment backends from persistent storage
         let wal_persistent = PersistentBackend::open_with_type(name, "wal.log", storage_type)
             .await
@@ -174,12 +192,126 @@ impl Database {
         // to u64::MAX effectively prevents rotation.
         let config = entidb_core::Config::default().max_segment_size(u64::MAX);
 
-        let db = CoreDatabase::open_with_backends(
+        // Open database with pre-loaded manifest for metadata persistence
+        let db = CoreDatabase::open_with_backends_and_manifest(
             config,
             Box::new(wal_backend),
             Box::new(segment_backend),
+            manifest,
         )
         .map_err(|e| JsValue::from_str(&format!("Failed to open database: {}", e)))?;
+
+        Ok(Database {
+            inner: Rc::new(RefCell::new(db)),
+            collections: Rc::new(RefCell::new(HashMap::new())),
+            db_name: Some(name.to_string()),
+            storage_type,
+            dirty: Rc::new(RefCell::new(false)),
+            wal_backend: Some(wal_arc),
+            segment_backend: Some(segment_arc),
+        })
+    }
+
+    /// Loads the manifest from persistent storage.
+    async fn load_manifest(
+        db_name: &str,
+        storage_type: StorageType,
+    ) -> Result<Option<entidb_core::Manifest>, JsValue> {
+        use crate::backend::{IndexedDbBackend, OpfsBackend};
+
+        let manifest_bytes = match storage_type {
+            StorageType::Opfs => {
+                let backend = OpfsBackend::open(db_name, "manifest.bin").await;
+                match backend {
+                    Ok(b) => {
+                        let size = b.size();
+                        if size > 0 {
+                            b.read_at_async(0, size as usize).await.ok()
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+            StorageType::IndexedDb => {
+                let backend = IndexedDbBackend::open(db_name, "manifest.bin").await;
+                match backend {
+                    Ok(b) => {
+                        let size = b.size();
+                        if size > 0 {
+                            b.read_at_async(0, size as usize).await.ok()
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+            StorageType::Memory => None,
+        };
+
+        if let Some(bytes) = manifest_bytes {
+            if !bytes.is_empty() {
+                match entidb_core::Manifest::decode(&bytes) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => {
+                        // Log warning but continue with fresh manifest
+                        web_sys::console::warn_1(
+                            &format!("Failed to decode manifest, starting fresh: {}", e).into(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Saves the manifest to persistent storage.
+    async fn save_manifest_internal(
+        db_name: &str,
+        storage_type: StorageType,
+        manifest: &entidb_core::Manifest,
+    ) -> Result<(), JsValue> {
+        use crate::backend::{IndexedDbBackend, OpfsBackend};
+
+        let bytes = manifest.encode();
+
+        match storage_type {
+            StorageType::Opfs => {
+                let backend = OpfsBackend::open(db_name, "manifest.bin")
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to open manifest: {}", e)))?;
+                backend
+                    .write_all(&bytes)
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to write manifest: {}", e)))?;
+                backend
+                    .flush_async()
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to flush manifest: {}", e)))?;
+            }
+            StorageType::IndexedDb => {
+                let backend = IndexedDbBackend::open(db_name, "manifest.bin")
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to open manifest: {}", e)))?;
+                backend
+                    .write_all(&bytes)
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to write manifest: {}", e)))?;
+                backend
+                    .flush_async()
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to flush manifest: {}", e)))?;
+            }
+            StorageType::Memory => {
+                // Nothing to save
+            }
+        }
+
+        Ok(())
+    }
 
         Ok(Database {
             inner: Rc::new(RefCell::new(db)),
@@ -224,6 +356,10 @@ impl Database {
     /// # Arguments
     ///
     /// * `name` - The name of the collection
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if collection creation fails (e.g., storage error).
     #[wasm_bindgen]
     pub fn collection(&self, name: &str) -> Result<Collection, JsValue> {
         let mut collections = self.collections.borrow_mut();
@@ -232,9 +368,10 @@ impl Database {
             return Ok(Collection::new(name.to_string(), id));
         }
 
-        // Get or create the collection in the database
+        // Get or create the collection in the database using the proper Result-returning API
         let db = self.inner.borrow();
-        let collection_id = db.collection(name);
+        let collection_id = db.create_collection(name)
+            .map_err(|e| JsValue::from_str(&format!("Failed to create collection '{}': {}", name, e)))?;
 
         collections.insert(name.to_string(), collection_id.0);
         Ok(Collection::new(name.to_string(), collection_id.0))
@@ -243,6 +380,10 @@ impl Database {
     /// Stores an entity in a collection.
     ///
     /// If an entity with the same ID already exists, it will be replaced.
+    ///
+    /// **Important:** This method does NOT guarantee durability. The data is
+    /// written to the in-memory WAL but not persisted to storage until `save()`
+    /// is called. For durable writes, use `putDurable()` instead.
     ///
     /// # Arguments
     ///
@@ -264,6 +405,36 @@ impl Database {
 
         *self.dirty.borrow_mut() = true;
         Ok(())
+    }
+
+    /// Stores an entity with guaranteed durability.
+    ///
+    /// This is an async method that writes the entity AND persists to storage
+    /// before returning. Use this when you need to ensure data survives browser
+    /// crashes or tab closures.
+    ///
+    /// This is equivalent to calling `put()` followed by `save()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to store in
+    /// * `id` - The entity ID
+    /// * `data` - The entity data as bytes (should be CBOR-encoded)
+    #[wasm_bindgen(js_name = putDurable)]
+    pub fn put_durable(
+        &self,
+        collection: &Collection,
+        id: &EntityId,
+        data: &[u8],
+    ) -> js_sys::Promise {
+        // Perform the put synchronously first
+        let put_result = self.put(collection, id, data);
+        if let Err(e) = put_result {
+            return js_sys::Promise::reject(&e);
+        }
+
+        // Then save asynchronously
+        self.save()
     }
 
     /// Retrieves an entity from a collection.
@@ -288,6 +459,10 @@ impl Database {
     ///
     /// Does nothing if the entity does not exist.
     ///
+    /// **Important:** This method does NOT guarantee durability. The delete is
+    /// written to the in-memory WAL but not persisted to storage until `save()`
+    /// is called. For durable deletes, use `deleteDurable()` instead.
+    ///
     /// # Arguments
     ///
     /// * `collection` - The collection to delete from
@@ -306,6 +481,30 @@ impl Database {
 
         *self.dirty.borrow_mut() = true;
         Ok(())
+    }
+
+    /// Deletes an entity with guaranteed durability.
+    ///
+    /// This is an async method that deletes the entity AND persists to storage
+    /// before returning. Use this when you need to ensure the deletion survives
+    /// browser crashes or tab closures.
+    ///
+    /// This is equivalent to calling `delete()` followed by `save()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to delete from
+    /// * `id` - The entity ID
+    #[wasm_bindgen(js_name = deleteDurable)]
+    pub fn delete_durable(&self, collection: &Collection, id: &EntityId) -> js_sys::Promise {
+        // Perform the delete synchronously first
+        let delete_result = self.delete(collection, id);
+        if let Err(e) = delete_result {
+            return js_sys::Promise::reject(&e);
+        }
+
+        // Then save asynchronously
+        self.save()
     }
 
     /// Lists all entities in a collection.
@@ -494,13 +693,14 @@ impl Database {
     /// to ensure data is saved.
     ///
     /// This method ensures that all committed data is written to durable
-    /// storage. It first creates a checkpoint, then persists the WAL and
-    /// segment data to OPFS or IndexedDB. A commit is not considered
-    /// durable until save() completes successfully.
+    /// storage. It first creates a checkpoint, then persists the WAL,
+    /// segment data, and manifest to OPFS or IndexedDB. A commit is not
+    /// considered durable until save() completes successfully.
     #[wasm_bindgen]
     pub fn save(&self) -> js_sys::Promise {
         let storage_type = self.storage_type;
         let dirty = Rc::clone(&self.dirty);
+        let db_name = self.db_name.clone();
 
         // Clone the backend Arcs for use in the async closure
         let wal_backend = self.wal_backend.clone();
@@ -511,11 +711,21 @@ impl Database {
             return js_sys::Promise::reject(&e);
         }
 
+        // Get the current manifest for persistence
+        let manifest = self.inner.borrow().get_manifest();
+
         future_to_promise(async move {
             if storage_type == StorageType::Memory {
                 // Nothing to save for in-memory databases
                 return Ok(JsValue::UNDEFINED);
             }
+
+            let db_name = db_name.ok_or_else(|| {
+                JsValue::from_str("Cannot save: database has no name")
+            })?;
+
+            // Persist the manifest first (metadata is critical)
+            Self::save_manifest_internal(&db_name, storage_type, &manifest).await?;
 
             // Persist the WAL backend to durable storage
             if let Some(wal_arc) = wal_backend {

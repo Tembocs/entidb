@@ -1,26 +1,37 @@
 //! IndexedDB storage backend.
 //!
-//! This backend uses IndexedDB as a fallback when OPFS is not available.
-//! IndexedDB is a key-value database built into browsers and is widely
-//! supported.
+//! This backend serves as a fallback when OPFS is not available.
 //!
-//! ## How It Works
+//! ## Current Implementation Status
 //!
-//! Since IndexedDB is key-value based, we simulate file-like storage by:
-//! - Storing data in fixed-size chunks (blocks)
-//! - Using numeric keys for block ordering
-//! - Maintaining metadata about total size
+//! **WARNING:** This is a simplified implementation that uses `localStorage` as
+//! the underlying storage mechanism, NOT actual IndexedDB. This has significant
+//! limitations:
 //!
-//! ## Implementation
+//! - **Size limit:** localStorage is typically limited to 5-10MB per origin
+//! - **Durability:** localStorage is synchronous and blocking, but persisted
+//! - **Binary data:** Data is base64-encoded, adding ~33% overhead
+//! - **No concurrent access:** localStorage is synchronous and single-threaded
 //!
-//! This implementation uses a single object store with:
-//! - Key 0: metadata (total size)
-//! - Key 1..N: data blocks
+//! ## When This Is Used
 //!
-//! ## Note
+//! This fallback is only used when:
+//! 1. OPFS is not available (older browsers, non-secure contexts)
+//! 2. The user explicitly requests IndexedDB storage type
 //!
-//! This is a simplified implementation that stores data in localStorage
-//! as a fallback. Full IndexedDB support requires more complex async handling.
+//! ## Recommendations
+//!
+//! For production use, prefer OPFS which provides:
+//! - Much larger storage limits
+//! - True file-like semantics
+//! - Better performance
+//!
+//! ## Future Work
+//!
+//! A proper IndexedDB implementation would use the actual IndexedDB API via
+//! `web-sys::IdbFactory`, `IdbDatabase`, etc. with proper async transaction
+//! handling. This is complex due to IndexedDB's callback-based API and would
+//! require significant additional code.
 
 #![allow(dead_code)]
 
@@ -31,15 +42,23 @@ use std::rc::Rc;
 /// Block size for chunking data in IndexedDB.
 const BLOCK_SIZE: usize = 64 * 1024; // 64 KB blocks
 
-/// IndexedDB-based storage backend.
+/// Maximum recommended size for localStorage-based storage (5MB).
+/// Beyond this, browsers may refuse to store data or show quota warnings.
+const MAX_RECOMMENDED_SIZE: usize = 5 * 1024 * 1024;
+
+/// localStorage-based storage backend (IndexedDB fallback).
 ///
-/// This backend stores data in IndexedDB using a block-based approach.
-/// It's a fallback for browsers that don't support OPFS.
+/// **WARNING:** Despite the name, this currently uses `localStorage`, not
+/// IndexedDB. See module documentation for details and limitations.
 ///
-/// ## Current Status
+/// This is a fallback for browsers that don't support OPFS. For production
+/// use, OPFS is strongly recommended.
 ///
-/// This is a simplified implementation using in-memory storage.
-/// Data is persisted to localStorage as a base64-encoded string.
+/// ## Limitations
+///
+/// - Storage is limited to ~5MB (browser-dependent)
+/// - Data is base64-encoded, adding ~33% overhead
+/// - Not suitable for large databases
 pub struct IndexedDbBackend {
     /// Database name.
     db_name: String,
@@ -93,16 +112,35 @@ impl IndexedDbBackend {
     }
 
     /// Saves data to localStorage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - localStorage is not available
+    /// - Storage quota is exceeded (typically ~5MB per origin)
     fn save_to_storage(&self) -> WasmResult<()> {
         let key = format!("entidb_{}_{}", self.db_name, self.store_name);
         let data = self.data.borrow();
+
+        // Warn if data is approaching localStorage limits
+        if data.len() > MAX_RECOMMENDED_SIZE {
+            web_sys::console::warn_1(&format!(
+                "EntiDB: localStorage backend data size ({} bytes) exceeds recommended limit ({}). \
+                 Consider using OPFS for larger databases.",
+                data.len(),
+                MAX_RECOMMENDED_SIZE
+            ).into());
+        }
 
         if let Some(window) = web_sys::window() {
             if let Ok(Some(storage)) = window.local_storage() {
                 let encoded = Self::base64_encode(&data);
                 storage
                     .set_item(&key, &encoded)
-                    .map_err(|_| WasmError::Storage("Failed to save to localStorage".into()))?;
+                    .map_err(|_| WasmError::Storage(
+                        "Failed to save to localStorage. Storage quota may be exceeded. \
+                         Consider using OPFS storage or reducing database size.".into()
+                    ))?;
             }
         }
         Ok(())
@@ -192,6 +230,18 @@ impl IndexedDbBackend {
         data.extend_from_slice(bytes);
         *self.dirty.borrow_mut() = true;
         Ok(offset)
+    }
+
+    /// Overwrites all data in storage.
+    ///
+    /// This replaces any existing content with the new data.
+    /// Used for snapshot-based persistence where the entire state is written.
+    pub async fn write_all(&self, bytes: &[u8]) -> WasmResult<()> {
+        let mut data = self.data.borrow_mut();
+        data.clear();
+        data.extend_from_slice(bytes);
+        *self.dirty.borrow_mut() = true;
+        Ok(())
     }
 
     /// Returns the current size.

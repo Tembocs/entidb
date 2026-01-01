@@ -377,6 +377,88 @@ impl Database {
         })
     }
 
+    /// Opens a database with custom backends and a pre-loaded manifest.
+    ///
+    /// This is intended for web/WASM environments where the manifest is
+    /// persisted separately (e.g., in OPFS or IndexedDB) and loaded before
+    /// opening the database.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Database configuration
+    /// * `wal_backend` - Backend for WAL storage
+    /// * `segment_backend` - Backend for segment storage
+    /// * `manifest` - Pre-loaded manifest (or None to create fresh)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if WAL recovery fails.
+    pub fn open_with_backends_and_manifest(
+        config: Config,
+        wal_backend: Box<dyn StorageBackend>,
+        segment_backend: Box<dyn StorageBackend>,
+        manifest: Option<Manifest>,
+    ) -> CoreResult<Self> {
+        let wal = Arc::new(WalManager::new(wal_backend, config.sync_on_commit));
+        let segments = Arc::new(SegmentManager::new(
+            segment_backend,
+            config.max_segment_size,
+        ));
+
+        // Recover from WAL, using provided manifest as base if available
+        let base_manifest = manifest.unwrap_or_else(|| Manifest::new(config.format_version));
+        let (manifest, next_txid, next_seq, committed_seq) =
+            Self::recover_with_manifest(&wal, &segments, base_manifest)?;
+
+        let txn_manager = Arc::new(TransactionManager::with_state(
+            Arc::clone(&wal),
+            Arc::clone(&segments),
+            next_txid,
+            next_seq,
+            committed_seq,
+        ));
+
+        let entity_store = EntityStore::new(Arc::clone(&txn_manager), Arc::clone(&segments));
+
+        // Create index engine with persisted definitions from manifest
+        let index_engine = IndexEngine::new(IndexEngineConfig::default());
+        for idx_def in &manifest.indexes {
+            index_engine.register_index(idx_def.clone());
+        }
+
+        // Rebuild indexes from segment records using streaming iterator
+        if let Ok(record_iter) = segments.iter_all() {
+            let _ = index_engine.rebuild_from_iterator(record_iter);
+        }
+
+        Ok(Self {
+            config,
+            #[cfg(feature = "std")]
+            dir: None,
+            manifest: RwLock::new(manifest),
+            wal,
+            segments,
+            txn_manager,
+            entity_store,
+            is_open: RwLock::new(true),
+            index_engine,
+            hash_indexes: RwLock::new(HashMap::new()),
+            btree_indexes: RwLock::new(HashMap::new()),
+            fts_indexes: RwLock::new(HashMap::new()),
+            change_feed: Arc::new(crate::change_feed::ChangeFeed::new()),
+            stats: Arc::new(crate::stats::DatabaseStats::new()),
+        })
+    }
+
+    /// Returns the current manifest (for persistence in web environments).
+    ///
+    /// The manifest contains collection name→ID mappings and index definitions.
+    /// In web environments, call this after mutations and persist the encoded
+    /// bytes to ensure metadata survives restarts.
+    pub fn get_manifest(&self) -> Manifest {
+        self.manifest.read().clone()
+    }
+
     /// Opens a fresh in-memory database for testing.
     ///
     /// This creates a non-persistent database that exists only in memory.
@@ -875,33 +957,43 @@ impl Database {
     /// This method is provided for backward compatibility. Prefer `create_collection()`
     /// which returns a `Result` and allows proper error handling.
     ///
-    /// This method never panics. If manifest persistence fails in a persistent database,
-    /// it falls back to an in-memory-only collection ID (equivalent to
-    /// [`collection_unchecked`](Self::collection_unchecked)).
+    /// **Warning:** If manifest persistence fails, this method silently falls back
+    /// to an in-memory-only collection ID. Data written to such collections will
+    /// be LOST on restart. Use `create_collection()` to detect and handle such errors.
     #[deprecated(since = "0.2.0", note = "use create_collection() for proper error handling")]
     pub fn collection(&self, name: &str) -> CollectionId {
-        self.create_collection(name)
-            .unwrap_or_else(|_e| self.collection_unchecked(name))
+        match self.create_collection(name) {
+            Ok(id) => id,
+            Err(e) => {
+                // Log warning about fallback behavior
+                #[cfg(feature = "std")]
+                eprintln!(
+                    "[EntiDB WARNING] Failed to persist collection '{}': {}. \
+                     Using in-memory fallback - data may be lost on restart!",
+                    name, e
+                );
+                self.collection_unchecked_internal(name)
+            }
+        }
     }
 
     /// Gets or creates a collection ID for a name, ignoring persistence errors.
     ///
-    /// This method is provided for internal use and backward compatibility with
-    /// code that cannot handle `Result` types. It logs a warning but continues
-    /// even if manifest persistence fails.
+    /// This method is for internal use only. External code should use
+    /// `create_collection()` which returns a proper `Result`.
     ///
-    /// **Warning:** Using this method may lead to inconsistency between in-memory
-    /// and on-disk state. Collections created when persistence fails will be
-    /// lost on restart.
-    ///
-    /// Prefer [`create_collection`](Self::create_collection) for new code.
+    /// **Warning:** Collections created when persistence fails will be lost on restart.
     #[doc(hidden)]
     pub fn collection_unchecked(&self, name: &str) -> CollectionId {
+        self.collection_unchecked_internal(name)
+    }
+
+    /// Internal implementation of unchecked collection creation.
+    fn collection_unchecked_internal(&self, name: &str) -> CollectionId {
         match self.create_collection(name) {
             Ok(id) => id,
             Err(_e) => {
                 // Fallback: use in-memory only
-                // In production, this should be logged as a warning
                 let mut manifest = self.manifest.write();
                 let id = manifest.get_or_create_collection(name);
                 CollectionId::new(id)
@@ -1578,6 +1670,16 @@ impl Database {
 
     /// Looks up entities by exact key match in a hash index.
     ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy in `docs/access_paths.md`. Future versions will
+    /// replace this with semantic field-based predicates where the engine
+    /// automatically selects the best access path.
+    ///
+    /// For now, use this API for explicit indexed lookups, but be aware that
+    /// the API may change in future versions.
+    ///
     /// # Arguments
     ///
     /// * `collection_id` - The collection
@@ -1662,6 +1764,13 @@ impl Database {
 
     /// Looks up entities by exact key match in a BTree index.
     ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy in `docs/access_paths.md`. Future versions will
+    /// replace this with semantic field-based predicates where the engine
+    /// automatically selects the best access path.
+    ///
     /// # Arguments
     ///
     /// * `collection_id` - The collection
@@ -1687,6 +1796,13 @@ impl Database {
     /// Performs a range query on a BTree index.
     ///
     /// Returns all entities whose key is >= min_key and <= max_key.
+    ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy in `docs/access_paths.md`. Future versions will
+    /// replace this with semantic field-based predicates where the engine
+    /// automatically selects the best access path.
     ///
     /// # Arguments
     ///
