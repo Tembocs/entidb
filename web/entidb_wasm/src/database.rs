@@ -313,17 +313,6 @@ impl Database {
         Ok(())
     }
 
-        Ok(Database {
-            inner: Rc::new(RefCell::new(db)),
-            collections: Rc::new(RefCell::new(HashMap::new())),
-            db_name: Some(name.to_string()),
-            storage_type,
-            dirty: Rc::new(RefCell::new(false)),
-            wal_backend: Some(wal_arc),
-            segment_backend: Some(segment_arc),
-        })
-    }
-
     /// Returns the storage type used by this database.
     #[wasm_bindgen(getter, js_name = storageType)]
     pub fn storage_type(&self) -> JsStorageType {

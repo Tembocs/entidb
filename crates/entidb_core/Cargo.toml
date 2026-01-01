@@ -14,7 +14,7 @@ readme = "README.md"
 [features]
 default = ["std"]
 std = ["dep:fs2"]
-encryption = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:hkdf", "dep:sha2"]
+encryption = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:hkdf"]
 
 [dependencies]
 entidb_storage.workspace = true
@@ -23,7 +23,7 @@ thiserror.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 tracing.workspace = true
-sha2 = { workspace = true, optional = true }
+sha2.workspace = true  # Required for conflict detection hashing
 fs2 = { workspace = true, optional = true }
 
 # Optional encryption dependencies
