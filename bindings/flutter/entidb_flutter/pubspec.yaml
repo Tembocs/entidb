@@ -3,7 +3,7 @@ description: Flutter plugin for EntiDB - an embedded entity database with ACID t
 repository: https://github.com/Tembocs/entidb
 homepage: https://github.com/Tembocs/entidb
 documentation: https://github.com/Tembocs/entidb/tree/main/bindings/flutter/entidb_flutter
-version: 2.0.0-alpha.2
+version: 2.0.0-alpha.3
 
 topics:
   - database
@@ -19,7 +19,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  entidb_dart: ^2.0.0-alpha.2
+  entidb_dart: ^2.0.0-alpha.3
 
 dev_dependencies:
   lints: ^3.0.0

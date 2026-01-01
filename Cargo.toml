@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
@@ -31,14 +31,14 @@ categories = ["database-implementations", "data-structures"]
 
 [workspace.dependencies]
 # Internal crates
-entidb_storage = { path = "crates/entidb_storage", version = "2.0.0-alpha.1" }
-entidb_codec = { path = "crates/entidb_codec", version = "2.0.0-alpha.1" }
-entidb_core = { path = "crates/entidb_core", version = "2.0.0-alpha.1" }
-entidb_ffi = { path = "crates/entidb_ffi", version = "2.0.0-alpha.1" }
-entidb_sync_protocol = { path = "crates/entidb_sync_protocol", version = "2.0.0-alpha.1" }
-entidb_sync_engine = { path = "crates/entidb_sync_engine", version = "2.0.0-alpha.1" }
-entidb_sync_server = { path = "crates/entidb_sync_server", version = "2.0.0-alpha.1" }
-entidb_testkit = { path = "crates/entidb_testkit", version = "2.0.0-alpha.1" }
+entidb_storage = { path = "crates/entidb_storage", version = "2.0.0-alpha.3" }
+entidb_codec = { path = "crates/entidb_codec", version = "2.0.0-alpha.3" }
+entidb_core = { path = "crates/entidb_core", version = "2.0.0-alpha.3" }
+entidb_ffi = { path = "crates/entidb_ffi", version = "2.0.0-alpha.3" }
+entidb_sync_protocol = { path = "crates/entidb_sync_protocol", version = "2.0.0-alpha.3" }
+entidb_sync_engine = { path = "crates/entidb_sync_engine", version = "2.0.0-alpha.3" }
+entidb_sync_server = { path = "crates/entidb_sync_server", version = "2.0.0-alpha.3" }
+entidb_testkit = { path = "crates/entidb_testkit", version = "2.0.0-alpha.3" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
