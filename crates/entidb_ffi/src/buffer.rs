@@ -68,7 +68,11 @@ impl EntiDbBuffer {
 #[no_mangle]
 pub unsafe extern "C" fn entidb_free_buffer(buffer: EntiDbBuffer) {
     if !buffer.data.is_null() {
-        drop(Vec::from_raw_parts(buffer.data, buffer.len, buffer.capacity));
+        drop(Vec::from_raw_parts(
+            buffer.data,
+            buffer.len,
+            buffer.capacity,
+        ));
     }
 }
 

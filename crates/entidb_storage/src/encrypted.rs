@@ -190,7 +190,9 @@ impl Header {
             .get(16..24)
             .ok_or_else(|| StorageError::Encryption("header too short".to_string()))?
             .try_into()
-            .map_err(|_| StorageError::Encryption("invalid header logical size bytes".to_string()))?;
+            .map_err(|_| {
+                StorageError::Encryption("invalid header logical size bytes".to_string())
+            })?;
         let logical_size = u64::from_le_bytes(logical_size_bytes);
 
         let epoch_bytes: [u8; 8] = bytes
@@ -201,7 +203,7 @@ impl Header {
         let epoch = u64::from_le_bytes(epoch_bytes);
 
         // Validate block size is reasonable (1KB to 1MB)
-        if block_size < 1024 || block_size > 1024 * 1024 {
+        if !(1024..=1024 * 1024).contains(&block_size) {
             return Err(StorageError::Encryption(format!(
                 "invalid block size: {block_size}"
             )));
@@ -331,8 +333,9 @@ impl EncryptedBackend {
     /// - The inner backend contains invalid encrypted data
     /// - The encryption key is wrong (authentication will fail on first read)
     /// - The format version is unsupported
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(inner: Box<dyn StorageBackend>, key: EncryptionKey) -> StorageResult<Self> {
-        Self::with_block_size(inner, key, DEFAULT_BLOCK_SIZE)
+        Self::with_block_size(inner, &key, DEFAULT_BLOCK_SIZE)
     }
 
     /// Creates a new encrypted backend with a custom block size.
@@ -348,10 +351,10 @@ impl EncryptedBackend {
     /// Returns an error if the block size is invalid or the storage is corrupted.
     pub fn with_block_size(
         inner: Box<dyn StorageBackend>,
-        key: EncryptionKey,
+        key: &EncryptionKey,
         block_size: usize,
     ) -> StorageResult<Self> {
-        if block_size < 1024 || block_size > 1024 * 1024 {
+        if !(1024..=1024 * 1024).contains(&block_size) {
             return Err(StorageError::Encryption(format!(
                 "block size must be between 1KB and 1MB, got {block_size}"
             )));
@@ -392,56 +395,59 @@ impl EncryptedBackend {
             // Physical layout: [Header][Block 0][Block 1]...
             let data_size = physical_size - HEADER_SIZE as u64;
             let enc_block_size = encrypted_block_size(block_size) as u64;
-            
+
             if data_size > 0 {
                 // Number of complete encrypted blocks
                 let num_blocks = data_size / enc_block_size;
                 let remainder = data_size % enc_block_size;
-                
+
                 if remainder != 0 {
                     return Err(StorageError::Encryption(
-                        "storage contains partial encrypted block - possible corruption".to_string(),
+                        "storage contains partial encrypted block - possible corruption"
+                            .to_string(),
                     ));
                 }
-                
+
                 if num_blocks > 0 {
                     // Sum up the actual lengths from all blocks
                     // Full blocks contribute block_size bytes each
                     // The last block may be partial - read its embedded length
                     let mut total_logical_size: u64 = 0;
-                    
+
                     for block_num in 0..num_blocks {
                         let physical_offset = HEADER_SIZE as u64 + block_num * enc_block_size;
                         let encrypted = inner.read_at(physical_offset, enc_block_size as usize)?;
-                        
+
                         // Decrypt to get actual length
                         let nonce_bytes = &encrypted[..NONCE_SIZE];
                         let ciphertext = &encrypted[NONCE_SIZE..];
-                        
+
                         let expected_nonce = derive_nonce(&nonce_key, header.epoch, block_num);
                         if nonce_bytes != expected_nonce {
                             return Err(StorageError::Encryption(format!(
                                 "nonce mismatch for block {block_num} during recovery"
                             )));
                         }
-                        
+
                         let nonce = Nonce::from_slice(nonce_bytes);
-                        let block_data = cipher
-                            .decrypt(nonce, ciphertext)
-                            .map_err(|_| StorageError::Encryption(
-                                "decryption failed during recovery - wrong key?".to_string()
-                            ))?;
-                        
+                        let block_data = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+                            StorageError::Encryption(
+                                "decryption failed during recovery - wrong key?".to_string(),
+                            )
+                        })?;
+
                         if block_data.len() < BLOCK_LEN_SIZE {
                             return Err(StorageError::Encryption(
-                                "block too short during recovery".to_string()
+                                "block too short during recovery".to_string(),
                             ));
                         }
 
                         let block_len_bytes: [u8; 4] = block_data
                             .get(..BLOCK_LEN_SIZE)
                             .ok_or_else(|| {
-                                StorageError::Encryption("block too short during recovery".to_string())
+                                StorageError::Encryption(
+                                    "block too short during recovery".to_string(),
+                                )
                             })?
                             .try_into()
                             .map_err(|_| {
@@ -449,11 +455,11 @@ impl EncryptedBackend {
                                     "invalid block length prefix during recovery".to_string(),
                                 )
                             })?;
-                        let block_len = u32::from_le_bytes(block_len_bytes) as u64;
-                        
+                        let block_len = u64::from(u32::from_le_bytes(block_len_bytes));
+
                         total_logical_size += block_len;
                     }
-                    
+
                     header.logical_size = total_logical_size;
                 }
             }
@@ -491,10 +497,15 @@ impl EncryptedBackend {
     }
 
     /// Encrypts a single block.
-    /// 
+    ///
     /// Block format: [length (4 bytes, little-endian)][padded plaintext]
     /// The length stores the actual number of valid bytes in this block.
-    fn encrypt_block(&self, epoch: u64, block_number: u64, plaintext: &[u8]) -> StorageResult<Vec<u8>> {
+    fn encrypt_block(
+        &self,
+        epoch: u64,
+        block_number: u64,
+        plaintext: &[u8],
+    ) -> StorageResult<Vec<u8>> {
         if plaintext.len() > self.block_size {
             return Err(StorageError::Encryption(format!(
                 "block too large: {} > {}",
@@ -528,7 +539,12 @@ impl EncryptedBackend {
     }
 
     /// Decrypts a single block and returns (plaintext, actual_length).
-    fn decrypt_block(&self, epoch: u64, block_number: u64, encrypted: &[u8]) -> StorageResult<(Vec<u8>, usize)> {
+    fn decrypt_block(
+        &self,
+        epoch: u64,
+        block_number: u64,
+        encrypted: &[u8],
+    ) -> StorageResult<(Vec<u8>, usize)> {
         if encrypted.len() < NONCE_SIZE + TAG_SIZE + BLOCK_LEN_SIZE {
             return Err(StorageError::Encryption(
                 "encrypted block too short".to_string(),
@@ -548,14 +564,9 @@ impl EncryptedBackend {
 
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        let block_data = self
-            .cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| {
-                StorageError::Encryption(
-                    "decryption failed - wrong key or data corrupted".to_string(),
-                )
-            })?;
+        let block_data = self.cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            StorageError::Encryption("decryption failed - wrong key or data corrupted".to_string())
+        })?;
 
         if block_data.len() < BLOCK_LEN_SIZE {
             return Err(StorageError::Encryption(
@@ -568,9 +579,11 @@ impl EncryptedBackend {
             .get(..BLOCK_LEN_SIZE)
             .ok_or_else(|| StorageError::Encryption("decrypted block too short".to_string()))?
             .try_into()
-            .map_err(|_| StorageError::Encryption("invalid decrypted block length prefix".to_string()))?;
+            .map_err(|_| {
+                StorageError::Encryption("invalid decrypted block length prefix".to_string())
+            })?;
         let actual_len = u32::from_le_bytes(actual_len_bytes) as usize;
-        
+
         if actual_len > self.block_size {
             return Err(StorageError::Encryption(format!(
                 "invalid block length: {actual_len} > {}",
@@ -664,13 +677,13 @@ impl StorageBackend for EncryptedBackend {
         let committed_blocks = if committed_logical_size == 0 {
             0
         } else {
-            (committed_logical_size + self.block_size as u64 - 1) / self.block_size as u64
+            committed_logical_size.div_ceil(self.block_size as u64)
         };
         drop(header);
 
         for block_num in start_block..=end_block {
             let block_logical_start = block_num * self.block_size as u64;
-            
+
             // Get the plaintext and its actual length for this block
             let (plaintext, block_actual_len) = if block_num < committed_blocks {
                 // Read from encrypted storage (actual length embedded in block)
@@ -678,7 +691,7 @@ impl StorageBackend for EncryptedBackend {
             } else {
                 // This block is partially or fully in the write buffer
                 let buffer = self.write_buffer.read();
-                
+
                 // Calculate where in the buffer this block's data starts
                 let buffer_start = if block_logical_start >= committed_logical_size {
                     (block_logical_start - committed_logical_size) as usize
@@ -817,6 +830,7 @@ impl StorageBackend for EncryptedBackend {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::InMemoryBackend;
@@ -856,7 +870,7 @@ mod tests {
     fn append_and_read_multiple_blocks() {
         let inner = InMemoryBackend::new();
         let mut backend =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 1024).unwrap();
 
         // Write 3.5 blocks worth of data
         let data = vec![0xABu8; 3584];
@@ -873,7 +887,7 @@ mod tests {
     fn read_partial_block() {
         let inner = InMemoryBackend::new();
         let mut backend =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 1024).unwrap();
 
         let data = b"ABCDEFGHIJ";
         backend.append(data).unwrap();
@@ -888,7 +902,7 @@ mod tests {
     fn read_across_block_boundary() {
         let inner = InMemoryBackend::new();
         let mut backend =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 1024).unwrap();
 
         // Write 2 blocks
         let data = vec![0x11u8; 2048];
@@ -974,7 +988,7 @@ mod tests {
         new_inner.append(&inner_data).unwrap();
 
         let result = EncryptedBackend::new(Box::new(new_inner), test_key_different());
-        
+
         // Opening with wrong key should fail (nonce mismatch since key-derived nonces differ)
         assert!(result.is_err(), "Opening with wrong key must fail");
     }
@@ -1090,13 +1104,13 @@ mod tests {
         let inner = InMemoryBackend::new();
 
         // Too small
-        let result = EncryptedBackend::with_block_size(Box::new(inner), test_key(), 512);
+        let result = EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 512);
         assert!(result.is_err());
 
         let inner = InMemoryBackend::new();
         // Too large
         let result =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 2 * 1024 * 1024);
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 2 * 1024 * 1024);
         assert!(result.is_err());
     }
 
@@ -1109,11 +1123,17 @@ mod tests {
         assert_eq!(nonce1, nonce2);
 
         let nonce3 = derive_nonce(&nonce_key, 0, 1);
-        assert_ne!(nonce1, nonce3, "Different blocks must have different nonces");
+        assert_ne!(
+            nonce1, nonce3,
+            "Different blocks must have different nonces"
+        );
 
         // Different epochs produce different nonces
         let nonce4 = derive_nonce(&nonce_key, 1, 0);
-        assert_ne!(nonce1, nonce4, "Different epochs must have different nonces");
+        assert_ne!(
+            nonce1, nonce4,
+            "Different epochs must have different nonces"
+        );
     }
 
     #[test]
@@ -1132,10 +1152,10 @@ mod tests {
     fn large_data_roundtrip() {
         let inner = InMemoryBackend::new();
         let mut backend =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 1024).unwrap();
 
         // Write 100KB of data
-        let data: Vec<u8> = (0..102400).map(|i| (i % 256) as u8).collect();
+        let data: Vec<u8> = (0..102_400).map(|i| (i % 256) as u8).collect();
         backend.append(&data).unwrap();
         backend.flush().unwrap();
 
@@ -1155,7 +1175,7 @@ mod tests {
     fn truncate_increments_epoch_preventing_nonce_reuse() {
         let inner = InMemoryBackend::new();
         let mut backend =
-            EncryptedBackend::with_block_size(Box::new(inner), test_key(), 1024).unwrap();
+            EncryptedBackend::with_block_size(Box::new(inner), &test_key(), 1024).unwrap();
 
         // Write some data
         let data1 = b"first data payload";
@@ -1168,7 +1188,7 @@ mod tests {
 
         // Truncate and write different data
         backend.truncate(0).unwrap();
-        
+
         // Epoch must have incremented
         let epoch_after = backend.header.read().epoch;
         assert_eq!(epoch_after, 1, "Epoch should increment after truncate");
@@ -1201,16 +1221,16 @@ mod tests {
         let raw_data = {
             let inner = InMemoryBackend::new();
             let mut backend =
-                EncryptedBackend::with_block_size(Box::new(inner), key.clone(), 1024).unwrap();
+                EncryptedBackend::with_block_size(Box::new(inner), &key, 1024).unwrap();
 
             backend.append(b"first").unwrap();
             backend.flush().unwrap();
-            
+
             // Truncate multiple times to increment epoch
             backend.truncate(0).unwrap();
             backend.append(b"second").unwrap();
             backend.flush().unwrap();
-            
+
             backend.truncate(0).unwrap();
             backend.append(b"third").unwrap();
             backend.flush().unwrap();
@@ -1228,11 +1248,15 @@ mod tests {
         reopened_inner.append(&raw_data).unwrap();
 
         let reopened =
-            EncryptedBackend::with_block_size(Box::new(reopened_inner), key, 1024).unwrap();
-        
+            EncryptedBackend::with_block_size(Box::new(reopened_inner), &key, 1024).unwrap();
+
         // Epoch should be preserved
-        assert_eq!(reopened.header.read().epoch, 2, "Epoch must persist across reopen");
-        
+        assert_eq!(
+            reopened.header.read().epoch,
+            2,
+            "Epoch must persist across reopen"
+        );
+
         // Data should be readable
         let read_back = reopened.read_at(0, 5).unwrap();
         assert_eq!(&read_back, b"third");

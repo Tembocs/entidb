@@ -166,9 +166,8 @@ impl TokenValidator {
 
     /// Signs data with HMAC-SHA256.
     fn sign(&self, data: &[u8]) -> ServerResult<[u8; 32]> {
-        let mut mac = HmacSha256::new_from_slice(&self.config.secret).map_err(|e| {
-            ServerError::Internal(format!("HMAC initialization failed: {e}"))
-        })?;
+        let mut mac = HmacSha256::new_from_slice(&self.config.secret)
+            .map_err(|e| ServerError::Internal(format!("HMAC initialization failed: {e}")))?;
         mac.update(data);
         let result = mac.finalize();
         Ok(result.into_bytes().into())

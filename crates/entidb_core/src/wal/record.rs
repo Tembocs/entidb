@@ -278,7 +278,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Begin record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Begin { txid })
@@ -300,7 +301,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Put record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Put {
@@ -321,7 +323,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Delete record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Delete {
@@ -339,7 +342,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Commit record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Commit { txid, sequence })
@@ -351,7 +355,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Abort record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Abort { txid })
@@ -363,7 +368,8 @@ impl WalRecord {
                 if cursor != payload.len() {
                     return Err(CoreError::wal_corruption(format!(
                         "trailing bytes in Checkpoint record: expected {} bytes, got {}",
-                        cursor, payload.len()
+                        cursor,
+                        payload.len()
                     )));
                 }
                 Ok(Self::Checkpoint { sequence })

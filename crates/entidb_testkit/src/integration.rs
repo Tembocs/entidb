@@ -66,10 +66,7 @@ impl IntegrationHarness {
     /// Verifies all tracked entities are in the database.
     pub fn verify_all(&self) {
         for ((collection, id), expected) in &self.entities {
-            let actual = self
-                .db
-                .get(*collection, *id)
-                .expect("Failed to get entity");
+            let actual = self.db.get(*collection, *id).expect("Failed to get entity");
             assert_eq!(
                 actual.as_ref(),
                 Some(expected),
@@ -97,11 +94,7 @@ pub mod codec_storage {
     use entidb_codec::Value;
 
     /// Verifies that CBOR data can be encoded, stored, and retrieved.
-    pub fn test_encode_store_retrieve(
-        db: &Database,
-        collection: CollectionId,
-        value: Value,
-    ) {
+    pub fn test_encode_store_retrieve(db: &Database, collection: CollectionId, value: Value) {
         let mut encoder = CanonicalEncoder::new();
         encoder.encode(&value).expect("Failed to encode");
         let encoded = encoder.into_bytes();
@@ -116,7 +109,11 @@ pub mod codec_storage {
 
         let retrieved = db.get(collection, id).expect("Failed to get");
         assert!(retrieved.is_some(), "Entity should exist");
-        assert_eq!(encoded, retrieved.unwrap(), "Retrieved bytes should match encoded");
+        assert_eq!(
+            encoded,
+            retrieved.unwrap(),
+            "Retrieved bytes should match encoded"
+        );
     }
 
     /// Tests that the storage backend properly persists data.

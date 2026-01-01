@@ -242,12 +242,8 @@ mod tests {
         let handler = create_handler();
 
         // Push 5 operations
-        let ops: Vec<_> = (0..5)
-            .map(|i| make_op(1, [i as u8; 16]))
-            .collect();
-        handler
-            .handle_push(PushRequest::new(ops, 1))
-            .unwrap();
+        let ops: Vec<_> = (0..5).map(|i| make_op(1, [i as u8; 16])).collect();
+        handler.handle_push(PushRequest::new(ops, 1)).unwrap();
 
         // Pull with limit 2
         let response = handler.handle_pull(PullRequest::new(0, 2)).unwrap();

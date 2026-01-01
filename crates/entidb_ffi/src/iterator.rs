@@ -322,13 +322,7 @@ mod tests {
                 entidb_generate_id(&mut entity_id);
 
                 let data = format!("data-{i}");
-                entidb_put(
-                    handle,
-                    coll_id,
-                    entity_id,
-                    data.as_ptr(),
-                    data.len(),
-                );
+                entidb_put(handle, coll_id, entity_id, data.as_ptr(), data.len());
             }
 
             // Create iterator

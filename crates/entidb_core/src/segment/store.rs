@@ -75,9 +75,7 @@ impl VersionChain {
     /// Gets the version visible at the given snapshot sequence.
     /// Returns the newest version where sequence <= max_sequence.
     fn get_at(&self, max_sequence: SequenceNumber) -> Option<&IndexEntry> {
-        self.versions
-            .iter()
-            .find(|e| e.sequence <= max_sequence)
+        self.versions.iter().find(|e| e.sequence <= max_sequence)
     }
 
     /// Gets the latest version (for reads without snapshot).
@@ -261,10 +259,7 @@ impl SegmentManager {
         let mut max_id = 0u64;
 
         // Get the last segment ID once before the loop (safe since we checked non-empty above)
-        let last_segment_id = existing_segment_ids
-            .last()
-            .copied()
-            .unwrap_or(0);
+        let last_segment_id = existing_segment_ids.last().copied().unwrap_or(0);
 
         // Load all existing segments
         for &segment_id in &existing_segment_ids {
@@ -347,7 +342,7 @@ impl SegmentManager {
                 Err(CoreError::invalid_argument(
                     "segment rotation not supported: SegmentManager::new() does not allow \
                      rotation to preserve durability. Use SegmentManager::with_factory() for \
-                     production databases that need segment rotation."
+                     production databases that need segment rotation.",
                 ))
             }),
             segments: RwLock::new(segments),
@@ -1549,7 +1544,10 @@ mod tests {
 
         // scan_sealed should return empty (no sealed segments yet)
         let sealed_records = manager.scan_sealed().unwrap();
-        assert!(sealed_records.is_empty(), "No sealed segments should exist yet");
+        assert!(
+            sealed_records.is_empty(),
+            "No sealed segments should exist yet"
+        );
 
         // Seal segment 1 and rotate to segment 2
         manager.seal_and_rotate().unwrap();
@@ -1567,7 +1565,11 @@ mod tests {
 
         // scan_sealed should only return records from segment 1
         let sealed_records = manager.scan_sealed().unwrap();
-        assert_eq!(sealed_records.len(), 3, "Should have 3 records from sealed segment");
+        assert_eq!(
+            sealed_records.len(),
+            3,
+            "Should have 3 records from sealed segment"
+        );
 
         // Verify the records are from the first batch
         for record in &sealed_records {
@@ -1658,22 +1660,14 @@ mod tests {
         let collection = CollectionId::new(1);
 
         // Add and seal a segment
-        let sealed_record = SegmentRecord::put(
-            collection,
-            [1u8; 16],
-            vec![1; 10],
-            SequenceNumber::new(1),
-        );
+        let sealed_record =
+            SegmentRecord::put(collection, [1u8; 16], vec![1; 10], SequenceNumber::new(1));
         manager.append(&sealed_record).unwrap();
         manager.seal_and_rotate().unwrap();
 
         // Add to active segment
-        let active_record = SegmentRecord::put(
-            collection,
-            [2u8; 16],
-            vec![2; 10],
-            SequenceNumber::new(2),
-        );
+        let active_record =
+            SegmentRecord::put(collection, [2u8; 16], vec![2; 10], SequenceNumber::new(2));
         manager.append(&active_record).unwrap();
 
         // Replace sealed segments with empty compacted data

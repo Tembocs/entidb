@@ -240,12 +240,8 @@ fn read_entry<K: IndexKey>(data: &[u8], pos: &mut usize) -> CoreResult<(K, HashS
             message: "truncated key length".into(),
         });
     }
-    let key_len = u32::from_be_bytes([
-        data[*pos],
-        data[*pos + 1],
-        data[*pos + 2],
-        data[*pos + 3],
-    ]) as usize;
+    let key_len =
+        u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]) as usize;
     *pos += 4;
 
     // Key bytes
@@ -263,12 +259,8 @@ fn read_entry<K: IndexKey>(data: &[u8], pos: &mut usize) -> CoreResult<(K, HashS
             message: "truncated entity count".into(),
         });
     }
-    let entity_count = u32::from_be_bytes([
-        data[*pos],
-        data[*pos + 1],
-        data[*pos + 2],
-        data[*pos + 3],
-    ]) as usize;
+    let entity_count =
+        u32::from_be_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]) as usize;
     *pos += 4;
 
     // Entity IDs
@@ -447,7 +439,8 @@ mod tests {
 
     #[test]
     fn btree_index_roundtrip() {
-        let mut index: BTreeIndex<i64> = BTreeIndex::new(IndexSpec::new(CollectionId::new(2), "age"));
+        let mut index: BTreeIndex<i64> =
+            BTreeIndex::new(IndexSpec::new(CollectionId::new(2), "age"));
 
         let e1 = EntityId::new();
         let e2 = EntityId::new();

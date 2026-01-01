@@ -325,7 +325,9 @@ pub unsafe extern "C" fn entidb_txn_get(
 mod tests {
     use super::*;
     use crate::buffer::entidb_free_buffer;
-    use crate::database::{entidb_close, entidb_collection, entidb_generate_id, entidb_open_memory};
+    use crate::database::{
+        entidb_close, entidb_collection, entidb_generate_id, entidb_open_memory,
+    };
 
     #[test]
     fn transaction_put_commit() {

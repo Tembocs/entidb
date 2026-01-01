@@ -43,7 +43,10 @@ impl Account {
 
     fn encode(&self) -> Vec<u8> {
         let pairs = vec![
-            (Value::Text("account_type".into()), Value::Text(self.account_type.clone())),
+            (
+                Value::Text("account_type".into()),
+                Value::Text(self.account_type.clone()),
+            ),
             (Value::Text("balance".into()), Value::Integer(self.balance)),
             (Value::Text("name".into()), Value::Text(self.name.clone())),
         ];
@@ -196,11 +199,20 @@ impl Transaction {
 
     fn encode(&self) -> Vec<u8> {
         let pairs = vec![
-            (Value::Text("account_id".into()), Value::Bytes(self.account_id.as_bytes().to_vec())),
+            (
+                Value::Text("account_id".into()),
+                Value::Bytes(self.account_id.as_bytes().to_vec()),
+            ),
             (Value::Text("amount".into()), Value::Integer(self.amount)),
-            (Value::Text("category_id".into()), Value::Bytes(self.category_id.as_bytes().to_vec())),
+            (
+                Value::Text("category_id".into()),
+                Value::Bytes(self.category_id.as_bytes().to_vec()),
+            ),
             (Value::Text("date".into()), Value::Text(self.date.clone())),
-            (Value::Text("description".into()), Value::Text(self.description.clone())),
+            (
+                Value::Text("description".into()),
+                Value::Text(self.description.clone()),
+            ),
         ];
         to_canonical_cbor(&Value::Map(pairs)).expect("encoding should succeed")
     }
@@ -221,7 +233,8 @@ impl Transaction {
                         "account_id" => {
                             if let Value::Bytes(b) = v {
                                 if b.len() == 16 {
-                                    let arr: [u8; 16] = b.try_into().map_err(|_| "invalid entity id")?;
+                                    let arr: [u8; 16] =
+                                        b.try_into().map_err(|_| "invalid entity id")?;
                                     account_id = Some(EntityId::from_bytes(arr));
                                 }
                             }
@@ -229,7 +242,8 @@ impl Transaction {
                         "category_id" => {
                             if let Value::Bytes(b) = v {
                                 if b.len() == 16 {
-                                    let arr: [u8; 16] = b.try_into().map_err(|_| "invalid entity id")?;
+                                    let arr: [u8; 16] =
+                                        b.try_into().map_err(|_| "invalid entity id")?;
                                     category_id = Some(EntityId::from_bytes(arr));
                                 }
                             }
@@ -296,7 +310,10 @@ impl Budget {
 
     fn encode(&self) -> Vec<u8> {
         let pairs = vec![
-            (Value::Text("category_id".into()), Value::Bytes(self.category_id.as_bytes().to_vec())),
+            (
+                Value::Text("category_id".into()),
+                Value::Bytes(self.category_id.as_bytes().to_vec()),
+            ),
             (Value::Text("limit".into()), Value::Integer(self.limit)),
             (Value::Text("month".into()), Value::Text(self.month.clone())),
         ];
@@ -317,7 +334,8 @@ impl Budget {
                         "category_id" => {
                             if let Value::Bytes(b) = v {
                                 if b.len() == 16 {
-                                    let arr: [u8; 16] = b.try_into().map_err(|_| "invalid entity id")?;
+                                    let arr: [u8; 16] =
+                                        b.try_into().map_err(|_| "invalid entity id")?;
                                     category_id = Some(EntityId::from_bytes(arr));
                                 }
                             }
@@ -385,8 +403,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[+] Creating 3 accounts...");
 
     let checking = Account::new("Checking Account", "checking", 250000); // $2,500.00
-    let savings = Account::new("Savings Account", "savings", 1000000);   // $10,000.00
-    let credit = Account::new("Credit Card", "credit", -45000);          // -$450.00
+    let savings = Account::new("Savings Account", "savings", 1000000); // $10,000.00
+    let credit = Account::new("Credit Card", "credit", -45000); // -$450.00
 
     let accounts = vec![checking.clone(), savings.clone(), credit.clone()];
 
@@ -437,42 +455,150 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let transactions = vec![
         // Income
-        Transaction::new(checking.id, cat_income.id, 350000, "Salary deposit", "2025-12-01"),
-        Transaction::new(checking.id, cat_income.id, 15000, "Freelance payment", "2025-12-10"),
-        
+        Transaction::new(
+            checking.id,
+            cat_income.id,
+            350000,
+            "Salary deposit",
+            "2025-12-01",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_income.id,
+            15000,
+            "Freelance payment",
+            "2025-12-10",
+        ),
         // Food (7 transactions)
-        Transaction::new(checking.id, cat_food.id, -8550, "Grocery Store", "2025-12-02"),
-        Transaction::new(credit.id, cat_food.id, -4275, "Restaurant dinner", "2025-12-05"),
+        Transaction::new(
+            checking.id,
+            cat_food.id,
+            -8550,
+            "Grocery Store",
+            "2025-12-02",
+        ),
+        Transaction::new(
+            credit.id,
+            cat_food.id,
+            -4275,
+            "Restaurant dinner",
+            "2025-12-05",
+        ),
         Transaction::new(checking.id, cat_food.id, -3200, "Coffee shop", "2025-12-07"),
         Transaction::new(credit.id, cat_food.id, -6500, "Grocery Store", "2025-12-09"),
         Transaction::new(checking.id, cat_food.id, -2800, "Fast food", "2025-12-12"),
-        Transaction::new(credit.id, cat_food.id, -5100, "Restaurant lunch", "2025-12-14"),
+        Transaction::new(
+            credit.id,
+            cat_food.id,
+            -5100,
+            "Restaurant lunch",
+            "2025-12-14",
+        ),
         Transaction::new(checking.id, cat_food.id, -3825, "Bakery", "2025-12-15"),
-        
         // Transport (4 transactions)
-        Transaction::new(checking.id, cat_transport.id, -5000, "Gas station", "2025-12-03"),
-        Transaction::new(credit.id, cat_transport.id, -3500, "Uber ride", "2025-12-06"),
-        Transaction::new(checking.id, cat_transport.id, -5500, "Gas station", "2025-12-11"),
-        Transaction::new(checking.id, cat_transport.id, -4500, "Parking fee", "2025-12-13"),
-        
+        Transaction::new(
+            checking.id,
+            cat_transport.id,
+            -5000,
+            "Gas station",
+            "2025-12-03",
+        ),
+        Transaction::new(
+            credit.id,
+            cat_transport.id,
+            -3500,
+            "Uber ride",
+            "2025-12-06",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_transport.id,
+            -5500,
+            "Gas station",
+            "2025-12-11",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_transport.id,
+            -4500,
+            "Parking fee",
+            "2025-12-13",
+        ),
         // Utilities (2 transactions)
-        Transaction::new(checking.id, cat_utilities.id, -12000, "Electric bill", "2025-12-01"),
-        Transaction::new(checking.id, cat_utilities.id, -8500, "Internet bill", "2025-12-05"),
-        
+        Transaction::new(
+            checking.id,
+            cat_utilities.id,
+            -12000,
+            "Electric bill",
+            "2025-12-01",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_utilities.id,
+            -8500,
+            "Internet bill",
+            "2025-12-05",
+        ),
         // Entertainment (3 transactions)
-        Transaction::new(credit.id, cat_entertainment.id, -1599, "Streaming subscription", "2025-12-01"),
-        Transaction::new(credit.id, cat_entertainment.id, -4500, "Movie tickets", "2025-12-08"),
-        Transaction::new(checking.id, cat_entertainment.id, -6000, "Concert tickets", "2025-12-14"),
-        
+        Transaction::new(
+            credit.id,
+            cat_entertainment.id,
+            -1599,
+            "Streaming subscription",
+            "2025-12-01",
+        ),
+        Transaction::new(
+            credit.id,
+            cat_entertainment.id,
+            -4500,
+            "Movie tickets",
+            "2025-12-08",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_entertainment.id,
+            -6000,
+            "Concert tickets",
+            "2025-12-14",
+        ),
         // Shopping (4 transactions)
-        Transaction::new(credit.id, cat_shopping.id, -8999, "Electronics store", "2025-12-04"),
-        Transaction::new(credit.id, cat_shopping.id, -4500, "Clothing store", "2025-12-07"),
-        Transaction::new(checking.id, cat_shopping.id, -6780, "Home supplies", "2025-12-10"),
-        Transaction::new(credit.id, cat_shopping.id, -6500, "Gift shopping", "2025-12-13"),
-        
+        Transaction::new(
+            credit.id,
+            cat_shopping.id,
+            -8999,
+            "Electronics store",
+            "2025-12-04",
+        ),
+        Transaction::new(
+            credit.id,
+            cat_shopping.id,
+            -4500,
+            "Clothing store",
+            "2025-12-07",
+        ),
+        Transaction::new(
+            checking.id,
+            cat_shopping.id,
+            -6780,
+            "Home supplies",
+            "2025-12-10",
+        ),
+        Transaction::new(
+            credit.id,
+            cat_shopping.id,
+            -6500,
+            "Gift shopping",
+            "2025-12-13",
+        ),
         // Health (2 transactions)
         Transaction::new(checking.id, cat_health.id, -3500, "Pharmacy", "2025-12-02"),
-        Transaction::new(checking.id, cat_health.id, -2500, "Gym membership", "2025-12-01"),
+        Transaction::new(
+            checking.id,
+            cat_health.id,
+            -2500,
+            "Gym membership",
+            "2025-12-01",
+        ),
     ];
 
     db.transaction(|txn| {
@@ -488,12 +614,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[+] Creating 6 budgets for December 2025...\n");
 
     let budgets = vec![
-        Budget::new(cat_food.id, "2025-12", 40000),          // $400
-        Budget::new(cat_transport.id, "2025-12", 20000),     // $200
-        Budget::new(cat_utilities.id, "2025-12", 25000),     // $250
+        Budget::new(cat_food.id, "2025-12", 40000),      // $400
+        Budget::new(cat_transport.id, "2025-12", 20000), // $200
+        Budget::new(cat_utilities.id, "2025-12", 25000), // $250
         Budget::new(cat_entertainment.id, "2025-12", 15000), // $150
-        Budget::new(cat_shopping.id, "2025-12", 20000),      // $200
-        Budget::new(cat_health.id, "2025-12", 10000),        // $100
+        Budget::new(cat_shopping.id, "2025-12", 20000),  // $200
+        Budget::new(cat_health.id, "2025-12", 10000),    // $100
     ];
 
     db.transaction(|txn| {
@@ -508,7 +634,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========================================================================
     println!("[*] Account Balances:");
 
-    let mut account_balances: HashMap<EntityId, i64> = accounts.iter().map(|a| (a.id, a.balance)).collect();
+    let mut account_balances: HashMap<EntityId, i64> =
+        accounts.iter().map(|a| (a.id, a.balance)).collect();
 
     for trans in &transactions {
         if let Some(balance) = account_balances.get_mut(&trans.account_id) {
@@ -595,7 +722,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     db.transaction(|txn| {
         // Update both accounts
-        txn.put(accounts_coll, updated_checking.id, updated_checking.encode())?;
+        txn.put(
+            accounts_coll,
+            updated_checking.id,
+            updated_checking.encode(),
+        )?;
         txn.put(accounts_coll, updated_savings.id, updated_savings.encode())?;
         // Record both sides of the transfer
         txn.put(transactions_coll, transfer_out.id, transfer_out.encode())?;
@@ -603,12 +734,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("    Checking: {} -> {}", 
+    println!(
+        "    Checking: {} -> {}",
         format_cents(account_balances[&checking.id]),
-        format_cents(new_checking_balance));
-    println!("    Savings:  {} -> {}", 
+        format_cents(new_checking_balance)
+    );
+    println!(
+        "    Savings:  {} -> {}",
         format_cents(account_balances[&savings.id]),
-        format_cents(new_savings_balance));
+        format_cents(new_savings_balance)
+    );
 
     // Update our local tracking
     account_balances.insert(checking.id, new_checking_balance);
@@ -622,9 +757,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for budget in &budgets {
         let cat = category_map.get(&budget.category_id);
         let cat_name = cat.map(|c| c.name.as_str()).unwrap_or("Unknown");
-        let spent = category_totals.get(&budget.category_id).copied().unwrap_or(0);
+        let spent = category_totals
+            .get(&budget.category_id)
+            .copied()
+            .unwrap_or(0);
         let diff = budget.limit - spent;
-        
+
         let status = if diff >= 0 {
             format!("OK, {} left", format_cents(diff))
         } else {
@@ -645,12 +783,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========================================================================
     println!("\n[#] Summary:");
 
-    let total_income: i64 = transactions.iter().filter(|t| t.amount > 0).map(|t| t.amount).sum();
-    let total_expenses: i64 = transactions.iter().filter(|t| t.amount < 0).map(|t| t.amount.abs()).sum();
+    let total_income: i64 = transactions
+        .iter()
+        .filter(|t| t.amount > 0)
+        .map(|t| t.amount)
+        .sum();
+    let total_expenses: i64 = transactions
+        .iter()
+        .filter(|t| t.amount < 0)
+        .map(|t| t.amount.abs())
+        .sum();
     let net = total_income - total_expenses;
 
     println!("    Total Income:      {:>12}", format_cents(total_income));
-    println!("    Total Expenses:    {:>12}", format_cents(total_expenses));
+    println!(
+        "    Total Expenses:    {:>12}",
+        format_cents(total_expenses)
+    );
     println!("    Net:               {:>12}", format_cents(net));
     println!("    Transactions:      {:>12}", transactions.len());
 

@@ -43,11 +43,26 @@ impl Todo {
     fn encode(&self) -> Vec<u8> {
         // Build a map with sorted keys for canonical CBOR
         let pairs = vec![
-            (Value::Text("completed".to_string()), Value::Bool(self.completed)),
-            (Value::Text("created_at".to_string()), Value::Integer(self.created_at as i64)),
-            (Value::Text("id".to_string()), Value::Bytes(self.id.as_bytes().to_vec())),
-            (Value::Text("priority".to_string()), Value::Integer(self.priority as i64)),
-            (Value::Text("title".to_string()), Value::Text(self.title.clone())),
+            (
+                Value::Text("completed".to_string()),
+                Value::Bool(self.completed),
+            ),
+            (
+                Value::Text("created_at".to_string()),
+                Value::Integer(self.created_at as i64),
+            ),
+            (
+                Value::Text("id".to_string()),
+                Value::Bytes(self.id.as_bytes().to_vec()),
+            ),
+            (
+                Value::Text("priority".to_string()),
+                Value::Integer(self.priority as i64),
+            ),
+            (
+                Value::Text("title".to_string()),
+                Value::Text(self.title.clone()),
+            ),
         ];
         let value = Value::Map(pairs);
         to_canonical_cbor(&value).expect("encoding should succeed")
@@ -188,8 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|(id, bytes)| Todo::decode(*id, bytes).ok())
         .collect();
 
-    let (completed, incomplete): (Vec<_>, Vec<_>) =
-        updated_todos.iter().partition(|t| t.completed);
+    let (completed, incomplete): (Vec<_>, Vec<_>) = updated_todos.iter().partition(|t| t.completed);
 
     println!("\n[#] Summary:");
     println!("  Completed: {}", completed.len());

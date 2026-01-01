@@ -157,7 +157,10 @@ impl WalManager {
     ///
     /// **Deprecated:** Use `for_each_streaming` instead for true streaming behavior.
     /// This method is retained for backwards compatibility.
-    #[deprecated(since = "0.1.0", note = "Use for_each_streaming() for true streaming behavior")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use for_each_streaming() for true streaming behavior"
+    )]
     pub fn for_each<F>(&self, callback: F) -> CoreResult<()>
     where
         F: FnMut(u64, WalRecord) -> CoreResult<bool>,

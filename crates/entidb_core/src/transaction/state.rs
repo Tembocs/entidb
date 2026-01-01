@@ -180,7 +180,8 @@ impl<'a> WriteTransaction<'a> {
         entity_id: EntityId,
         observed_hash: Option<[u8; 32]>,
     ) {
-        self.inner.record_read(collection_id, entity_id, observed_hash)
+        self.inner
+            .record_read(collection_id, entity_id, observed_hash)
     }
 }
 
@@ -263,7 +264,11 @@ impl Transaction {
     ) -> CoreResult<()> {
         self.ensure_active()?;
         // Get before_hash from read set if we previously read this entity
-        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
+        let before_hash = self
+            .reads
+            .get(&(collection_id, entity_id))
+            .copied()
+            .flatten();
         self.writes.insert(
             (collection_id, entity_id),
             PendingWrite::Put {
@@ -288,7 +293,11 @@ impl Transaction {
     ) -> CoreResult<()> {
         self.ensure_active()?;
         // Get before_hash from read set if we previously read this entity
-        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
+        let before_hash = self
+            .reads
+            .get(&(collection_id, entity_id))
+            .copied()
+            .flatten();
         self.writes.insert(
             (collection_id, entity_id),
             PendingWrite::Put {
@@ -304,9 +313,15 @@ impl Transaction {
     pub fn delete(&mut self, collection_id: CollectionId, entity_id: EntityId) -> CoreResult<()> {
         self.ensure_active()?;
         // Get before_hash from read set if we previously read this entity
-        let before_hash = self.reads.get(&(collection_id, entity_id)).copied().flatten();
-        self.writes
-            .insert((collection_id, entity_id), PendingWrite::Delete { before_hash });
+        let before_hash = self
+            .reads
+            .get(&(collection_id, entity_id))
+            .copied()
+            .flatten();
+        self.writes.insert(
+            (collection_id, entity_id),
+            PendingWrite::Delete { before_hash },
+        );
         Ok(())
     }
 
@@ -355,9 +370,7 @@ impl Transaction {
     /// Returns entries of (collection_id, entity_id) -> Option<hash>
     /// where `Some(hash)` means the entity existed with that content hash,
     /// and `None` means the entity did not exist.
-    pub fn read_set(
-        &self,
-    ) -> impl Iterator<Item = (&(CollectionId, EntityId), &Option<[u8; 32]>)> {
+    pub fn read_set(&self) -> impl Iterator<Item = (&(CollectionId, EntityId), &Option<[u8; 32]>)> {
         self.reads.iter()
     }
 

@@ -236,7 +236,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 MigrateAction::List => {
                     commands::migrate::list(&path)?;
                 }
-                MigrateAction::Run { to_version, dry_run } => {
+                MigrateAction::Run {
+                    to_version,
+                    dry_run,
+                } => {
                     commands::migrate::run(&path, to_version, dry_run)?;
                 }
             }

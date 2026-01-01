@@ -54,10 +54,7 @@ pub fn list(db_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 "○ pending"
             };
 
-            println!(
-                "  v{}: {} [{}]",
-                migration.version, migration.name, status
-            );
+            println!("  v{}: {} [{}]", migration.version, migration.name, status);
 
             if let Some(desc) = &migration.description {
                 println!("      {}", desc);
@@ -121,7 +118,10 @@ pub fn run(
         return Err("Migration failed".into());
     }
 
-    println!("\n✓ Successfully applied {} migration(s)", result.applied_count);
+    println!(
+        "\n✓ Successfully applied {} migration(s)",
+        result.applied_count
+    );
     println!("  Final version: {}", result.final_version);
 
     // Save updated state

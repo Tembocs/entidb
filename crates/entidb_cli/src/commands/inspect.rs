@@ -158,8 +158,7 @@ fn analyze_segments(
         // Parse minimal record info
         if data.len() >= 26 {
             // 4 (len) + 4 (collection) + 16 (entity_id) + 1 (flags) + 1 (min payload)
-            let collection_id =
-                u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            let collection_id = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
             let mut entity_id = [0u8; 16];
             entity_id.copy_from_slice(&data[8..24]);
             let flags = data[24];

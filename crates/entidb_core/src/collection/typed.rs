@@ -159,7 +159,10 @@ impl<T: EntityCodec> Collection<T> {
 
     /// Checks if an entity exists.
     pub fn exists(&self, id: EntityId) -> CoreResult<bool> {
-        Ok(self.segments.get(self.collection_id, id.as_bytes())?.is_some())
+        Ok(self
+            .segments
+            .get(self.collection_id, id.as_bytes())?
+            .is_some())
     }
 
     /// Returns the count of entities in this collection.
@@ -259,10 +262,7 @@ mod tests {
 
         fn encode(&self) -> CoreResult<Vec<u8>> {
             let map = Value::map(vec![
-                (
-                    Value::Text("name".into()),
-                    Value::Text(self.name.clone()),
-                ),
+                (Value::Text("name".into()), Value::Text(self.name.clone())),
                 (Value::Text("age".into()), Value::Integer(self.age)),
             ]);
             Ok(to_canonical_cbor(&map)?)
@@ -436,11 +436,7 @@ mod tests {
         }
 
         // Language-native filtering (the EntiDB way - no SQL!)
-        let adults: Vec<TestUser> = collection
-            .iter()
-            .unwrap()
-            .filter(|u| u.age >= 25)
-            .collect();
+        let adults: Vec<TestUser> = collection.iter().unwrap().filter(|u| u.age >= 25).collect();
 
         assert_eq!(adults.len(), 2);
     }

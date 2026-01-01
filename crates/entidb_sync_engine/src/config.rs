@@ -141,7 +141,9 @@ impl RetryConfig {
         }
 
         let base_delay = self.initial_delay.as_secs_f64()
-            * self.backoff_multiplier.powi(attempt.saturating_sub(1) as i32);
+            * self
+                .backoff_multiplier
+                .powi(attempt.saturating_sub(1) as i32);
 
         let delay_secs = base_delay.min(self.max_delay.as_secs_f64());
 

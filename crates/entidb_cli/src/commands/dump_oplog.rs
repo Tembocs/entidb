@@ -112,19 +112,22 @@ fn read_wal_records(
             "BEGIN" => {
                 if payload.len() >= 8 {
                     record.txid = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                 }
             }
             "PUT" => {
                 if payload.len() >= 28 {
                     record.txid = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                     record.collection_id = Some(u32::from_le_bytes([
-                        payload[8], payload[9], payload[10], payload[11],
+                        payload[8],
+                        payload[9],
+                        payload[10],
+                        payload[11],
                     ]));
                     let entity_bytes = &payload[12..28];
                     record.entity_id = Some(hex_encode(entity_bytes));
@@ -134,11 +137,14 @@ fn read_wal_records(
             "DELETE" => {
                 if payload.len() >= 28 {
                     record.txid = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                     record.collection_id = Some(u32::from_le_bytes([
-                        payload[8], payload[9], payload[10], payload[11],
+                        payload[8],
+                        payload[9],
+                        payload[10],
+                        payload[11],
                     ]));
                     let entity_bytes = &payload[12..28];
                     record.entity_id = Some(hex_encode(entity_bytes));
@@ -147,28 +153,34 @@ fn read_wal_records(
             "COMMIT" => {
                 if payload.len() >= 16 {
                     record.txid = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                     record.sequence = Some(u64::from_le_bytes([
-                        payload[8], payload[9], payload[10], payload[11],
-                        payload[12], payload[13], payload[14], payload[15],
+                        payload[8],
+                        payload[9],
+                        payload[10],
+                        payload[11],
+                        payload[12],
+                        payload[13],
+                        payload[14],
+                        payload[15],
                     ]));
                 }
             }
             "ABORT" => {
                 if payload.len() >= 8 {
                     record.txid = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                 }
             }
             "CHECKPOINT" => {
                 if payload.len() >= 8 {
                     record.sequence = Some(u64::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                        payload[4], payload[5], payload[6], payload[7],
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
                     ]));
                 }
             }

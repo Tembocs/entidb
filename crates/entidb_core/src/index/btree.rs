@@ -388,7 +388,9 @@ mod tests {
 
         index.insert("alice".to_string(), EntityId::new()).unwrap();
         index.insert("bob".to_string(), EntityId::new()).unwrap();
-        index.insert("charlie".to_string(), EntityId::new()).unwrap();
+        index
+            .insert("charlie".to_string(), EntityId::new())
+            .unwrap();
 
         // Range query on strings
         let found = index

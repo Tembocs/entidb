@@ -82,10 +82,7 @@ mod tests {
 
         fn encode(&self) -> CoreResult<Vec<u8>> {
             let map = Value::map(vec![
-                (
-                    Value::Text("name".into()),
-                    Value::Text(self.name.clone()),
-                ),
+                (Value::Text("name".into()), Value::Text(self.name.clone())),
                 (Value::Text("value".into()), Value::Integer(self.value)),
             ]);
             Ok(to_canonical_cbor(&map)?)
@@ -93,11 +90,11 @@ mod tests {
 
         fn decode(id: EntityId, bytes: &[u8]) -> CoreResult<Self> {
             let value: Value = from_cbor(bytes)?;
-            let map = value.as_map().ok_or_else(|| {
-                crate::error::CoreError::InvalidFormat {
+            let map = value
+                .as_map()
+                .ok_or_else(|| crate::error::CoreError::InvalidFormat {
                     message: "expected map".into(),
-                }
-            })?;
+                })?;
 
             let name = map
                 .iter()

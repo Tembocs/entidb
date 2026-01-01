@@ -43,18 +43,31 @@ impl Note {
     /// Encodes the note to canonical CBOR bytes.
     fn encode(&self) -> Vec<u8> {
         // Build tags array
-        let tags_array: Vec<Value> = self.tags.iter()
-            .map(|t| Value::Text(t.clone()))
-            .collect();
+        let tags_array: Vec<Value> = self.tags.iter().map(|t| Value::Text(t.clone())).collect();
 
         // Build a map with sorted keys for canonical CBOR
         let pairs = vec![
-            (Value::Text("content".to_string()), Value::Text(self.content.clone())),
-            (Value::Text("created_at".to_string()), Value::Integer(self.created_at as i64)),
-            (Value::Text("id".to_string()), Value::Bytes(self.id.as_bytes().to_vec())),
+            (
+                Value::Text("content".to_string()),
+                Value::Text(self.content.clone()),
+            ),
+            (
+                Value::Text("created_at".to_string()),
+                Value::Integer(self.created_at as i64),
+            ),
+            (
+                Value::Text("id".to_string()),
+                Value::Bytes(self.id.as_bytes().to_vec()),
+            ),
             (Value::Text("tags".to_string()), Value::Array(tags_array)),
-            (Value::Text("title".to_string()), Value::Text(self.title.clone())),
-            (Value::Text("updated_at".to_string()), Value::Integer(self.updated_at as i64)),
+            (
+                Value::Text("title".to_string()),
+                Value::Text(self.title.clone()),
+            ),
+            (
+                Value::Text("updated_at".to_string()),
+                Value::Integer(self.updated_at as i64),
+            ),
         ];
         let value = Value::Map(pairs);
         to_canonical_cbor(&value).expect("encoding should succeed")
@@ -220,8 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n[~] Updating 'Meeting Notes'...");
     db.transaction(|txn| {
         if let Some(note) = all_notes.iter().find(|n| n.title == "Meeting Notes") {
-            let new_content =
-                format!("{}\n\nUpdate: Action items assigned.", note.content);
+            let new_content = format!("{}\n\nUpdate: Action items assigned.", note.content);
             let updated = note.clone().update_content(&new_content);
             txn.put(notes_collection, updated.id, updated.encode())?;
         }

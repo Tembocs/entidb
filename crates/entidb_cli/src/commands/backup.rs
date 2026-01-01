@@ -66,9 +66,7 @@ pub fn restore(
     // Check if database already exists
     let segment_path = db_path.join("SEGMENTS");
     if segment_path.exists() && !force {
-        return Err(
-            "Database already exists. Use --force to overwrite.".into(),
-        );
+        return Err("Database already exists. Use --force to overwrite.".into());
     }
 
     // Read backup file

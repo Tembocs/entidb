@@ -28,10 +28,8 @@
 //! db.put(&users, EntityId::new(), vec![1, 2, 3]);
 //! ```
 
-
 use parking_lot::RwLock;
 use std::sync::mpsc::{self, Receiver, Sender};
-
 
 /// Type of change event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,11 +190,7 @@ impl ChangeFeed {
 
     /// Returns the latest sequence number in history.
     pub fn latest_sequence(&self) -> u64 {
-        self.history
-            .read()
-            .last()
-            .map(|e| e.sequence)
-            .unwrap_or(0)
+        self.history.read().last().map(|e| e.sequence).unwrap_or(0)
     }
 
     /// Returns the number of active subscribers.

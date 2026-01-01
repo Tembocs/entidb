@@ -137,7 +137,7 @@ impl<'a> WalRecordIterator<'a> {
         // Calculate how many more bytes we need from the WAL
         let bytes_needed_from_wal = min_bytes - available;
         let remaining_in_wal = (self.total_size - self.current_offset) as usize - available;
-        
+
         // Check if there's enough data in the WAL
         if remaining_in_wal < bytes_needed_from_wal {
             return Ok(false);
@@ -159,10 +159,7 @@ impl<'a> WalRecordIterator<'a> {
         }
 
         // Read enough data to satisfy the request
-        let bytes_to_read = std::cmp::min(
-            self.buffer.len() - self.buffer_len,
-            remaining_in_wal,
-        );
+        let bytes_to_read = std::cmp::min(self.buffer.len() - self.buffer_len, remaining_in_wal);
 
         if bytes_to_read > 0 {
             let read_offset = self.current_offset + self.buffer_len as u64;
@@ -307,7 +304,8 @@ impl<'a> Iterator for WalRecordIterator<'a> {
 /// not the total WAL size.
 pub struct StreamingRecovery {
     /// Committed transaction IDs and their sequence numbers.
-    committed_txns: std::collections::HashMap<crate::types::TransactionId, crate::types::SequenceNumber>,
+    committed_txns:
+        std::collections::HashMap<crate::types::TransactionId, crate::types::SequenceNumber>,
     /// Maximum transaction ID seen.
     max_txid: u64,
     /// Maximum sequence number seen.
@@ -376,7 +374,10 @@ impl StreamingRecovery {
 
     /// Gets the commit sequence for a transaction.
     #[must_use]
-    pub fn get_commit_sequence(&self, txid: &crate::types::TransactionId) -> Option<crate::types::SequenceNumber> {
+    pub fn get_commit_sequence(
+        &self,
+        txid: &crate::types::TransactionId,
+    ) -> Option<crate::types::SequenceNumber> {
         self.committed_txns.get(txid).copied()
     }
 
@@ -541,7 +542,7 @@ mod tests {
     #[test]
     fn streaming_recovery_with_checkpoint() {
         let recovery = StreamingRecovery::new(100);
-        
+
         // Even with empty WAL, checkpoint seq is preserved
         assert_eq!(recovery.committed_seq(), 100);
         assert_eq!(recovery.next_seq(), 101);
@@ -563,7 +564,7 @@ mod tests {
 
         let records: Vec<_> = wal.iter().unwrap().map(|r| r.unwrap()).collect();
         assert_eq!(records.len(), 1);
-        
+
         if let WalRecord::Put { after_bytes, .. } = &records[0].1 {
             assert_eq!(after_bytes.len(), large_payload.len());
             assert_eq!(after_bytes, &large_payload);
@@ -622,7 +623,10 @@ mod tests {
         // Iterator should return the valid record then Ok(None), not an error
         let records: Vec<_> = wal.iter().unwrap().collect();
         assert_eq!(records.len(), 1, "Should return exactly one record");
-        assert!(records[0].is_ok(), "The valid record should parse successfully");
+        assert!(
+            records[0].is_ok(),
+            "The valid record should parse successfully"
+        );
         assert_eq!(records[0].as_ref().unwrap().1, record);
     }
 
@@ -660,7 +664,10 @@ mod tests {
         // Iterator should return the valid record then Ok(None) for the truncated one
         let records: Vec<_> = wal.iter().unwrap().collect();
         assert_eq!(records.len(), 1, "Should return exactly one record");
-        assert!(records[0].is_ok(), "The valid record should parse successfully");
+        assert!(
+            records[0].is_ok(),
+            "The valid record should parse successfully"
+        );
     }
 
     #[test]

@@ -62,15 +62,18 @@ impl Value {
                 // Since positive (type 0) and negative (type 1) have different major types,
                 // they are already separated by the major_type() comparison above.
                 // Here we only compare within the same sign.
+                #[allow(clippy::cast_sign_loss)]
                 match (a.signum(), b.signum()) {
                     (s1, s2) if s1 >= 0 && s2 >= 0 => {
                         // Both non-negative: compare by encoded length, then value
+                        // Safety: signum() >= 0 guarantees non-negative value
                         Self::cmp_unsigned_canonical(*a as u64, *b as u64)
                     }
                     (s1, s2) if s1 < 0 && s2 < 0 => {
                         // Both negative: CBOR encodes -1-n as argument
                         // -1 -> arg 0, -2 -> arg 1, -10 -> arg 9, etc.
                         // Compare by encoded argument length, then lexicographic (ascending argument)
+                        // Safety: for negative a, (-1 - a) is always non-negative
                         let arg_a = (-1 - *a) as u64;
                         let arg_b = (-1 - *b) as u64;
                         Self::cmp_unsigned_canonical(arg_a, arg_b)

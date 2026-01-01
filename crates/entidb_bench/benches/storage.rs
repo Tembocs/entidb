@@ -194,7 +194,9 @@ fn bench_random_read(c: &mut Criterion) {
         b.iter(|| {
             // Read records in pseudo-random order
             let offset = offsets[(idx * 7) % record_count];
-            let result = backend.read_at(black_box(offset), black_box(record_size)).unwrap();
+            let result = backend
+                .read_at(black_box(offset), black_box(record_size))
+                .unwrap();
             idx = (idx + 1) % record_count;
             black_box(result);
         });

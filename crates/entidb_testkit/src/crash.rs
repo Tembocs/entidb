@@ -217,9 +217,11 @@ impl CrashRecoveryHarness {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let temp_dir = std::env::temp_dir()
-            .join("entidb_crash_test")
-            .join(format!("test_{}_{}", std::process::id(), unique_id));
+        let temp_dir = std::env::temp_dir().join("entidb_crash_test").join(format!(
+            "test_{}_{}",
+            std::process::id(),
+            unique_id
+        ));
         std::fs::create_dir_all(&temp_dir)?;
         Ok(Self::new(temp_dir))
     }
@@ -306,12 +308,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "Committed data survives crash",
-                10,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("Committed data survives crash", 10, 0, &e.to_string())
         });
 
         self.results.push(result.clone());
@@ -367,12 +364,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "Uncommitted data discarded",
-                1,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("Uncommitted data discarded", 1, 0, &e.to_string())
         });
 
         self.results.push(result.clone());
@@ -415,12 +407,10 @@ impl CrashRecoveryHarness {
             drop(db);
 
             match data {
-                Some(d) if d == vec![4u8; 50] => {
-                    Ok(CrashRecoveryResult::pass(
-                        "Latest version preserved after compaction",
-                        1,
-                    ))
-                }
+                Some(d) if d == vec![4u8; 50] => Ok(CrashRecoveryResult::pass(
+                    "Latest version preserved after compaction",
+                    1,
+                )),
                 Some(_) => Ok(CrashRecoveryResult::fail(
                     "Latest version preserved after compaction",
                     1,
@@ -437,12 +427,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "Crash after compaction",
-                1,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("Crash after compaction", 1, 0, &e.to_string())
         });
 
         self.results.push(result.clone());
@@ -503,12 +488,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "WAL replay",
-                5,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("WAL replay", 5, 0, &e.to_string())
         });
 
         self.results.push(result.clone());
@@ -590,12 +570,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "Mixed recovery",
-                6,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("Mixed recovery", 6, 0, &e.to_string())
         });
 
         self.results.push(result.clone());
@@ -636,10 +611,7 @@ impl CrashRecoveryHarness {
             drop(db);
 
             if !exists {
-                Ok(CrashRecoveryResult::pass(
-                    "Delete survives crash",
-                    0,
-                ))
+                Ok(CrashRecoveryResult::pass("Delete survives crash", 0))
             } else {
                 Ok(CrashRecoveryResult::fail(
                     "Delete survives crash",
@@ -651,12 +623,7 @@ impl CrashRecoveryHarness {
         })();
 
         let result = result.unwrap_or_else(|e: entidb_core::CoreError| {
-            CrashRecoveryResult::fail(
-                "Delete survives crash",
-                0,
-                0,
-                &e.to_string(),
-            )
+            CrashRecoveryResult::fail("Delete survives crash", 0, 0, &e.to_string())
         });
 
         self.results.push(result.clone());

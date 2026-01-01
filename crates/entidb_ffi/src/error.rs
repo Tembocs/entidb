@@ -109,11 +109,9 @@ pub fn clear_last_error() {
 /// The returned pointer is valid until the next FFI call on this thread.
 #[no_mangle]
 pub extern "C" fn entidb_get_last_error() -> *const std::ffi::c_char {
-    LAST_ERROR.with(|e| {
-        match e.borrow().as_ref() {
-            Some(cstr) => cstr.as_ptr(),
-            None => std::ptr::null(),
-        }
+    LAST_ERROR.with(|e| match e.borrow().as_ref() {
+        Some(cstr) => cstr.as_ptr(),
+        None => std::ptr::null(),
     })
 }
 

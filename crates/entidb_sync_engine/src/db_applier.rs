@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 /// Metadata for sync state.
 const SYNC_COLLECTION_ID: u32 = 0xFFFF_FF00;
-const CURSOR_ENTITY_ID: [u8; 16] = [0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x01];
+const CURSOR_ENTITY_ID: [u8; 16] = [
+    0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x01,
+];
 #[allow(dead_code)] // Reserved for oplog entity encoding
 const OPLOG_ENTITY_PREFIX: u8 = 0xAA;
 
@@ -99,11 +101,10 @@ impl DatabaseApplier {
         let collection_id = CollectionId::new(SYNC_COLLECTION_ID);
         let entity_id = EntityId::from_bytes(CURSOR_ENTITY_ID);
 
-        self.database
-            .transaction(|txn| {
-                txn.put(collection_id, entity_id, cursor.to_le_bytes().to_vec())?;
-                Ok(())
-            })?;
+        self.database.transaction(|txn| {
+            txn.put(collection_id, entity_id, cursor.to_le_bytes().to_vec())?;
+            Ok(())
+        })?;
 
         Ok(())
     }
@@ -143,25 +144,24 @@ impl SyncApplier for DatabaseApplier {
         }
 
         // Apply all operations in a single transaction for atomicity
-        self.database
-            .transaction(|txn| {
-                for op in operations {
-                    let collection_id = CollectionId::new(op.collection_id);
-                    let entity_id = EntityId::from_bytes(op.entity_id);
+        self.database.transaction(|txn| {
+            for op in operations {
+                let collection_id = CollectionId::new(op.collection_id);
+                let entity_id = EntityId::from_bytes(op.entity_id);
 
-                    match op.op_type {
-                        OperationType::Put => {
-                            if let Some(payload) = &op.payload {
-                                txn.put(collection_id, entity_id, payload.clone())?;
-                            }
-                        }
-                        OperationType::Delete => {
-                            txn.delete(collection_id, entity_id)?;
+                match op.op_type {
+                    OperationType::Put => {
+                        if let Some(payload) = &op.payload {
+                            txn.put(collection_id, entity_id, payload.clone())?;
                         }
                     }
+                    OperationType::Delete => {
+                        txn.delete(collection_id, entity_id)?;
+                    }
                 }
-                Ok(())
-            })?;
+            }
+            Ok(())
+        })?;
 
         Ok(())
     }

@@ -26,8 +26,8 @@
 //! ```
 
 use crate::error::{CoreError, CoreResult};
-use crate::segment::SegmentRecord;
 use crate::segment::SegmentManager;
+use crate::segment::SegmentRecord;
 use crate::types::SequenceNumber;
 use crate::wal::compute_crc32;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,7 +46,9 @@ const FOOTER_SIZE: usize = 4;
 /// This is safe because we validate the data length before calling.
 #[inline]
 fn slice_to_array_8(slice: &[u8]) -> [u8; 8] {
-    [slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7]]
+    [
+        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+    ]
 }
 
 /// Safely converts a slice to a 4-byte array.
@@ -312,7 +314,10 @@ impl BackupManager {
             .as_millis() as u64;
 
         // Calculate size
-        let records_size: usize = records.iter().map(|r: &SegmentRecord| r.encoded_size()).sum();
+        let records_size: usize = records
+            .iter()
+            .map(|r: &SegmentRecord| r.encoded_size())
+            .sum();
         let total_size = HEADER_SIZE + records_size + FOOTER_SIZE;
         let mut data = Vec::with_capacity(total_size);
 
@@ -439,10 +444,8 @@ mod tests {
         // Only live records should be included
         // Note: create_backup_from_records doesn't filter, only create_backup does
         // For this test, we'll manually filter
-        let filtered: Vec<SegmentRecord> = records
-            .into_iter()
-            .filter(|r| !r.is_tombstone())
-            .collect();
+        let filtered: Vec<SegmentRecord> =
+            records.into_iter().filter(|r| !r.is_tombstone()).collect();
         let backup = manager
             .create_backup_from_records(&filtered, SequenceNumber::new(10))
             .unwrap();

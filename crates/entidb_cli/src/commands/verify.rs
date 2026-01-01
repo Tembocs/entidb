@@ -89,7 +89,9 @@ fn verify_wal(backend: &dyn StorageBackend) -> Result<VerifyResult, Box<dyn std:
         let header = match backend.read_at(offset, 11) {
             Ok(h) => h,
             Err(e) => {
-                result.errors.push(format!("Failed to read header at {}: {}", offset, e));
+                result
+                    .errors
+                    .push(format!("Failed to read header at {}: {}", offset, e));
                 result.corrupt_records += 1;
                 break;
             }
@@ -171,7 +173,9 @@ fn verify_segments(
         let len_bytes = match backend.read_at(offset, 4) {
             Ok(b) => b,
             Err(e) => {
-                result.errors.push(format!("Failed to read length at {}: {}", offset, e));
+                result
+                    .errors
+                    .push(format!("Failed to read length at {}: {}", offset, e));
                 result.corrupt_records += 1;
                 break;
             }
@@ -180,7 +184,9 @@ fn verify_segments(
             u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as u64;
 
         if record_len == 0 {
-            result.errors.push(format!("Zero-length record at offset {}", offset));
+            result
+                .errors
+                .push(format!("Zero-length record at offset {}", offset));
             result.corrupt_records += 1;
             break;
         }

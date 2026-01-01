@@ -45,7 +45,8 @@ pub fn run(
     println!("Compaction Analysis:");
     println!("  Input records:     {}", stats.input_records);
     println!("  Output records:    {}", stats.output_records);
-    println!("  Tombstones:        {} (will be {})", 
+    println!(
+        "  Tombstones:        {} (will be {})",
         stats.tombstones_removed,
         if remove_tombstones { "removed" } else { "kept" }
     );
@@ -113,8 +114,7 @@ fn analyze_compaction(
             // Parse sequence number (8 bytes after flags)
             let seq = if data.len() >= 33 {
                 u64::from_le_bytes([
-                    data[25], data[26], data[27], data[28],
-                    data[29], data[30], data[31], data[32],
+                    data[25], data[26], data[27], data[28], data[29], data[30], data[31], data[32],
                 ])
             } else {
                 input_records as u64
@@ -156,7 +156,9 @@ fn analyze_compaction(
         output_size += *record_size as u64;
     }
 
-    let tombstones_in_output = if remove_tombstones { 0 } else {
+    let tombstones_in_output = if remove_tombstones {
+        0
+    } else {
         latest.values().filter(|(_, is_ts, _)| *is_ts).count()
     };
 
@@ -203,8 +205,7 @@ fn perform_compaction(
 
             let seq = if data.len() >= 33 {
                 u64::from_le_bytes([
-                    data[25], data[26], data[27], data[28],
-                    data[29], data[30], data[31], data[32],
+                    data[25], data[26], data[27], data[28], data[29], data[30], data[31], data[32],
                 ])
             } else {
                 records.len() as u64

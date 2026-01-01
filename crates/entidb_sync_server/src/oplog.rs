@@ -213,10 +213,7 @@ mod tests {
     #[test]
     fn append_operations() {
         let oplog = ServerOplog::new();
-        let ops = vec![
-            make_op(1, [1u8; 16], 0),
-            make_op(1, [2u8; 16], 0),
-        ];
+        let ops = vec![make_op(1, [1u8; 16], 0), make_op(1, [2u8; 16], 0)];
 
         let (new_cursor, conflicts) = oplog.append(ops, 1).unwrap();
         assert_eq!(new_cursor, 3);

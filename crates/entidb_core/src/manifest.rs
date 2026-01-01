@@ -341,8 +341,7 @@ impl Manifest {
                     if cursor + 2 > data.len() {
                         return Err(CoreError::invalid_format("manifest too short"));
                     }
-                    let field_len =
-                        u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
+                    let field_len = u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
                     cursor += 2;
 
                     if cursor + field_len > data.len() {
@@ -479,7 +478,7 @@ mod tests {
     fn encode_decode_with_indexes() {
         let mut manifest = Manifest::new((1, 0));
         manifest.get_or_create_collection("users");
-        
+
         let def = IndexDefinition {
             id: 0, // Will be assigned
             collection_id: CollectionId::new(1),
@@ -537,7 +536,7 @@ mod tests {
     #[test]
     fn add_duplicate_index_returns_same_id() {
         let mut manifest = Manifest::default();
-        
+
         let def1 = IndexDefinition {
             id: 0,
             collection_id: CollectionId::new(1),
@@ -565,7 +564,7 @@ mod tests {
     #[test]
     fn remove_index() {
         let mut manifest = Manifest::default();
-        
+
         let def = IndexDefinition {
             id: 0,
             collection_id: CollectionId::new(1),

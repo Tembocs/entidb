@@ -2615,12 +2615,7 @@ mod tests {
             entidb_collection(handle2, name.as_ptr(), &mut coll_id2);
 
             let mut stats = EntiDbRestoreStats::empty();
-            let result = entidb_restore(
-                handle2,
-                backup_buffer.data,
-                backup_buffer.len,
-                &mut stats,
-            );
+            let result = entidb_restore(handle2, backup_buffer.data, backup_buffer.len, &mut stats);
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(stats.entities_restored, 1);
 
@@ -2695,12 +2690,8 @@ mod tests {
 
             // Validate
             let mut info = EntiDbBackupInfo::empty();
-            let result = entidb_validate_backup(
-                handle,
-                backup_buffer.data,
-                backup_buffer.len,
-                &mut info,
-            );
+            let result =
+                entidb_validate_backup(handle, backup_buffer.data, backup_buffer.len, &mut info);
             assert_eq!(result, EntiDbResult::Ok);
             assert!(info.valid);
             assert!(info.record_count > 0);
@@ -2777,14 +2768,26 @@ mod tests {
 
             // Insert into index
             let key = b"alice@example.com";
-            let result =
-                entidb_hash_index_insert(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), entity_id);
+            let result = entidb_hash_index_insert(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key.as_ptr(),
+                key.len(),
+                entity_id,
+            );
             assert_eq!(result, EntiDbResult::Ok);
 
             // Lookup
             let mut buffer = EntiDbBuffer::empty();
-            let result =
-                entidb_hash_index_lookup(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), &mut buffer);
+            let result = entidb_hash_index_lookup(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key.as_ptr(),
+                key.len(),
+                &mut buffer,
+            );
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(buffer.len, 16); // One entity ID
 
@@ -2795,8 +2798,14 @@ mod tests {
             assert_eq!(count, 1);
 
             // Remove
-            let result =
-                entidb_hash_index_remove(handle, coll_id, index_name.as_ptr(), key.as_ptr(), key.len(), entity_id);
+            let result = entidb_hash_index_remove(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key.as_ptr(),
+                key.len(),
+                entity_id,
+            );
             assert_eq!(result, EntiDbResult::Ok);
 
             // Check length is 0
@@ -2843,9 +2852,30 @@ mod tests {
             let key2 = 30i64.to_be_bytes();
             let key3 = 35i64.to_be_bytes();
 
-            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key1.as_ptr(), key1.len(), e1);
-            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key2.as_ptr(), key2.len(), e2);
-            entidb_btree_index_insert(handle, coll_id, index_name.as_ptr(), key3.as_ptr(), key3.len(), e3);
+            entidb_btree_index_insert(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key1.as_ptr(),
+                key1.len(),
+                e1,
+            );
+            entidb_btree_index_insert(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key2.as_ptr(),
+                key2.len(),
+                e2,
+            );
+            entidb_btree_index_insert(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                key3.as_ptr(),
+                key3.len(),
+                e3,
+            );
 
             // Lookup exact
             let mut buffer = EntiDbBuffer::empty();
@@ -3381,8 +3411,13 @@ mod change_feed_tests {
             // Search for "hello" - should find both
             let query = std::ffi::CString::new("hello").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            let result =
-                entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            let result = entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(buffer.len, 32); // Two entity IDs (16 bytes each)
             entidb_free_buffer(buffer);
@@ -3390,8 +3425,13 @@ mod change_feed_tests {
             // Search for "rust" - should find only one
             let query = std::ffi::CString::new("rust").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            let result =
-                entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            let result = entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(buffer.len, 16); // One entity ID
             entidb_free_buffer(buffer);
@@ -3425,21 +3465,45 @@ mod change_feed_tests {
             entidb_generate_id(&mut entity2);
 
             let text1 = std::ffi::CString::new("apple orange").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity1,
+                text1.as_ptr(),
+            );
 
             let text2 = std::ffi::CString::new("banana orange").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity2,
+                text2.as_ptr(),
+            );
 
             // AND search: "apple orange" - only entity1 has both
             let query = std::ffi::CString::new("apple orange").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 16); // One match
             entidb_free_buffer(buffer);
 
             // OR search: "apple banana" - both match
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search_any(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search_any(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             // "apple orange" with OR - entity1 has apple and orange, entity2 has orange
             // Actually this query is "apple orange" so OR should match both (both have "orange")
             assert!(buffer.len >= 16);
@@ -3448,7 +3512,13 @@ mod change_feed_tests {
             // Search for "apple banana" with OR - should find both
             let query2 = std::ffi::CString::new("apple banana").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search_any(handle, coll_id, index_name.as_ptr(), query2.as_ptr(), &mut buffer);
+            entidb_fts_search_any(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query2.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 32); // Both match (entity1 has apple, entity2 has banana)
             entidb_free_buffer(buffer);
 
@@ -3476,10 +3546,22 @@ mod change_feed_tests {
             entidb_generate_id(&mut entity2);
 
             let text1 = std::ffi::CString::new("programming in Rust").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity1,
+                text1.as_ptr(),
+            );
 
             let text2 = std::ffi::CString::new("program management").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity2,
+                text2.as_ptr(),
+            );
 
             // Prefix search for "prog" - should find both
             let prefix = std::ffi::CString::new("prog").unwrap();
@@ -3529,8 +3611,8 @@ mod change_feed_tests {
                 handle,
                 coll_id,
                 index_name.as_ptr(),
-                3,   // min token length
-                256, // max token length
+                3,    // min token length
+                256,  // max token length
                 true, // case sensitive
             );
             assert_eq!(result, EntiDbResult::Ok);
@@ -3544,21 +3626,39 @@ mod change_feed_tests {
             // Short tokens ("I", "am", "a") should be ignored
             let query = std::ffi::CString::new("am").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 0); // No match - "am" too short
             entidb_free_buffer(buffer);
 
             // "Rust" should match (case-sensitive)
             let query = std::ffi::CString::new("Rust").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 16);
             entidb_free_buffer(buffer);
 
             // "rust" (lowercase) should NOT match in case-sensitive mode
             let query = std::ffi::CString::new("rust").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 0);
             entidb_free_buffer(buffer);
 
@@ -3586,15 +3686,33 @@ mod change_feed_tests {
             entidb_generate_id(&mut entity2);
 
             let text1 = std::ffi::CString::new("hello world").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity1,
+                text1.as_ptr(),
+            );
 
             let text2 = std::ffi::CString::new("hello rust").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity2,
+                text2.as_ptr(),
+            );
 
             // Both match "hello"
             let query = std::ffi::CString::new("hello").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 32);
             entidb_free_buffer(buffer);
 
@@ -3604,7 +3722,13 @@ mod change_feed_tests {
 
             // Now only entity2 matches "hello"
             let mut buffer = EntiDbBuffer::empty();
-            entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(buffer.len, 16);
             entidb_free_buffer(buffer);
 
@@ -3677,14 +3801,27 @@ mod change_feed_tests {
 
             // "hello world hello" - unique tokens: hello, world
             let text1 = std::ffi::CString::new("hello world hello").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity1, text1.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity1,
+                text1.as_ptr(),
+            );
 
             // "hello rust" - unique tokens overall: hello, world, rust
             let text2 = std::ffi::CString::new("hello rust").unwrap();
-            entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity2, text2.as_ptr());
+            entidb_fts_index_text(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                entity2,
+                text2.as_ptr(),
+            );
 
             let mut count: usize = 0;
-            let result = entidb_fts_unique_token_count(handle, coll_id, index_name.as_ptr(), &mut count);
+            let result =
+                entidb_fts_unique_token_count(handle, coll_id, index_name.as_ptr(), &mut count);
             assert_eq!(result, EntiDbResult::Ok);
             assert_eq!(count, 3); // hello, world, rust
 
@@ -3710,12 +3847,19 @@ mod change_feed_tests {
             entidb_generate_id(&mut entity);
 
             let text = std::ffi::CString::new("test").unwrap();
-            let result = entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity, text.as_ptr());
+            let result =
+                entidb_fts_index_text(handle, coll_id, index_name.as_ptr(), entity, text.as_ptr());
             assert_eq!(result, EntiDbResult::Error);
 
             let query = std::ffi::CString::new("test").unwrap();
             let mut buffer = EntiDbBuffer::empty();
-            let result = entidb_fts_search(handle, coll_id, index_name.as_ptr(), query.as_ptr(), &mut buffer);
+            let result = entidb_fts_search(
+                handle,
+                coll_id,
+                index_name.as_ptr(),
+                query.as_ptr(),
+                &mut buffer,
+            );
             assert_eq!(result, EntiDbResult::Error);
 
             let mut count: usize = 0;

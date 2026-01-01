@@ -180,10 +180,7 @@ impl IndexEngine {
     }
 
     /// Creates an index engine from persisted definitions.
-    pub fn from_definitions(
-        config: IndexEngineConfig,
-        definitions: Vec<IndexDefinition>,
-    ) -> Self {
+    pub fn from_definitions(config: IndexEngineConfig, definitions: Vec<IndexDefinition>) -> Self {
         let mut defs_map = HashMap::new();
         let mut field_map = HashMap::new();
         let mut hash_indexes = HashMap::new();
@@ -232,7 +229,7 @@ impl IndexEngine {
     /// Registers an index from a persisted definition (used during recovery).
     pub fn register_index(&self, def: IndexDefinition) {
         let key = (def.collection_id, def.field_path.clone());
-        
+
         // Skip if already exists
         {
             let field_map = self.field_index_map.read();
@@ -247,10 +244,14 @@ impl IndexEngine {
         // Insert index
         match def.kind {
             IndexKind::Hash => {
-                self.hash_indexes.write().insert(def.id, HashIndex::new(spec));
+                self.hash_indexes
+                    .write()
+                    .insert(def.id, HashIndex::new(spec));
             }
             IndexKind::BTree => {
-                self.btree_indexes.write().insert(def.id, BTreeIndex::new(spec));
+                self.btree_indexes
+                    .write()
+                    .insert(def.id, BTreeIndex::new(spec));
             }
         }
 
@@ -502,9 +503,9 @@ impl IndexEngine {
         self.stats.write().lookups += 1;
 
         let btree_indexes = self.btree_indexes.read();
-        let index = btree_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_operation("index is not a BTree index")
-        })?;
+        let index = btree_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_operation("index is not a BTree index"))?;
 
         use std::ops::Bound;
         let start = match min_key {
@@ -532,7 +533,7 @@ impl IndexEngine {
         for record in records {
             let key = (record.collection_id, record.entity_id);
             let entry = latest_records.entry(key);
-            
+
             entry
                 .and_modify(|existing| {
                     if record.sequence > existing.sequence {
@@ -558,7 +559,7 @@ impl IndexEngine {
 
         // Rebuild from latest records
         let defs = self.definitions.read();
-        
+
         for ((_coll_id, entity_id_bytes), record) in latest_records {
             if record.is_tombstone() {
                 continue; // Skip deleted entities
@@ -719,7 +720,7 @@ impl IndexEngine {
         // Use entidb_codec to parse CBOR and extract field
         // For now, we use a simple approach: if field_path is empty, use entire payload
         // Otherwise, attempt CBOR navigation
-        
+
         if field_path.is_empty() {
             return Some(payload.to_vec());
         }
@@ -730,11 +731,10 @@ impl IndexEngine {
 
         for field in field_path {
             current = match current {
-                Value::Map(map) => {
-                    map.iter()
-                        .find(|(k, _)| matches!(k, Value::Text(s) if s == field))
-                        .map(|(_, v)| v)?
-                }
+                Value::Map(map) => map
+                    .iter()
+                    .find(|(k, _)| matches!(k, Value::Text(s) if s == field))
+                    .map(|(_, v)| v)?,
                 _ => return None,
             };
         }
@@ -816,7 +816,7 @@ impl IndexEngine {
     ) -> CoreResult<()> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -830,10 +830,10 @@ impl IndexEngine {
         };
 
         let mut hash_indexes = self.hash_indexes.write();
-        let index = hash_indexes.get_mut(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = hash_indexes
+            .get_mut(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         index.insert(key, entity_id)
     }
 
@@ -848,7 +848,7 @@ impl IndexEngine {
     ) -> CoreResult<bool> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -862,10 +862,10 @@ impl IndexEngine {
         };
 
         let mut hash_indexes = self.hash_indexes.write();
-        let index = hash_indexes.get_mut(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = hash_indexes
+            .get_mut(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         index.remove(&key.to_vec(), entity_id)
     }
 
@@ -879,7 +879,7 @@ impl IndexEngine {
     ) -> CoreResult<Vec<EntityId>> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -893,10 +893,10 @@ impl IndexEngine {
         };
 
         let hash_indexes = self.hash_indexes.read();
-        let index = hash_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = hash_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         self.stats.write().lookups += 1;
         index.lookup(&key.to_vec())
     }
@@ -910,7 +910,7 @@ impl IndexEngine {
     ) -> CoreResult<usize> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -924,10 +924,10 @@ impl IndexEngine {
         };
 
         let hash_indexes = self.hash_indexes.read();
-        let index = hash_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = hash_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         Ok(index.len())
     }
 
@@ -953,7 +953,7 @@ impl IndexEngine {
     ) -> CoreResult<()> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -967,10 +967,10 @@ impl IndexEngine {
         };
 
         let mut btree_indexes = self.btree_indexes.write();
-        let index = btree_indexes.get_mut(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = btree_indexes
+            .get_mut(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         index.insert(key, entity_id)
     }
 
@@ -985,7 +985,7 @@ impl IndexEngine {
     ) -> CoreResult<bool> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -999,10 +999,10 @@ impl IndexEngine {
         };
 
         let mut btree_indexes = self.btree_indexes.write();
-        let index = btree_indexes.get_mut(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = btree_indexes
+            .get_mut(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         index.remove(&key.to_vec(), entity_id)
     }
 
@@ -1016,7 +1016,7 @@ impl IndexEngine {
     ) -> CoreResult<Vec<EntityId>> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -1030,10 +1030,10 @@ impl IndexEngine {
         };
 
         let btree_indexes = self.btree_indexes.read();
-        let index = btree_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = btree_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         self.stats.write().lookups += 1;
         index.lookup(&key.to_vec())
     }
@@ -1049,7 +1049,7 @@ impl IndexEngine {
     ) -> CoreResult<Vec<EntityId>> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -1063,10 +1063,10 @@ impl IndexEngine {
         };
 
         let btree_indexes = self.btree_indexes.read();
-        let index = btree_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = btree_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         self.stats.write().lookups += 1;
 
         use std::ops::Bound;
@@ -1091,7 +1091,7 @@ impl IndexEngine {
     ) -> CoreResult<usize> {
         let field_path = vec![field.to_string()];
         let key_lookup = (collection_id, field_path);
-        
+
         let index_id = self.field_index_map.read().get(&key_lookup).copied();
         let index_id = match index_id {
             Some(id) => id,
@@ -1105,10 +1105,10 @@ impl IndexEngine {
         };
 
         let btree_indexes = self.btree_indexes.read();
-        let index = btree_indexes.get(&index_id).ok_or_else(|| {
-            CoreError::invalid_format("index not found")
-        })?;
-        
+        let index = btree_indexes
+            .get(&index_id)
+            .ok_or_else(|| CoreError::invalid_format("index not found"))?;
+
         Ok(index.len())
     }
 
@@ -1138,17 +1138,19 @@ mod tests {
     fn test_create_index() {
         let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
-        
-        let id = engine.create_index(
-            coll,
-            vec!["email".to_string()],
-            IndexKind::Hash,
-            true,
-            SequenceNumber::new(0),
-        ).unwrap();
-        
+
+        let id = engine
+            .create_index(
+                coll,
+                vec!["email".to_string()],
+                IndexKind::Hash,
+                true,
+                SequenceNumber::new(0),
+            )
+            .unwrap();
+
         assert!(id > 0);
-        
+
         // Creating same index again should fail
         let result = engine.create_index(
             coll,
@@ -1157,7 +1159,7 @@ mod tests {
             true,
             SequenceNumber::new(0),
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -1165,7 +1167,7 @@ mod tests {
     fn test_register_index_from_definition() {
         let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
-        
+
         let def = IndexDefinition {
             id: 42,
             collection_id: coll,
@@ -1174,9 +1176,9 @@ mod tests {
             unique: true,
             created_at_seq: SequenceNumber::new(0),
         };
-        
+
         engine.register_index(def.clone());
-        
+
         let defs = engine.definitions();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].id, 42);
@@ -1186,19 +1188,27 @@ mod tests {
     fn test_legacy_hash_index() {
         let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
-        
-        engine.create_hash_index_legacy(coll, "email", false).unwrap();
-        
+
+        engine
+            .create_hash_index_legacy(coll, "email", false)
+            .unwrap();
+
         let entity_id = EntityId::new();
-        engine.hash_index_insert_legacy(coll, "email", vec![1, 2, 3], entity_id).unwrap();
-        
-        let results = engine.hash_index_lookup_legacy(coll, "email", &[1, 2, 3]).unwrap();
+        engine
+            .hash_index_insert_legacy(coll, "email", vec![1, 2, 3], entity_id)
+            .unwrap();
+
+        let results = engine
+            .hash_index_lookup_legacy(coll, "email", &[1, 2, 3])
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], entity_id);
-        
+
         assert_eq!(engine.hash_index_len_legacy(coll, "email").unwrap(), 1);
-        
-        engine.hash_index_remove_legacy(coll, "email", &[1, 2, 3], entity_id).unwrap();
+
+        engine
+            .hash_index_remove_legacy(coll, "email", &[1, 2, 3], entity_id)
+            .unwrap();
         assert_eq!(engine.hash_index_len_legacy(coll, "email").unwrap(), 0);
     }
 
@@ -1206,23 +1216,29 @@ mod tests {
     fn test_legacy_btree_index() {
         let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
-        
-        engine.create_btree_index_legacy(coll, "age", false).unwrap();
-        
+
+        engine
+            .create_btree_index_legacy(coll, "age", false)
+            .unwrap();
+
         let entity_id1 = EntityId::new();
         let entity_id2 = EntityId::new();
-        
-        engine.btree_index_insert_legacy(coll, "age", vec![0, 0, 0, 25], entity_id1).unwrap();
-        engine.btree_index_insert_legacy(coll, "age", vec![0, 0, 0, 30], entity_id2).unwrap();
-        
-        let results = engine.btree_index_range_legacy(coll, "age", None, None).unwrap();
+
+        engine
+            .btree_index_insert_legacy(coll, "age", vec![0, 0, 0, 25], entity_id1)
+            .unwrap();
+        engine
+            .btree_index_insert_legacy(coll, "age", vec![0, 0, 0, 30], entity_id2)
+            .unwrap();
+
+        let results = engine
+            .btree_index_range_legacy(coll, "age", None, None)
+            .unwrap();
         assert_eq!(results.len(), 2);
-        
-        let results = engine.btree_index_range_legacy(
-            coll, "age",
-            Some(&[0, 0, 0, 26]),
-            None
-        ).unwrap();
+
+        let results = engine
+            .btree_index_range_legacy(coll, "age", Some(&[0, 0, 0, 26]), None)
+            .unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -1230,26 +1246,30 @@ mod tests {
     fn test_index_definitions_persistence() {
         let engine = IndexEngine::new(IndexEngineConfig::default());
         let coll = CollectionId::new(1);
-        
-        engine.create_index(
-            coll,
-            vec!["email".to_string()],
-            IndexKind::Hash,
-            true,
-            SequenceNumber::new(5),
-        ).unwrap();
-        
-        engine.create_index(
-            coll,
-            vec!["age".to_string()],
-            IndexKind::BTree,
-            false,
-            SequenceNumber::new(6),
-        ).unwrap();
-        
+
+        engine
+            .create_index(
+                coll,
+                vec!["email".to_string()],
+                IndexKind::Hash,
+                true,
+                SequenceNumber::new(5),
+            )
+            .unwrap();
+
+        engine
+            .create_index(
+                coll,
+                vec!["age".to_string()],
+                IndexKind::BTree,
+                false,
+                SequenceNumber::new(6),
+            )
+            .unwrap();
+
         let defs = engine.definitions();
         assert_eq!(defs.len(), 2);
-        
+
         // Recreate engine from definitions
         let engine2 = IndexEngine::from_definitions(IndexEngineConfig::default(), defs);
         let defs2 = engine2.definitions();

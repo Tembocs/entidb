@@ -395,12 +395,7 @@ impl Database {
             .map(|entities| {
                 entities
                     .into_iter()
-                    .map(|(id, data)| {
-                        (
-                            EntityId { inner: id },
-                            PyBytes::new(py, &data),
-                        )
-                    })
+                    .map(|(id, data)| (EntityId { inner: id }, PyBytes::new(py, &data)))
                     .collect()
             })
             .map_err(|e| PyIOError::new_err(e.to_string()))
@@ -903,7 +898,13 @@ impl Database {
     ) -> PyResult<()> {
         let coll = CollectionId::new(collection.id);
         self.inner
-            .create_fts_index_with_config(coll, field, min_token_length, max_token_length, case_sensitive)
+            .create_fts_index_with_config(
+                coll,
+                field,
+                min_token_length,
+                max_token_length,
+                case_sensitive,
+            )
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -971,7 +972,12 @@ impl Database {
     /// results = db.fts_search(documents, "content", "hello world")
     /// # Returns entities containing both "hello" AND "world"
     /// ```
-    fn fts_search(&self, collection: &Collection, field: &str, query: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search(
+        &self,
+        collection: &Collection,
+        field: &str,
+        query: &str,
+    ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
             .fts_search(coll, field, query)
@@ -996,7 +1002,12 @@ impl Database {
     /// results = db.fts_search_any(documents, "content", "hello world")
     /// # Returns entities containing "hello" OR "world" (or both)
     /// ```
-    fn fts_search_any(&self, collection: &Collection, field: &str, query: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search_any(
+        &self,
+        collection: &Collection,
+        field: &str,
+        query: &str,
+    ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
             .fts_search_any(coll, field, query)
@@ -1021,7 +1032,12 @@ impl Database {
     /// results = db.fts_search_prefix(documents, "content", "prog")
     /// # Returns entities with words like "program", "programming", etc.
     /// ```
-    fn fts_search_prefix(&self, collection: &Collection, field: &str, prefix: &str) -> PyResult<Vec<EntityId>> {
+    fn fts_search_prefix(
+        &self,
+        collection: &Collection,
+        field: &str,
+        prefix: &str,
+    ) -> PyResult<Vec<EntityId>> {
         let coll = CollectionId::new(collection.id);
         self.inner
             .fts_search_prefix(coll, field, prefix)
@@ -1138,8 +1154,8 @@ impl Database {
         // Read from the metadata collection (collection id 0 is reserved for metadata)
         let meta_coll_id = CollectionId::new(0);
         let key_id = CoreEntityId::from_bytes([
-            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
-            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
+            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, // "schema_v"
+            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, // "ersion\0\0"
         ]);
 
         match self.inner.get(meta_coll_id, key_id) {
@@ -1166,14 +1182,12 @@ impl Database {
         // Write to the metadata collection
         let meta_coll_id = CollectionId::new(0);
         let key_id = CoreEntityId::from_bytes([
-            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76,  // "schema_v"
-            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00,  // "ersion\0\0"
+            0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, // "schema_v"
+            0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x00, 0x00, // "ersion\0\0"
         ]);
 
         self.inner
-            .transaction(|txn| {
-                txn.put(meta_coll_id, key_id, version.to_le_bytes().to_vec())
-            })
+            .transaction(|txn| txn.put(meta_coll_id, key_id, version.to_le_bytes().to_vec()))
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
@@ -1250,11 +1264,7 @@ impl BackupInfo {
     fn __repr__(&self) -> String {
         format!(
             "BackupInfo(valid={}, timestamp={}, sequence={}, record_count={}, size={})",
-            self.valid,
-            self.timestamp,
-            self.sequence,
-            self.record_count,
-            self.size
+            self.valid, self.timestamp, self.sequence, self.record_count, self.size
         )
     }
 }

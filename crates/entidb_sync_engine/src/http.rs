@@ -193,10 +193,7 @@ pub trait LoopbackServer {
 impl<S: LoopbackServer + Send + Sync> HttpClient for LoopbackClient<S> {
     fn post(&self, url: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
         // Extract path from URL
-        let path = url
-            .find("/sync/")
-            .map(|i| &url[i..])
-            .unwrap_or(url);
+        let path = url.find("/sync/").map(|i| &url[i..]).unwrap_or(url);
 
         self.server.handle_post(path, &body)
     }

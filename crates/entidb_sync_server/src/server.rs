@@ -50,10 +50,7 @@ impl SyncServer {
     }
 
     /// Handles a handshake request.
-    pub fn handle_handshake(
-        &self,
-        request: HandshakeRequest,
-    ) -> Result<HandshakeResponse, String> {
+    pub fn handle_handshake(&self, request: HandshakeRequest) -> Result<HandshakeResponse, String> {
         self.handler
             .handle_handshake(request)
             .map_err(|e| e.to_string())
@@ -72,9 +69,9 @@ impl SyncServer {
     /// Handles a sync message (dispatches to appropriate handler).
     pub fn handle_message(&self, message: SyncMessage) -> Result<SyncMessage, String> {
         match message {
-            SyncMessage::HandshakeRequest(req) => {
-                self.handle_handshake(req).map(SyncMessage::HandshakeResponse)
-            }
+            SyncMessage::HandshakeRequest(req) => self
+                .handle_handshake(req)
+                .map(SyncMessage::HandshakeResponse),
             SyncMessage::PullRequest(req) => self.handle_pull(req).map(SyncMessage::PullResponse),
             SyncMessage::PushRequest(req) => self.handle_push(req).map(SyncMessage::PushResponse),
             _ => Err("Unexpected message type".into()),
@@ -131,10 +128,7 @@ mod tests {
         assert!(response.operations.is_empty());
 
         // 3. Push some operations
-        let push = PushRequest::new(
-            vec![make_op([1u8; 16]), make_op([2u8; 16])],
-            server_cursor,
-        );
+        let push = PushRequest::new(vec![make_op([1u8; 16]), make_op([2u8; 16])], server_cursor);
         let response = server.handle_push(push).unwrap();
         assert!(response.success);
         assert_eq!(response.new_cursor, 3);
@@ -149,11 +143,7 @@ mod tests {
     fn message_dispatch() {
         let server = SyncServer::new(ServerConfig::default());
 
-        let message = SyncMessage::HandshakeRequest(HandshakeRequest::new(
-            [1u8; 16],
-            [2u8; 16],
-            0,
-        ));
+        let message = SyncMessage::HandshakeRequest(HandshakeRequest::new([1u8; 16], [2u8; 16], 0));
 
         let response = server.handle_message(message).unwrap();
         assert!(matches!(response, SyncMessage::HandshakeResponse(_)));

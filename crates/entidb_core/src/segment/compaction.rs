@@ -217,9 +217,7 @@ impl Compactor {
                     as usize;
 
             if offset + record_len > data.len() {
-                return Err(CoreError::segment_corruption(
-                    "record extends beyond data",
-                ));
+                return Err(CoreError::segment_corruption("record extends beyond data"));
             }
 
             let record_data = &data[offset..offset + record_len];
@@ -309,11 +307,10 @@ mod tests {
         // Now with current sequence 20
         // Tombstone at seq 5 is 15 sequences old (>= 10), removed
         // Tombstone at seq 8 is 12 sequences old (>= 10), removed
-        let records2 = vec![
-            make_tombstone(1, 1, 5),
-            make_tombstone(1, 2, 8),
-        ];
-        let (output2, stats2) = compactor.compact(records2, SequenceNumber::new(20)).unwrap();
+        let records2 = vec![make_tombstone(1, 1, 5), make_tombstone(1, 2, 8)];
+        let (output2, stats2) = compactor
+            .compact(records2, SequenceNumber::new(20))
+            .unwrap();
 
         assert_eq!(output2.len(), 0);
         assert_eq!(stats2.tombstones_removed, 2);
@@ -337,9 +334,7 @@ mod tests {
     #[test]
     fn compact_empty_input() {
         let compactor = Compactor::with_defaults();
-        let (output, stats) = compactor
-            .compact(vec![], SequenceNumber::new(1))
-            .unwrap();
+        let (output, stats) = compactor.compact(vec![], SequenceNumber::new(1)).unwrap();
 
         assert!(output.is_empty());
         assert_eq!(stats.input_records, 0);

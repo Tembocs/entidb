@@ -104,8 +104,7 @@ impl StorageBackend for InMemoryBackend {
             return Err(StorageError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "cannot truncate to size {} which is greater than current size {}",
-                    new_size, current_size
+                    "cannot truncate to size {new_size} which is greater than current size {current_size}"
                 ),
             )));
         }
@@ -230,7 +229,7 @@ mod tests {
     fn memory_truncate_partial() {
         let mut backend = InMemoryBackend::new();
         backend.append(b"hello world").unwrap();
-        
+
         backend.truncate(5).unwrap();
         assert_eq!(backend.size().unwrap(), 5);
         assert_eq!(backend.read_at(0, 5).unwrap(), b"hello");
@@ -240,7 +239,7 @@ mod tests {
     fn memory_truncate_to_larger_size_fails() {
         let mut backend = InMemoryBackend::new();
         backend.append(b"hello").unwrap();
-        
+
         let result = backend.truncate(100);
         assert!(result.is_err());
     }

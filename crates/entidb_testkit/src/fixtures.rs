@@ -30,19 +30,19 @@ impl TestDatabase {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let wal_path = temp_dir.path().join("wal.log");
         let segment_path = temp_dir.path().join("segments.dat");
-        
-        let wal_backend = FileBackend::open_with_create_dirs(&wal_path)
-            .expect("Failed to create WAL backend");
+
+        let wal_backend =
+            FileBackend::open_with_create_dirs(&wal_path).expect("Failed to create WAL backend");
         let segment_backend = FileBackend::open_with_create_dirs(&segment_path)
             .expect("Failed to create segment backend");
-        
+
         let db = Database::open_with_backends(
             Config::default(),
             Box::new(wal_backend),
             Box::new(segment_backend),
         )
         .expect("Failed to open file database");
-        
+
         Self {
             db,
             _temp_dir: Some(temp_dir),
@@ -51,7 +51,9 @@ impl TestDatabase {
 
     /// Returns the database path if file-based, None if in-memory.
     pub fn path(&self) -> Option<PathBuf> {
-        self._temp_dir.as_ref().map(|d| d.path().join("test.entidb"))
+        self._temp_dir
+            .as_ref()
+            .map(|d| d.path().join("test.entidb"))
     }
 }
 

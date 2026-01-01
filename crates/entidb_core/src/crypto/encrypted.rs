@@ -2,7 +2,7 @@
 
 use crate::error::{CoreError, CoreResult};
 use aes_gcm::{
-    aead::{Aead, KeyInit, generic_array::GenericArray},
+    aead::{generic_array::GenericArray, Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use rand::RngCore;

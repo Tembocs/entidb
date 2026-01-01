@@ -315,7 +315,14 @@ mod tests {
         assert!(uu.is_update_conflict());
 
         // Update-delete conflict
-        let ud = Conflict::new(1, [0u8; 16], Some([1u8; 32]), Some([2u8; 32]), Some(vec![1]), None);
+        let ud = Conflict::new(
+            1,
+            [0u8; 16],
+            Some([1u8; 32]),
+            Some([2u8; 32]),
+            Some(vec![1]),
+            None,
+        );
         assert!(ud.is_update_delete_conflict());
     }
 

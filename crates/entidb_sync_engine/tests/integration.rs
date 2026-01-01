@@ -3,11 +3,11 @@
 use entidb_sync_engine::{
     DatabaseApplier, MemorySyncApplier, SyncConfig, SyncEngine, SyncResult, SyncTransport,
 };
-use entidb_sync_server::{ServerConfig, ServerOplog, SyncServer};
 use entidb_sync_protocol::{
     HandshakeRequest, HandshakeResponse, OperationType, PullRequest, PullResponse, PushRequest,
     PushResponse, SyncOperation,
 };
+use entidb_sync_server::{ServerConfig, ServerOplog, SyncServer};
 use std::sync::Arc;
 
 /// A transport that connects to an in-memory server.
@@ -22,10 +22,7 @@ impl InMemoryTransport {
 }
 
 impl SyncTransport for InMemoryTransport {
-    fn handshake(
-        &self,
-        request: &HandshakeRequest,
-    ) -> SyncResult<HandshakeResponse> {
+    fn handshake(&self, request: &HandshakeRequest) -> SyncResult<HandshakeResponse> {
         self.server
             .handle_handshake(request.clone())
             .map_err(|e| entidb_sync_engine::SyncError::ServerError(e))

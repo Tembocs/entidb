@@ -18,7 +18,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --all-features
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo check --workspace --all-targets --exclude entidb_py
 
   fmt:
     name: Format
@@ -39,7 +40,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # Run clippy on lib and bins only (lints are configured via workspace Cargo.toml)
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo clippy --workspace --lib --bins --exclude entidb_py
 
   test:
     name: Test
@@ -51,7 +54,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo test --workspace --exclude entidb_py
 
   test-encryption:
     name: Test with Encryption
@@ -69,7 +73,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps --all-features
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo doc --workspace --no-deps --exclude entidb_py
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -83,7 +88,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo llvm-cov --workspace --exclude entidb_py --lcov --output-path lcov.info
       - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
@@ -96,7 +102,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.75
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --all-features
+      # Exclude entidb_py as Python binding is tested separately in python.yml
+      - run: cargo check --workspace --all-targets --exclude entidb_py
 
   benchmarks:
     name: Benchmarks (dry run)

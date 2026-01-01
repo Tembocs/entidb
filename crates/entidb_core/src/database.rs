@@ -542,28 +542,34 @@ impl Database {
         manifest: Manifest,
     ) -> CoreResult<(Manifest, u64, u64, u64)> {
         use crate::wal::StreamingRecovery;
-        
+
         // Start with manifest's last_checkpoint if available (post-checkpoint recovery)
         // This is critical for MVCC: if WAL was cleared after checkpoint, we need
         // to know the committed_seq from manifest to read segment data correctly.
         let checkpoint_seq = manifest.last_checkpoint.map(|s| s.as_u64()).unwrap_or(0);
-        
+
         // === PASS 1: Streaming scan to identify committed transactions ===
         // Memory usage: O(number of committed transactions), not O(WAL size)
         let mut recovery = StreamingRecovery::new(checkpoint_seq);
         recovery.scan_committed(wal.iter()?)?;
-        
+
         // === PASS 2: Streaming replay of committed operations ===
         // Memory usage: O(1) per record
-        // 
+        //
         // CRITICAL: Only replay transactions with commit_seq > checkpoint_seq.
         // Transactions at or below the checkpoint are already in segments.
         // Skipping them prevents segment bloat on repeated crash-recovery cycles.
         for result in wal.iter()? {
             let (_, record) = result?;
-            
+
             match &record {
-                WalRecord::Put { txid, collection_id, entity_id, after_bytes, .. } => {
+                WalRecord::Put {
+                    txid,
+                    collection_id,
+                    entity_id,
+                    after_bytes,
+                    ..
+                } => {
                     // Only replay if this transaction was committed AND not already checkpointed
                     if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
                         // Skip if already materialized in segments (at or below checkpoint)
@@ -579,18 +585,20 @@ impl Database {
                         segments.append(&segment_record)?;
                     }
                 }
-                WalRecord::Delete { txid, collection_id, entity_id, .. } => {
+                WalRecord::Delete {
+                    txid,
+                    collection_id,
+                    entity_id,
+                    ..
+                } => {
                     // Only replay if this transaction was committed AND not already checkpointed
                     if let Some(commit_seq) = recovery.get_commit_sequence(txid) {
                         // Skip if already materialized in segments (at or below checkpoint)
                         if commit_seq.as_u64() <= checkpoint_seq {
                             continue;
                         }
-                        let segment_record = SegmentRecord::tombstone(
-                            *collection_id,
-                            *entity_id,
-                            commit_seq,
-                        );
+                        let segment_record =
+                            SegmentRecord::tombstone(*collection_id, *entity_id, commit_seq);
                         segments.append(&segment_record)?;
                     }
                 }
@@ -603,7 +611,12 @@ impl Database {
         // Rebuild segment index
         segments.rebuild_index()?;
 
-        Ok((manifest, recovery.next_txid(), recovery.next_seq(), recovery.committed_seq()))
+        Ok((
+            manifest,
+            recovery.next_txid(),
+            recovery.next_seq(),
+            recovery.committed_seq(),
+        ))
     }
 
     /// Begins a new transaction.
@@ -631,28 +644,31 @@ impl Database {
     /// After successful commit, change events are emitted to all subscribers.
     pub fn commit(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
-        
+
         // Capture snapshot sequence for existence checks
         let snapshot_seq = txn.snapshot_seq();
-        
+
         // Collect pending writes before commit (they're consumed during commit)
-        let pending_writes: Vec<_> = txn.pending_writes()
+        let pending_writes: Vec<_> = txn
+            .pending_writes()
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
             .collect();
-        
+
         // Commit the transaction
         let sequence = self.txn_manager.commit(txn)?;
-        
+
         // Record stats
         self.stats.record_transaction_commit();
-        
+
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload, is_update, .. } => {
+                crate::transaction::PendingWrite::Put {
+                    payload, is_update, ..
+                } => {
                     // Track bytes written
                     self.stats.record_write(payload.len() as u64);
-                    
+
                     // Determine if this is an insert or update
                     let is_update = match is_update {
                         Some(known) => known,
@@ -666,7 +682,7 @@ impl Database {
                                 .is_some()
                         }
                     };
-                    
+
                     if is_update {
                         crate::change_feed::ChangeEvent::update(
                             sequence.as_u64(),
@@ -697,7 +713,7 @@ impl Database {
 
         // Check if WAL has grown beyond max_wal_size and trigger auto-checkpoint if needed
         self.maybe_auto_checkpoint();
-        
+
         Ok(sequence)
     }
 
@@ -710,27 +726,31 @@ impl Database {
         wtxn: &mut crate::transaction::WriteTransaction<'_>,
     ) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
-        
+
         // Capture snapshot sequence for existence checks
         let snapshot_seq = wtxn.snapshot_seq();
-        
+
         // Collect pending writes before commit
-        let pending_writes: Vec<_> = wtxn.inner().pending_writes()
+        let pending_writes: Vec<_> = wtxn
+            .inner()
+            .pending_writes()
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
             .collect();
-        
+
         // Commit the transaction
         let sequence = self.txn_manager.commit_write(wtxn)?;
-        
+
         // Record stats
         self.stats.record_transaction_commit();
-        
+
         // Emit change events for each write
         for (collection_id, entity_id, write) in pending_writes {
             let event = match write {
-                crate::transaction::PendingWrite::Put { payload, is_update, .. } => {
+                crate::transaction::PendingWrite::Put {
+                    payload, is_update, ..
+                } => {
                     self.stats.record_write(payload.len() as u64);
-                    
+
                     // Determine if this is an insert or update
                     let is_update = match is_update {
                         Some(known) => known,
@@ -742,7 +762,7 @@ impl Database {
                                 .is_some()
                         }
                     };
-                    
+
                     if is_update {
                         crate::change_feed::ChangeEvent::update(
                             sequence.as_u64(),
@@ -773,7 +793,7 @@ impl Database {
 
         // Check if WAL has grown beyond max_wal_size and trigger auto-checkpoint if needed
         self.maybe_auto_checkpoint();
-        
+
         Ok(sequence)
     }
 
@@ -787,7 +807,10 @@ impl Database {
     /// Aborts a write transaction.
     ///
     /// All pending writes are discarded. The write lock is released after this call.
-    pub fn abort_write(&self, wtxn: &mut crate::transaction::WriteTransaction<'_>) -> CoreResult<()> {
+    pub fn abort_write(
+        &self,
+        wtxn: &mut crate::transaction::WriteTransaction<'_>,
+    ) -> CoreResult<()> {
         self.ensure_open()?;
         self.stats.record_transaction_abort();
         self.txn_manager.abort_write(wtxn)
@@ -886,7 +909,9 @@ impl Database {
         entity_id: EntityId,
     ) -> CoreResult<Option<Vec<u8>>> {
         self.ensure_open()?;
-        let result = self.entity_store.get_in_write_txn(wtxn, collection_id, entity_id);
+        let result = self
+            .entity_store
+            .get_in_write_txn(wtxn, collection_id, entity_id);
         if let Ok(Some(ref data)) = result {
             self.stats.record_read(data.len() as u64);
         }
@@ -919,15 +944,15 @@ impl Database {
     /// ```
     pub fn create_collection(&self, name: &str) -> CoreResult<CollectionId> {
         let mut manifest = self.manifest.write();
-        
+
         // Fast path: collection already exists
         if let Some(id) = manifest.get_collection(name) {
             return Ok(CollectionId::new(id));
         }
-        
+
         // Slow path: create new collection
         let id = manifest.get_or_create_collection(name);
-        
+
         // Persist the manifest if we have a directory
         #[cfg(feature = "std")]
         if let Some(ref dir) = self.dir {
@@ -936,14 +961,14 @@ impl Database {
                 manifest.collections.remove(name);
                 // Restore next_collection_id (the ID we just assigned)
                 manifest.next_collection_id = id;
-                
+
                 return Err(CoreError::manifest_persist_failed(format!(
                     "failed to persist collection '{}': {}",
                     name, e
                 )));
             }
         }
-        
+
         Ok(CollectionId::new(id))
     }
 
@@ -960,7 +985,10 @@ impl Database {
     /// **Warning:** If manifest persistence fails, this method silently falls back
     /// to an in-memory-only collection ID. Data written to such collections will
     /// be LOST on restart. Use `create_collection()` to detect and handle such errors.
-    #[deprecated(since = "0.2.0", note = "use create_collection() for proper error handling")]
+    #[deprecated(
+        since = "0.2.0",
+        note = "use create_collection() for proper error handling"
+    )]
     pub fn collection(&self, name: &str) -> CollectionId {
         match self.create_collection(name) {
             Ok(id) => id,
@@ -1025,10 +1053,10 @@ impl Database {
     /// (which is safe since segments already have the data).
     pub fn checkpoint(&self) -> CoreResult<()> {
         self.ensure_open()?;
-        
+
         // Step 1-2: Sync segments and write checkpoint record to WAL
         let checkpoint_seq = self.txn_manager.checkpoint()?;
-        
+
         // Step 3: Update manifest with checkpoint sequence and save BEFORE truncating WAL
         // This is critical: if we crash after WAL truncation but before manifest save,
         // we could lose track of committed data.
@@ -1038,13 +1066,13 @@ impl Database {
             manifest.last_checkpoint = Some(checkpoint_seq);
             dir.save_manifest(&manifest)?;
         }
-        
+
         // Step 4: Only NOW truncate the WAL, after manifest is durable
         self.txn_manager.truncate_wal()?;
-        
+
         // Record checkpoint stat
         self.stats.record_checkpoint();
-        
+
         Ok(())
     }
 
@@ -1356,11 +1384,7 @@ impl Database {
                     txn.delete(record.collection_id, entity_id)?;
                     tombstones += 1;
                 } else {
-                    txn.put(
-                        record.collection_id,
-                        entity_id,
-                        record.payload.clone(),
-                    )?;
+                    txn.put(record.collection_id, entity_id, record.payload.clone())?;
                     restored += 1;
                 }
             }
@@ -1525,7 +1549,7 @@ impl Database {
             unique,
             created_at_seq,
         )?;
-        
+
         // Also maintain legacy in-memory index for backward compatibility
         let key = (collection_id.as_u32(), field.to_string());
         let mut indexes = self.hash_indexes.write();
@@ -1625,7 +1649,8 @@ impl Database {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance (supports transactional updates)
-        self.index_engine.hash_index_insert_legacy(collection_id, field, key.clone(), entity_id)?;
+        self.index_engine
+            .hash_index_insert_legacy(collection_id, field, key.clone(), entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1656,7 +1681,8 @@ impl Database {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.hash_index_remove_legacy(collection_id, field, key, entity_id)?;
+        self.index_engine
+            .hash_index_remove_legacy(collection_id, field, key, entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1697,9 +1723,10 @@ impl Database {
     ) -> CoreResult<Vec<EntityId>> {
         self.ensure_open()?;
         self.stats.record_index_lookup();
-        
+
         // Use IndexEngine for lookups (authoritative source)
-        self.index_engine.hash_index_lookup_legacy(collection_id, field, key)
+        self.index_engine
+            .hash_index_lookup_legacy(collection_id, field, key)
     }
 
     /// Inserts an entry into a BTree index.
@@ -1720,7 +1747,12 @@ impl Database {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.btree_index_insert_legacy(collection_id, field, key.clone(), entity_id)?;
+        self.index_engine.btree_index_insert_legacy(
+            collection_id,
+            field,
+            key.clone(),
+            entity_id,
+        )?;
 
         // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1750,7 +1782,8 @@ impl Database {
         self.ensure_open()?;
 
         // Use IndexEngine for index maintenance
-        self.index_engine.btree_index_remove_legacy(collection_id, field, key, entity_id)?;
+        self.index_engine
+            .btree_index_remove_legacy(collection_id, field, key, entity_id)?;
 
         // Also maintain legacy in-memory index for backward compatibility
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1790,7 +1823,8 @@ impl Database {
         self.stats.record_index_lookup();
 
         // Use IndexEngine for lookups (authoritative source)
-        self.index_engine.btree_index_lookup_legacy(collection_id, field, key)
+        self.index_engine
+            .btree_index_lookup_legacy(collection_id, field, key)
     }
 
     /// Performs a range query on a BTree index.
@@ -1825,7 +1859,8 @@ impl Database {
         self.stats.record_index_lookup(); // Range query is still an index operation
 
         // Use IndexEngine for range lookups
-        self.index_engine.btree_index_range_legacy(collection_id, field, min_key, max_key)
+        self.index_engine
+            .btree_index_range_legacy(collection_id, field, min_key, max_key)
     }
 
     /// Returns the number of entries in a hash index.
@@ -1834,15 +1869,12 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn hash_index_len(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<usize> {
+    pub fn hash_index_len(&self, collection_id: CollectionId, field: &str) -> CoreResult<usize> {
         self.ensure_open()?;
 
         // Use IndexEngine for index length
-        self.index_engine.hash_index_len_legacy(collection_id, field)
+        self.index_engine
+            .hash_index_len_legacy(collection_id, field)
     }
 
     /// Returns the number of entries in a BTree index.
@@ -1851,15 +1883,12 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn btree_index_len(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<usize> {
+    pub fn btree_index_len(&self, collection_id: CollectionId, field: &str) -> CoreResult<usize> {
         self.ensure_open()?;
 
         // Use IndexEngine for index length
-        self.index_engine.btree_index_len_legacy(collection_id, field)
+        self.index_engine
+            .btree_index_len_legacy(collection_id, field)
     }
 
     /// Drops a hash index.
@@ -1868,15 +1897,13 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn drop_hash_index(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<bool> {
+    pub fn drop_hash_index(&self, collection_id: CollectionId, field: &str) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Drop from IndexEngine (authoritative)
-        let result = self.index_engine.drop_hash_index_legacy(collection_id, field);
+        let result = self
+            .index_engine
+            .drop_hash_index_legacy(collection_id, field);
 
         // Also remove from legacy in-memory index
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1892,15 +1919,13 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn drop_btree_index(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<bool> {
+    pub fn drop_btree_index(&self, collection_id: CollectionId, field: &str) -> CoreResult<bool> {
         self.ensure_open()?;
 
         // Drop from IndexEngine (authoritative)
-        let result = self.index_engine.drop_btree_index_legacy(collection_id, field);
+        let result = self
+            .index_engine
+            .drop_btree_index_legacy(collection_id, field);
 
         // Also remove from legacy in-memory index
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -1938,11 +1963,7 @@ impl Database {
     ///
     /// Per `docs/access_paths.md`, users specify the field to index, not an arbitrary
     /// index name. The engine manages index names internally.
-    pub fn create_fts_index(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<()> {
+    pub fn create_fts_index(&self, collection_id: CollectionId, field: &str) -> CoreResult<()> {
         self.ensure_open()?;
 
         let key = (collection_id.as_u32(), field.to_string());
@@ -2173,11 +2194,7 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn fts_index_len(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<usize> {
+    pub fn fts_index_len(&self, collection_id: CollectionId, field: &str) -> CoreResult<usize> {
         self.ensure_open()?;
 
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -2227,11 +2244,7 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn fts_clear(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<()> {
+    pub fn fts_clear(&self, collection_id: CollectionId, field: &str) -> CoreResult<()> {
         self.ensure_open()?;
 
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -2255,11 +2268,7 @@ impl Database {
     ///
     /// * `collection_id` - The collection
     /// * `field` - The indexed field
-    pub fn drop_fts_index(
-        &self,
-        collection_id: CollectionId,
-        field: &str,
-    ) -> CoreResult<bool> {
+    pub fn drop_fts_index(&self, collection_id: CollectionId, field: &str) -> CoreResult<bool> {
         self.ensure_open()?;
 
         let idx_key = (collection_id.as_u32(), field.to_string());
@@ -2682,15 +2691,15 @@ mod persistence_tests {
 
         // Create a new collection - should succeed
         let users = db.create_collection("users").unwrap();
-        
+
         // Creating again should return same ID (idempotent)
         let users_again = db.create_collection("users").unwrap();
         assert_eq!(users, users_again);
-        
+
         // Different collection should get different ID
         let posts = db.create_collection("posts").unwrap();
         assert_ne!(users, posts);
-        
+
         db.close().unwrap();
     }
 
@@ -2698,21 +2707,24 @@ mod persistence_tests {
     fn create_collection_persists_immediately() {
         let temp = tempdir().unwrap();
         let db_path = temp.path().join("persist_immediate_test");
-        
+
         let collection_id;
-        
+
         // First session: create collection using create_collection
         {
             let db = Database::open(&db_path).unwrap();
             collection_id = db.create_collection("users").unwrap();
             // Don't close cleanly - drop without close()
         }
-        
+
         // Second session: collection should exist because manifest was saved
         {
             let db = Database::open(&db_path).unwrap();
             let recovered_id = db.get_collection("users");
-            assert!(recovered_id.is_some(), "collection should persist immediately after create_collection");
+            assert!(
+                recovered_id.is_some(),
+                "collection should persist immediately after create_collection"
+            );
             assert_eq!(recovered_id.unwrap(), collection_id);
             db.close().unwrap();
         }
@@ -2722,22 +2734,23 @@ mod persistence_tests {
     fn create_collection_with_data_persists() {
         let temp = tempdir().unwrap();
         let db_path = temp.path().join("collection_data_persist");
-        
+
         let entity_id = EntityId::new();
-        
+
         // First session: create and populate
         {
             let db = Database::open(&db_path).unwrap();
             let users = db.create_collection("users").unwrap();
-            
+
             db.transaction(|txn| {
                 txn.put(users, entity_id, vec![1, 2, 3])?;
                 Ok(())
-            }).unwrap();
-            
+            })
+            .unwrap();
+
             db.close().unwrap();
         }
-        
+
         // Second session: verify both collection and data persist
         {
             let db = Database::open(&db_path).unwrap();
@@ -2753,7 +2766,7 @@ mod persistence_tests {
         // In-memory databases don't have a directory, so create_collection
         // should still work (just doesn't persist)
         let db = Database::open_in_memory().unwrap();
-        
+
         let users = db.create_collection("users").unwrap();
         let users_again = db.create_collection("users").unwrap();
         assert_eq!(users, users_again);
@@ -2763,7 +2776,7 @@ mod persistence_tests {
     fn multiple_collections_persist() {
         let temp = tempdir().unwrap();
         let db_path = temp.path().join("multi_collection_test");
-        
+
         // First session: create multiple collections
         {
             let db = Database::open(&db_path).unwrap();
@@ -2772,7 +2785,7 @@ mod persistence_tests {
             db.create_collection("comments").unwrap();
             db.close().unwrap();
         }
-        
+
         // Second session: all should exist
         {
             let db = Database::open(&db_path).unwrap();
@@ -2809,7 +2822,9 @@ mod index_tests {
             .unwrap();
 
         // Should be able to lookup
-        let found = db.hash_index_lookup(collection, "email", b"alice@example.com").unwrap();
+        let found = db
+            .hash_index_lookup(collection, "email", b"alice@example.com")
+            .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], entity);
     }
@@ -2825,14 +2840,21 @@ mod index_tests {
         let e2 = EntityId::new();
         let e3 = EntityId::new();
 
-        db.hash_index_insert(collection, "status", b"active".to_vec(), e1).unwrap();
-        db.hash_index_insert(collection, "status", b"active".to_vec(), e2).unwrap();
-        db.hash_index_insert(collection, "status", b"inactive".to_vec(), e3).unwrap();
+        db.hash_index_insert(collection, "status", b"active".to_vec(), e1)
+            .unwrap();
+        db.hash_index_insert(collection, "status", b"active".to_vec(), e2)
+            .unwrap();
+        db.hash_index_insert(collection, "status", b"inactive".to_vec(), e3)
+            .unwrap();
 
-        let active = db.hash_index_lookup(collection, "status", b"active").unwrap();
+        let active = db
+            .hash_index_lookup(collection, "status", b"active")
+            .unwrap();
         assert_eq!(active.len(), 2);
 
-        let inactive = db.hash_index_lookup(collection, "status", b"inactive").unwrap();
+        let inactive = db
+            .hash_index_lookup(collection, "status", b"inactive")
+            .unwrap();
         assert_eq!(inactive.len(), 1);
     }
 
@@ -2893,7 +2915,9 @@ mod index_tests {
             .unwrap();
 
         // Lookup exact
-        let found = db.btree_index_lookup(collection, "age", &30i64.to_be_bytes()).unwrap();
+        let found = db
+            .btree_index_lookup(collection, "age", &30i64.to_be_bytes())
+            .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], e2);
     }
@@ -2910,23 +2934,33 @@ mod index_tests {
         let e3 = EntityId::new();
         let e4 = EntityId::new();
 
-        db.btree_index_insert(collection, "age", 20i64.to_be_bytes().to_vec(), e1).unwrap();
-        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e2).unwrap();
-        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e3).unwrap();
-        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e4).unwrap();
+        db.btree_index_insert(collection, "age", 20i64.to_be_bytes().to_vec(), e1)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e2)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e3)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e4)
+            .unwrap();
 
         // Range: 25 <= age <= 30
         let min = 25i64.to_be_bytes();
         let max = 30i64.to_be_bytes();
-        let found = db.btree_index_range(collection, "age", Some(&min), Some(&max)).unwrap();
+        let found = db
+            .btree_index_range(collection, "age", Some(&min), Some(&max))
+            .unwrap();
         assert_eq!(found.len(), 2);
 
         // Range: age >= 30
-        let found = db.btree_index_range(collection, "age", Some(&max), None).unwrap();
+        let found = db
+            .btree_index_range(collection, "age", Some(&max), None)
+            .unwrap();
         assert_eq!(found.len(), 2);
 
         // Range: age <= 25
-        let found = db.btree_index_range(collection, "age", None, Some(&min)).unwrap();
+        let found = db
+            .btree_index_range(collection, "age", None, Some(&min))
+            .unwrap();
         assert_eq!(found.len(), 2);
 
         // All
@@ -2959,7 +2993,10 @@ mod index_tests {
 
         // Creating same index again is idempotent (no-op), returns Ok
         let result = db.create_hash_index(collection, "email", true);
-        assert!(result.is_ok(), "duplicate index creation should be idempotent");
+        assert!(
+            result.is_ok(),
+            "duplicate index creation should be idempotent"
+        );
     }
 
     #[test]
@@ -3095,10 +3132,7 @@ mod observability_tests {
         let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
         assert_eq!(event.collection_id, collection.as_u32());
         assert_eq!(event.entity_id, *entity.as_bytes());
-        assert_eq!(
-            event.change_type,
-            crate::change_feed::ChangeType::Insert
-        );
+        assert_eq!(event.change_type, crate::change_feed::ChangeType::Insert);
         assert_eq!(event.payload, Some(payload));
     }
 
@@ -3169,7 +3203,9 @@ mod observability_tests {
             .unwrap();
 
         // Perform lookup
-        let _results = db.hash_index_lookup(collection, "email", b"test@example.com").unwrap();
+        let _results = db
+            .hash_index_lookup(collection, "email", b"test@example.com")
+            .unwrap();
 
         let stats = db.stats();
         assert_eq!(stats.index_lookups, 1);
@@ -3301,18 +3337,23 @@ mod observability_tests {
             .unwrap();
 
         // Search any "hello goodbye" - entity1 and entity2 should match (OR semantics)
-        let results = db.fts_search_any(collection, "content", "hello goodbye").unwrap();
+        let results = db
+            .fts_search_any(collection, "content", "hello goodbye")
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.contains(&entity1));
         assert!(results.contains(&entity2));
 
         // Search any "rust python" - only entity3 should match
-        let results = db.fts_search_any(collection, "content", "rust python").unwrap();
+        let results = db
+            .fts_search_any(collection, "content", "rust python")
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert!(results.contains(&entity3));
 
         // Search any with one matching term
-        let results = db.fts_search_any(collection, "content", "notexist rust")
+        let results = db
+            .fts_search_any(collection, "content", "notexist rust")
             .unwrap();
         assert_eq!(results.len(), 1);
         assert!(results.contains(&entity3));
@@ -3426,7 +3467,8 @@ mod observability_tests {
         assert_eq!(results.len(), 2);
 
         // Remove entity1
-        db.fts_remove_entity(collection, "content", entity1).unwrap();
+        db.fts_remove_entity(collection, "content", entity1)
+            .unwrap();
 
         // Now only entity2 should be found
         let results = db.fts_search(collection, "content", "hello").unwrap();
@@ -3782,7 +3824,8 @@ mod observability_tests {
         let entity = EntityId::new();
 
         // Indexing empty text should succeed but add no tokens
-        db.fts_index_text(collection, "content", entity, "").unwrap();
+        db.fts_index_text(collection, "content", entity, "")
+            .unwrap();
 
         // Entity count should still increase (entity is tracked even without tokens)
         // But search for anything should return nothing
@@ -4163,7 +4206,11 @@ mod wal_durability_tests {
 
             // Entity1 should have updated value
             let data1 = db.get(collection, entity1).unwrap();
-            assert_eq!(data1, Some(vec![1, 1, 1, 1]), "entity1 should have updated value");
+            assert_eq!(
+                data1,
+                Some(vec![1, 1, 1, 1]),
+                "entity1 should have updated value"
+            );
 
             // Entity2 should exist
             let data2 = db.get(collection, entity2).unwrap();
@@ -4200,7 +4247,8 @@ mod wal_durability_tests {
 
             // Start a transaction but abort it
             let mut txn = db.begin().unwrap();
-            txn.put(collection, entity_uncommitted, vec![4, 5, 6]).unwrap();
+            txn.put(collection, entity_uncommitted, vec![4, 5, 6])
+                .unwrap();
             db.abort(&mut txn).unwrap();
 
             // Simulate crash
@@ -4213,7 +4261,11 @@ mod wal_durability_tests {
             let collection = db.collection("items");
 
             let committed = db.get(collection, entity_committed).unwrap();
-            assert_eq!(committed, Some(vec![1, 2, 3]), "committed entity should exist");
+            assert_eq!(
+                committed,
+                Some(vec![1, 2, 3]),
+                "committed entity should exist"
+            );
 
             let uncommitted = db.get(collection, entity_uncommitted).unwrap();
             assert!(uncommitted.is_none(), "aborted entity should NOT exist");
@@ -4245,7 +4297,8 @@ mod wal_durability_tests {
 
             // Start a transaction and write, but don't commit before crash
             let mut txn = db.begin().unwrap();
-            txn.put(collection, entity_inflight, vec![40, 50, 60]).unwrap();
+            txn.put(collection, entity_inflight, vec![40, 50, 60])
+                .unwrap();
             // Don't commit - just drop the db
             drop(txn);
             drop(db);
@@ -4257,10 +4310,17 @@ mod wal_durability_tests {
             let collection = db.collection("items");
 
             let committed = db.get(collection, entity_committed).unwrap();
-            assert_eq!(committed, Some(vec![10, 20, 30]), "committed entity should exist");
+            assert_eq!(
+                committed,
+                Some(vec![10, 20, 30]),
+                "committed entity should exist"
+            );
 
             let inflight = db.get(collection, entity_inflight).unwrap();
-            assert!(inflight.is_none(), "in-flight entity should NOT exist after crash");
+            assert!(
+                inflight.is_none(),
+                "in-flight entity should NOT exist after crash"
+            );
 
             db.close().unwrap();
         }
@@ -4308,7 +4368,10 @@ mod wal_durability_tests {
             let collection = db.collection("items");
 
             let data = db.get(collection, entity).unwrap();
-            assert!(data.is_none(), "deleted entity should remain deleted after crash");
+            assert!(
+                data.is_none(),
+                "deleted entity should remain deleted after crash"
+            );
 
             db.close().unwrap();
         }
@@ -4564,27 +4627,37 @@ mod index_rebuild_tests {
             let collection = db.collection("users");
 
             // Create a hash index using the new IndexEngine API
-            db.index_engine.create_index(
-                collection,
-                vec!["email".to_string()],
-                crate::index::IndexKind::Hash,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
+            db.index_engine
+                .create_index(
+                    collection,
+                    vec!["email".to_string()],
+                    crate::index::IndexKind::Hash,
+                    false,
+                    SequenceNumber::new(0),
+                )
+                .unwrap();
 
             // Store entities with email field in CBOR
-            let user1_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("email".to_string()), 
-                 entidb_codec::Value::Text("alice@example.com".to_string())),
-            ]).encode().unwrap();
-            let user2_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("email".to_string()), 
-                 entidb_codec::Value::Text("bob@example.com".to_string())),
-            ]).encode().unwrap();
+            let user1_cbor = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("email".to_string()),
+                entidb_codec::Value::Text("alice@example.com".to_string()),
+            )])
+            .encode()
+            .unwrap();
+            let user2_cbor = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("email".to_string()),
+                entidb_codec::Value::Text("bob@example.com".to_string()),
+            )])
+            .encode()
+            .unwrap();
             let user3_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("email".to_string()), 
-                 entidb_codec::Value::Text("alice@example.com".to_string())), // Duplicate email
-            ]).encode().unwrap();
+                (
+                    entidb_codec::Value::Text("email".to_string()),
+                    entidb_codec::Value::Text("alice@example.com".to_string()),
+                ), // Duplicate email
+            ])
+            .encode()
+            .unwrap();
 
             db.transaction(|txn| {
                 txn.put(collection, entity1, user1_cbor.clone())?;
@@ -4608,7 +4681,7 @@ mod index_rebuild_tests {
 
             // Verify data is accessible
             assert_eq!(db.entity_count(), 3);
-            
+
             // Verify all entities exist
             assert!(db.get(collection, entity1).unwrap().is_some());
             assert!(db.get(collection, entity2).unwrap().is_some());
@@ -4634,27 +4707,35 @@ mod index_rebuild_tests {
             let collection = db.collection("users");
 
             // Create a btree index using the new IndexEngine API
-            db.index_engine.create_index(
-                collection,
-                vec!["age".to_string()],
-                crate::index::IndexKind::BTree,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
+            db.index_engine
+                .create_index(
+                    collection,
+                    vec!["age".to_string()],
+                    crate::index::IndexKind::BTree,
+                    false,
+                    SequenceNumber::new(0),
+                )
+                .unwrap();
 
             // Store entities with age field in CBOR
-            let user1_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("age".to_string()), 
-                 entidb_codec::Value::Integer(25)),
-            ]).encode().unwrap();
-            let user2_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("age".to_string()), 
-                 entidb_codec::Value::Integer(30)),
-            ]).encode().unwrap();
-            let user3_cbor = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("age".to_string()), 
-                 entidb_codec::Value::Integer(35)),
-            ]).encode().unwrap();
+            let user1_cbor = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("age".to_string()),
+                entidb_codec::Value::Integer(25),
+            )])
+            .encode()
+            .unwrap();
+            let user2_cbor = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("age".to_string()),
+                entidb_codec::Value::Integer(30),
+            )])
+            .encode()
+            .unwrap();
+            let user3_cbor = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("age".to_string()),
+                entidb_codec::Value::Integer(35),
+            )])
+            .encode()
+            .unwrap();
 
             db.transaction(|txn| {
                 txn.put(collection, entity1, user1_cbor)?;
@@ -4674,7 +4755,7 @@ mod index_rebuild_tests {
 
             // Verify data is accessible
             assert_eq!(db.entity_count(), 3);
-            
+
             assert!(db.get(collection, entity1).unwrap().is_some());
             assert!(db.get(collection, entity2).unwrap().is_some());
             assert!(db.get(collection, entity3).unwrap().is_some());
@@ -4719,14 +4800,10 @@ mod index_rebuild_tests {
             let users = db.get_collection("users").unwrap();
             let posts = db.get_collection("posts").unwrap();
 
-            let user_indexes: Vec<_> = defs.iter()
-                .filter(|d| d.collection_id == users)
-                .collect();
+            let user_indexes: Vec<_> = defs.iter().filter(|d| d.collection_id == users).collect();
             assert_eq!(user_indexes.len(), 2, "users should have 2 indexes");
 
-            let post_indexes: Vec<_> = defs.iter()
-                .filter(|d| d.collection_id == posts)
-                .collect();
+            let post_indexes: Vec<_> = defs.iter().filter(|d| d.collection_id == posts).collect();
             assert_eq!(post_indexes.len(), 1, "posts should have 1 index");
 
             db.close().unwrap();
@@ -4749,20 +4826,24 @@ mod index_rebuild_tests {
             let collection = db.collection("items");
 
             // Create index
-            db.index_engine.create_index(
-                collection,
-                vec!["name".to_string()],
-                crate::index::IndexKind::Hash,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
+            db.index_engine
+                .create_index(
+                    collection,
+                    vec!["name".to_string()],
+                    crate::index::IndexKind::Hash,
+                    false,
+                    SequenceNumber::new(0),
+                )
+                .unwrap();
 
             // Create entities
             for (id, name) in [(entity1, "alice"), (entity2, "bob"), (entity3, "charlie")] {
-                let cbor = entidb_codec::Value::Map(vec![
-                    (entidb_codec::Value::Text("name".to_string()), 
-                     entidb_codec::Value::Text(name.to_string())),
-                ]).encode().unwrap();
+                let cbor = entidb_codec::Value::Map(vec![(
+                    entidb_codec::Value::Text("name".to_string()),
+                    entidb_codec::Value::Text(name.to_string()),
+                )])
+                .encode()
+                .unwrap();
                 db.transaction(|txn| {
                     txn.put(collection, id, cbor)?;
                     Ok(())
@@ -4778,7 +4859,10 @@ mod index_rebuild_tests {
             .unwrap();
 
             // Verify entity2 is deleted (get returns None)
-            assert!(db.get(collection, entity2).unwrap().is_none(), "deleted entity should not be accessible");
+            assert!(
+                db.get(collection, entity2).unwrap().is_none(),
+                "deleted entity should not be accessible"
+            );
             // Note: entity_count() currently includes tombstoned entities in index
             // This is a known gap - entity_count should exclude tombstones
 
@@ -4818,19 +4902,23 @@ mod index_rebuild_tests {
             let collection = db.collection("users");
 
             // Create index on "status" field
-            db.index_engine.create_index(
-                collection,
-                vec!["status".to_string()],
-                crate::index::IndexKind::Hash,
-                false,
-                SequenceNumber::new(0),
-            ).unwrap();
+            db.index_engine
+                .create_index(
+                    collection,
+                    vec!["status".to_string()],
+                    crate::index::IndexKind::Hash,
+                    false,
+                    SequenceNumber::new(0),
+                )
+                .unwrap();
 
             // Initial value
-            let cbor1 = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("status".to_string()), 
-                 entidb_codec::Value::Text("pending".to_string())),
-            ]).encode().unwrap();
+            let cbor1 = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("status".to_string()),
+                entidb_codec::Value::Text("pending".to_string()),
+            )])
+            .encode()
+            .unwrap();
             db.transaction(|txn| {
                 txn.put(collection, entity, cbor1)?;
                 Ok(())
@@ -4838,10 +4926,12 @@ mod index_rebuild_tests {
             .unwrap();
 
             // Update 1
-            let cbor2 = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("status".to_string()), 
-                 entidb_codec::Value::Text("active".to_string())),
-            ]).encode().unwrap();
+            let cbor2 = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("status".to_string()),
+                entidb_codec::Value::Text("active".to_string()),
+            )])
+            .encode()
+            .unwrap();
             db.transaction(|txn| {
                 txn.put(collection, entity, cbor2)?;
                 Ok(())
@@ -4849,10 +4939,12 @@ mod index_rebuild_tests {
             .unwrap();
 
             // Update 2 (final)
-            let cbor3 = entidb_codec::Value::Map(vec![
-                (entidb_codec::Value::Text("status".to_string()), 
-                 entidb_codec::Value::Text("completed".to_string())),
-            ]).encode().unwrap();
+            let cbor3 = entidb_codec::Value::Map(vec![(
+                entidb_codec::Value::Text("status".to_string()),
+                entidb_codec::Value::Text("completed".to_string()),
+            )])
+            .encode()
+            .unwrap();
             db.transaction(|txn| {
                 txn.put(collection, entity, cbor3.clone())?;
                 Ok(())
@@ -4876,7 +4968,8 @@ mod index_rebuild_tests {
 
             // Verify it's the final "completed" status
             if let entidb_codec::Value::Map(entries) = value {
-                let status = entries.iter()
+                let status = entries
+                    .iter()
                     .find(|(k, _)| matches!(k, entidb_codec::Value::Text(s) if s == "status"))
                     .map(|(_, v)| v);
                 assert!(matches!(status, Some(entidb_codec::Value::Text(s)) if s == "completed"));
@@ -4922,7 +5015,8 @@ mod index_atomicity_tests {
         let mut txn = db.begin().unwrap();
 
         // Insert into index within transaction
-        db.hash_index_insert(collection, "email", key.clone(), entity).unwrap();
+        db.hash_index_insert(collection, "email", key.clone(), entity)
+            .unwrap();
 
         // Before commit: lookup from another "reader" perspective should find it
         // (since we're using the legacy immediate-insert API, this isn't truly transactional)
@@ -4950,10 +5044,18 @@ mod index_atomicity_tests {
         let entity_aborted = EntityId::new();
 
         // First: commit an entity
-        db.hash_index_insert(collection, "email", b"alice@example.com".to_vec(), entity_committed).unwrap();
-        
+        db.hash_index_insert(
+            collection,
+            "email",
+            b"alice@example.com".to_vec(),
+            entity_committed,
+        )
+        .unwrap();
+
         // Verify it exists
-        let results = db.hash_index_lookup(collection, "email", b"alice@example.com").unwrap();
+        let results = db
+            .hash_index_lookup(collection, "email", b"alice@example.com")
+            .unwrap();
         assert_eq!(results.len(), 1);
 
         // Start a transaction that will be aborted
@@ -4961,13 +5063,21 @@ mod index_atomicity_tests {
 
         // Add another entity to index (using legacy API which is immediate)
         // Note: This documents current behavior - the legacy API doesn't participate in transactions
-        db.hash_index_insert(collection, "email", b"bob@example.com".to_vec(), entity_aborted).unwrap();
+        db.hash_index_insert(
+            collection,
+            "email",
+            b"bob@example.com".to_vec(),
+            entity_aborted,
+        )
+        .unwrap();
 
         // Abort the transaction
         db.abort(&mut txn).unwrap();
 
         // The committed entity should still exist
-        let results = db.hash_index_lookup(collection, "email", b"alice@example.com").unwrap();
+        let results = db
+            .hash_index_lookup(collection, "email", b"alice@example.com")
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], entity_committed);
     }
@@ -4989,12 +5099,15 @@ mod index_atomicity_tests {
             Ok(())
         })
         .unwrap();
-        db.hash_index_insert(collection, "status", b"active".to_vec(), entity).unwrap();
+        db.hash_index_insert(collection, "status", b"active".to_vec(), entity)
+            .unwrap();
 
         // Verify initial state
         let data = db.get(collection, entity).unwrap();
         assert_eq!(data, Some(vec![1, 2, 3]));
-        let idx_results = db.hash_index_lookup(collection, "status", b"active").unwrap();
+        let idx_results = db
+            .hash_index_lookup(collection, "status", b"active")
+            .unwrap();
         assert_eq!(idx_results.len(), 1);
 
         // Attempt to update with a transaction that fails
@@ -5009,11 +5122,21 @@ mod index_atomicity_tests {
 
         // Entity data should be unchanged
         let data = db.get(collection, entity).unwrap();
-        assert_eq!(data, Some(vec![1, 2, 3]), "entity should be unchanged after failed txn");
+        assert_eq!(
+            data,
+            Some(vec![1, 2, 3]),
+            "entity should be unchanged after failed txn"
+        );
 
         // Index should be unchanged
-        let idx_results = db.hash_index_lookup(collection, "status", b"active").unwrap();
-        assert_eq!(idx_results.len(), 1, "index should be unchanged after failed txn");
+        let idx_results = db
+            .hash_index_lookup(collection, "status", b"active")
+            .unwrap();
+        assert_eq!(
+            idx_results.len(),
+            1,
+            "index should be unchanged after failed txn"
+        );
     }
 
     /// Tests that btree index operations work correctly with transactions.
@@ -5030,9 +5153,12 @@ mod index_atomicity_tests {
         let e2 = EntityId::new();
         let e3 = EntityId::new();
 
-        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e1).unwrap();
-        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e2).unwrap();
-        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e3).unwrap();
+        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), e1)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 30i64.to_be_bytes().to_vec(), e2)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 35i64.to_be_bytes().to_vec(), e3)
+            .unwrap();
 
         // Range query should return all
         let results = db.btree_index_range(collection, "age", None, None).unwrap();
@@ -5072,14 +5198,20 @@ mod index_atomicity_tests {
         .unwrap();
 
         // Add to both indexes
-        db.hash_index_insert(collection, "email", b"user@test.com".to_vec(), entity).unwrap();
-        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), entity).unwrap();
+        db.hash_index_insert(collection, "email", b"user@test.com".to_vec(), entity)
+            .unwrap();
+        db.btree_index_insert(collection, "age", 25i64.to_be_bytes().to_vec(), entity)
+            .unwrap();
 
         // Both should be queryable
-        let hash_results = db.hash_index_lookup(collection, "email", b"user@test.com").unwrap();
+        let hash_results = db
+            .hash_index_lookup(collection, "email", b"user@test.com")
+            .unwrap();
         assert_eq!(hash_results.len(), 1);
 
-        let btree_results = db.btree_index_lookup(collection, "age", &25i64.to_be_bytes()).unwrap();
+        let btree_results = db
+            .btree_index_lookup(collection, "age", &25i64.to_be_bytes())
+            .unwrap();
         assert_eq!(btree_results.len(), 1);
 
         assert_eq!(hash_results[0], btree_results[0]);
@@ -5097,14 +5229,16 @@ mod index_atomicity_tests {
         let key = b"active".to_vec();
 
         // Insert into index
-        db.hash_index_insert(collection, "status", key.clone(), entity).unwrap();
+        db.hash_index_insert(collection, "status", key.clone(), entity)
+            .unwrap();
 
         // Verify it exists
         assert_eq!(db.hash_index_len(collection, "status").unwrap(), 1);
 
         // Remove within a transaction context
         let mut txn = db.begin().unwrap();
-        db.hash_index_remove(collection, "status", &key, entity).unwrap();
+        db.hash_index_remove(collection, "status", &key, entity)
+            .unwrap();
 
         // The remove happened immediately (legacy API)
         assert_eq!(db.hash_index_len(collection, "status").unwrap(), 0);
@@ -5130,14 +5264,18 @@ mod index_atomicity_tests {
         let entity2 = EntityId::new();
 
         // Insert first entity
-        db.hash_index_insert(collection, "email", b"unique@test.com".to_vec(), entity1).unwrap();
+        db.hash_index_insert(collection, "email", b"unique@test.com".to_vec(), entity1)
+            .unwrap();
 
         // Try to insert duplicate - should fail
-        let result = db.hash_index_insert(collection, "email", b"unique@test.com".to_vec(), entity2);
+        let result =
+            db.hash_index_insert(collection, "email", b"unique@test.com".to_vec(), entity2);
         assert!(result.is_err(), "duplicate key should be rejected");
 
         // Original entry should still be there
-        let results = db.hash_index_lookup(collection, "email", b"unique@test.com").unwrap();
+        let results = db
+            .hash_index_lookup(collection, "email", b"unique@test.com")
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], entity1);
     }

@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn index_and_search() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
         index.index_text(entity(2), "World of rust").unwrap();
         index.index_text(entity(3), "Rust is great").unwrap();
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn search_multi_token() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
         index.index_text(entity(2), "World of rust").unwrap();
         index.index_text(entity(3), "Hello rust").unwrap();
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn search_any() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
         index.index_text(entity(2), "World of rust").unwrap();
         index.index_text(entity(3), "Hello rust").unwrap();
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn search_prefix() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "rust").unwrap();
         index.index_text(entity(2), "rusty").unwrap();
         index.index_text(entity(3), "ruby").unwrap();
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn remove_entity() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
         index.index_text(entity(2), "World of rust").unwrap();
 
@@ -543,9 +543,9 @@ mod tests {
     #[test]
     fn update_entity() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
-        
+
         // Re-indexing the same entity replaces the old text
         index.index_text(entity(1), "Goodbye world").unwrap();
 
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn token_frequency() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "rust rust rust").unwrap();
         index.index_text(entity(2), "rust is great").unwrap();
         index.index_text(entity(3), "rust programming").unwrap();
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn tokens_for_entity() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello World").unwrap();
 
         let tokens = index.tokens_for_entity(entity(1)).unwrap();
@@ -589,12 +589,12 @@ mod tests {
     #[test]
     fn clear_index() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "Hello world").unwrap();
         index.index_text(entity(2), "World of rust").unwrap();
 
         assert_eq!(index.entity_count(), 2);
-        
+
         index.clear();
 
         assert!(index.is_empty());
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn rebuild() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "old text").unwrap();
 
         index.rebuild(vec![
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn unicode_text() {
         let mut index = create_index();
-        
+
         index.index_text(entity(1), "こんにちは世界").unwrap();
         index.index_text(entity(2), "Привет мир").unwrap();
         index.index_text(entity(3), "مرحبا بالعالم").unwrap();

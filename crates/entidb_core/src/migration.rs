@@ -358,10 +358,9 @@ impl MigrationManager {
         version: MigrationVersion,
         state: &mut MigrationState,
     ) -> CoreResult<MigrationResult> {
-        let migration = self
-            .migrations
-            .get(&version)
-            .ok_or_else(|| CoreError::migration_failed(format!("migration {} not found", version)))?;
+        let migration = self.migrations.get(&version).ok_or_else(|| {
+            CoreError::migration_failed(format!("migration {} not found", version))
+        })?;
 
         if state.is_applied(version) {
             return Err(CoreError::migration_failed(format!(

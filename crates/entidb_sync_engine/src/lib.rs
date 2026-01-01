@@ -44,5 +44,7 @@ pub use config::{RetryConfig, SyncConfig};
 pub use db_applier::DatabaseApplier;
 pub use error::{SyncError, SyncResult};
 pub use http::{CborDecode, CborEncode, HttpClient, HttpTransport, LoopbackClient, LoopbackServer};
-pub use state::{MemorySyncApplier, SyncApplier, SyncCycleResult, SyncEngine, SyncState, SyncStats};
+pub use state::{
+    MemorySyncApplier, SyncApplier, SyncCycleResult, SyncEngine, SyncState, SyncStats,
+};
 pub use transport::{MockTransport, SyncRequest, SyncResponse, SyncTransport};

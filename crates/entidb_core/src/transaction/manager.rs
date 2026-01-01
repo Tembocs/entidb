@@ -3,7 +3,9 @@
 use crate::entity::EntityId;
 use crate::error::{CoreError, CoreResult};
 use crate::segment::{SegmentManager, SegmentRecord};
-use crate::transaction::state::{compute_content_hash, PendingWrite, Transaction, WriteTransaction};
+use crate::transaction::state::{
+    compute_content_hash, PendingWrite, Transaction, WriteTransaction,
+};
 use crate::types::{CollectionId, SequenceNumber, TransactionId};
 use crate::wal::{WalManager, WalRecord};
 use parking_lot::{Mutex, RwLock};
@@ -147,10 +149,10 @@ impl TransactionManager {
             };
 
             // Get the current committed value
-            let current_value = self
-                .segments
-                .get(*collection_id, entity_id.as_bytes())?;
-            let current_hash = current_value.as_ref().map(|bytes| compute_content_hash(bytes));
+            let current_value = self.segments.get(*collection_id, entity_id.as_bytes())?;
+            let current_hash = current_value
+                .as_ref()
+                .map(|bytes| compute_content_hash(bytes));
 
             // If we have an expected hash, verify it matches
             if let Some(expected) = expected_hash {
@@ -171,7 +173,9 @@ impl TransactionManager {
                     }
                     _ => {} // Hash matches, no conflict
                 }
-            } else if current_hash.is_some() && txn.get_read_hash(*collection_id, *entity_id) == Some(None) {
+            } else if current_hash.is_some()
+                && txn.get_read_hash(*collection_id, *entity_id) == Some(None)
+            {
                 // We read the entity as non-existent but it now exists
                 return Err(CoreError::TransactionConflict {
                     collection_id: collection_id.as_u32(),
@@ -184,7 +188,11 @@ impl TransactionManager {
         for ((collection_id, entity_id), write) in txn.pending_writes() {
             let entity_bytes = *entity_id.as_bytes();
             match write {
-                PendingWrite::Put { payload, before_hash, .. } => {
+                PendingWrite::Put {
+                    payload,
+                    before_hash,
+                    ..
+                } => {
                     self.wal.append(&WalRecord::Put {
                         txid,
                         collection_id: *collection_id,
@@ -246,7 +254,7 @@ impl TransactionManager {
     }
 
     /// Applies committed transaction writes to segments.
-    /// 
+    ///
     /// This is separated from commit_inner to handle errors appropriately
     /// after WAL is already durable.
     fn apply_to_segments(&self, txn: &Transaction, sequence: SequenceNumber) -> CoreResult<()> {
@@ -313,9 +321,11 @@ impl TransactionManager {
 
         // Read from segments at the transaction's snapshot point
         let snapshot_seq = txn.snapshot_seq();
-        let result = self
-            .segments
-            .get_at_snapshot(collection_id, entity_id.as_bytes(), Some(snapshot_seq))?;
+        let result = self.segments.get_at_snapshot(
+            collection_id,
+            entity_id.as_bytes(),
+            Some(snapshot_seq),
+        )?;
 
         // Record the read for conflict detection with content hash
         let observed_hash = result.as_ref().map(|bytes| compute_content_hash(bytes));
@@ -381,7 +391,7 @@ impl TransactionManager {
         self.segments.sync()?;
 
         let sequence = self.committed_seq();
-        
+
         // Write checkpoint record
         self.wal.append(&WalRecord::Checkpoint { sequence })?;
         self.wal.flush()?;
@@ -807,7 +817,11 @@ mod tests {
         // Transaction 1's commit should fail with conflict error
         let result = tm.commit(&mut txn1);
         assert!(result.is_err());
-        if let Err(crate::error::CoreError::TransactionConflict { collection_id, entity_id }) = result {
+        if let Err(crate::error::CoreError::TransactionConflict {
+            collection_id,
+            entity_id,
+        }) = result
+        {
             assert_eq!(collection_id, collection.as_u32());
             assert_eq!(entity_id, *entity.as_bytes());
         } else {

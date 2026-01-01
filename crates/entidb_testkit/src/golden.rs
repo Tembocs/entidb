@@ -237,7 +237,11 @@ mod tests {
     fn test_cbor_vectors_valid() {
         for vector in cbor_vectors::standard_vectors() {
             let bytes = hex_decode(vector.expected_hex);
-            assert!(!bytes.is_empty(), "Vector '{}' should not be empty", vector.description);
+            assert!(
+                !bytes.is_empty(),
+                "Vector '{}' should not be empty",
+                vector.description
+            );
         }
     }
 }

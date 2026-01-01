@@ -326,13 +326,22 @@ mod tests {
         let e3 = EntityId::new();
 
         index
-            .insert(CompositeKey2::new("Smith".to_string(), "John".to_string()), e1)
+            .insert(
+                CompositeKey2::new("Smith".to_string(), "John".to_string()),
+                e1,
+            )
             .unwrap();
         index
-            .insert(CompositeKey2::new("Smith".to_string(), "Jane".to_string()), e2)
+            .insert(
+                CompositeKey2::new("Smith".to_string(), "Jane".to_string()),
+                e2,
+            )
             .unwrap();
         index
-            .insert(CompositeKey2::new("Jones".to_string(), "Bob".to_string()), e3)
+            .insert(
+                CompositeKey2::new("Jones".to_string(), "Bob".to_string()),
+                e3,
+            )
             .unwrap();
 
         // Lookup exact

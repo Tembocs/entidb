@@ -62,7 +62,10 @@ impl HandshakeRequest {
     /// Encodes to CBOR.
     pub fn encode(&self) -> CodecResult<Vec<u8>> {
         let pairs = vec![
-            (Value::Text("db_id".into()), Value::Bytes(self.db_id.to_vec())),
+            (
+                Value::Text("db_id".into()),
+                Value::Bytes(self.db_id.to_vec()),
+            ),
             (
                 Value::Text("device_id".into()),
                 Value::Bytes(self.device_id.to_vec()),
@@ -82,9 +85,9 @@ impl HandshakeRequest {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()
@@ -177,9 +180,9 @@ impl HandshakeResponse {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()
@@ -245,9 +248,9 @@ impl PullRequest {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()
@@ -314,9 +317,9 @@ impl PullResponse {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()
@@ -393,9 +396,9 @@ impl PushRequest {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()
@@ -498,9 +501,9 @@ impl PushResponse {
     /// Decodes from CBOR.
     pub fn decode(bytes: &[u8]) -> CodecResult<Self> {
         let value: Value = from_cbor(bytes)?;
-        let map = value.as_map().ok_or_else(|| {
-            entidb_codec::CodecError::invalid_structure("expected map")
-        })?;
+        let map = value
+            .as_map()
+            .ok_or_else(|| entidb_codec::CodecError::invalid_structure("expected map"))?;
 
         let get_field = |name: &str| {
             map.iter()

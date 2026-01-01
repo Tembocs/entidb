@@ -280,7 +280,10 @@ impl CoreError {
     }
 
     /// Creates a segment file creation failed error.
-    pub fn segment_file_creation_failed(path: impl Into<String>, source: impl Into<String>) -> Self {
+    pub fn segment_file_creation_failed(
+        path: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
         Self::SegmentFileCreationFailed {
             path: path.into(),
             source_message: source.into(),
