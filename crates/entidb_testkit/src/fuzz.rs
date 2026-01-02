@@ -436,5 +436,6 @@ mod tests {
                 let db = Database::open_in_memory().expect("Failed to open in-memory database");
                 FuzzOp::execute_sequence(&ops, &db);
             }
-        }    }
+        }
+    }
 }

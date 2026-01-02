@@ -369,12 +369,18 @@ impl Database {
             Ok(record_iter) => {
                 if let Err(e) = index_engine.rebuild_from_iterator(record_iter) {
                     #[cfg(feature = "std")]
-                    eprintln!("[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.", e);
+                    eprintln!(
+                        "[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.",
+                        e
+                    );
                 }
             }
             Err(e) => {
                 #[cfg(feature = "std")]
-                eprintln!("[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.", e);
+                eprintln!(
+                    "[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.",
+                    e
+                );
             }
         }
 
@@ -453,12 +459,18 @@ impl Database {
             Ok(record_iter) => {
                 if let Err(e) = index_engine.rebuild_from_iterator(record_iter) {
                     #[cfg(feature = "std")]
-                    eprintln!("[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.", e);
+                    eprintln!(
+                        "[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.",
+                        e
+                    );
                 }
             }
             Err(e) => {
                 #[cfg(feature = "std")]
-                eprintln!("[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.", e);
+                eprintln!(
+                    "[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.",
+                    e
+                );
             }
         }
 
@@ -711,9 +723,15 @@ impl Database {
             (*cid, *eid, payload)
         });
         // Index update errors are logged but don't fail the commit (indexes are derivable)
-        if let Err(e) = self.index_engine.update_from_writes(writes_for_index, &old_payloads) {
+        if let Err(e) = self
+            .index_engine
+            .update_from_writes(writes_for_index, &old_payloads)
+        {
             #[cfg(feature = "std")]
-            eprintln!("[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.", e);
+            eprintln!(
+                "[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.",
+                e
+            );
         }
 
         // Record stats
@@ -821,9 +839,15 @@ impl Database {
             (*cid, *eid, payload)
         });
         // Index update errors are logged but don't fail the commit (indexes are derivable)
-        if let Err(e) = self.index_engine.update_from_writes(writes_for_index, &old_payloads) {
+        if let Err(e) = self
+            .index_engine
+            .update_from_writes(writes_for_index, &old_payloads)
+        {
             #[cfg(feature = "std")]
-            eprintln!("[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.", e);
+            eprintln!(
+                "[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.",
+                e
+            );
         }
 
         // Record stats

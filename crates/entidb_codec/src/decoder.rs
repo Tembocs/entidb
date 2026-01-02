@@ -33,7 +33,6 @@ const MAX_CONTAINER_ELEMENTS: u64 = 16 * 1024 * 1024;
 /// 256 MB should cover any legitimate payload.
 const MAX_BYTES_LENGTH: u64 = 256 * 1024 * 1024;
 
-
 impl<'a> CanonicalDecoder<'a> {
     /// Create a new decoder for the given bytes.
     pub fn new(data: &'a [u8]) -> Self {

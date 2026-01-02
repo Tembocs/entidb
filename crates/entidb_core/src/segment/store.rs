@@ -1226,9 +1226,7 @@ impl Iterator for SegmentRecordIterator {
                                 self.exhausted = true;
                                 return Some(Err(CoreError::segment_corruption(format!(
                                     "corrupt record in segment {} at offset {}: {}",
-                                    self.backends[self.current_segment].0,
-                                    self.current_offset,
-                                    e
+                                    self.backends[self.current_segment].0, self.current_offset, e
                                 ))));
                             }
                         }
