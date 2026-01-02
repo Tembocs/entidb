@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.3] - 2026-01-02
+
+### Fixed
+
+- **WASM Durability**: `put()`, `delete()`, and `commit()` are now durable by default
+  - Added explicit `putFast()`, `deleteFast()`, `commitFast()` for non-durable operations
+- **IndexedDB Backend**: Replaced localStorage stub with real IndexedDB implementation
+  - Supports large data (GB-scale, limited by browser quotas)
+  - Proper async persistence via web-sys IDB APIs
+- **CLI Backup/Restore**: Fixed backup and restore commands
+  - Backup now uses `Database::open()` and proper sequence numbers
+  - Restore creates proper MANIFEST and uses transaction API
+- **Index Rebuild Errors**: Proper error handling instead of silent `let _ =`
+  - On open: warnings logged, database still opens
+  - On explicit index creation: errors propagate to caller
+
+### Deprecated
+
+- `hash_index_lookup()`, `btree_index_lookup()`, `btree_index_range()` APIs
+  - Violates access-path invariant (users must not reference indexes by name)
+  - Use `scan()` with host-language filtering instead
+
 ## [2.0.0-alpha.1] - 2025-12-25
 
 ### Changed
