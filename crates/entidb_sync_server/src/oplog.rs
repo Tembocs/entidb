@@ -3,6 +3,7 @@
 use crate::error::{ServerError, ServerResult};
 use entidb_sync_protocol::{Conflict, ConflictPolicy, SyncOperation};
 use parking_lot::RwLock;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// Server-side operation log.
@@ -11,6 +12,19 @@ use std::collections::HashMap;
 /// - All operations in commit order
 /// - Current cursor (highest operation ID)
 /// - Entity states for conflict detection
+///
+/// # Durability
+///
+/// **WARNING:** This is currently an in-memory implementation suitable for
+/// development and testing. For production use, the sync server should be
+/// backed by `entidb_core` to provide durable persistence of the oplog and
+/// entity state. See `docs/sync_protocol.md` for the recommended production
+/// architecture where the sync server uses the same EntiDB core as clients.
+///
+/// # Conflict Detection
+///
+/// Uses SHA-256 hashing over canonical CBOR bytes for cryptographically
+/// secure conflict detection.
 pub struct ServerOplog {
     /// Operations in commit order.
     operations: RwLock<Vec<SyncOperation>>,
@@ -107,7 +121,7 @@ impl ServerOplog {
             *next += 1;
 
             // Update version tracking
-            let payload_hash = op.payload.as_ref().map(|p| Self::simple_hash(p));
+            let payload_hash = op.payload.as_ref().map(|p| Self::compute_hash(p));
             versions.insert(key, (op.sequence, payload_hash));
 
             accepted.push(op);
@@ -138,8 +152,8 @@ impl ServerOplog {
         Conflict::new(
             key.0,
             key.1,
-            client_op.payload.as_ref().map(|p| Self::simple_hash(p)),
-            server_payload.as_ref().map(|p| Self::simple_hash(p)),
+            client_op.payload.as_ref().map(|p| Self::compute_hash(p)),
+            server_payload.as_ref().map(|p| Self::compute_hash(p)),
             client_op.payload.clone(),
             server_payload,
         )
@@ -152,13 +166,14 @@ impl ServerOplog {
         }
     }
 
-    /// Simple hash for demonstration (in production, use a proper hash).
-    fn simple_hash(data: &[u8]) -> [u8; 32] {
-        let mut hash = [0u8; 32];
-        for (i, byte) in data.iter().enumerate() {
-            hash[i % 32] ^= byte;
-        }
-        hash
+    /// Computes a cryptographic SHA-256 hash for conflict detection.
+    ///
+    /// Uses SHA-256 over canonical CBOR bytes to ensure proper conflict
+    /// detection that is resistant to collisions.
+    fn compute_hash(data: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        hasher.finalize().into()
     }
 
     /// Returns the number of operations.

@@ -179,6 +179,7 @@ impl DatabaseDir {
     /// 1. Write to temporary file
     /// 2. Sync temporary file to disk
     /// 3. Rename temporary file to MANIFEST
+    /// 4. Fsync the directory to ensure metadata update is durable
     pub fn save_manifest(&self, manifest: &Manifest) -> CoreResult<()> {
         let manifest_path = self.manifest_path();
         let temp_path = self.path.join(MANIFEST_TEMP);
@@ -193,6 +194,51 @@ impl DatabaseDir {
         // Atomic rename
         fs::rename(&temp_path, &manifest_path)?;
 
+        // Fsync directory to ensure rename is durable
+        self.sync_directory()?;
+
+        Ok(())
+    }
+
+    /// Syncs the database directory to ensure metadata updates are durable.
+    ///
+    /// This is critical for crash safety: after creating, renaming, or deleting
+    /// files, the directory must be fsynced to ensure the metadata is on disk.
+    ///
+    /// On Windows, directory fsync is not supported in the same way as Unix.
+    /// Windows NTFS uses journaling which provides similar durability guarantees
+    /// for metadata operations, so we skip the explicit fsync on Windows.
+    #[cfg(unix)]
+    fn sync_directory(&self) -> CoreResult<()> {
+        use std::os::unix::io::AsRawFd;
+        // Open directory and sync it
+        let dir = File::open(&self.path)?;
+        // On Unix, fsync on a directory syncs the directory entries
+        dir.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn sync_directory(&self) -> CoreResult<()> {
+        // Windows NTFS journal provides metadata durability guarantees
+        // Directory fsync is not directly supported on Windows
+        Ok(())
+    }
+
+    /// Syncs the segments directory to ensure metadata updates are durable.
+    #[cfg(unix)]
+    fn sync_segments_directory(&self) -> CoreResult<()> {
+        let segments_dir = self.segments_dir();
+        if segments_dir.exists() {
+            let dir = File::open(&segments_dir)?;
+            dir.sync_all()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn sync_segments_directory(&self) -> CoreResult<()> {
+        // Windows NTFS journal provides metadata durability guarantees
         Ok(())
     }
 
@@ -218,6 +264,9 @@ impl DatabaseDir {
     /// This is used during compaction to remove old segment files
     /// after their data has been merged into a new segment.
     ///
+    /// After deletion, the segments directory is fsynced to ensure
+    /// the metadata updates are crash-safe.
+    ///
     /// # Arguments
     ///
     /// * `segment_ids` - List of segment IDs to delete
@@ -237,7 +286,30 @@ impl DatabaseDir {
             }
         }
 
+        // Fsync segments directory to ensure deletions are durable
+        if deleted > 0 {
+            self.sync_segments_directory()?;
+        }
+
         Ok(deleted)
+    }
+
+    /// Creates a new segment file and returns its path.
+    ///
+    /// After creation, the segments directory is fsynced to ensure
+    /// the new file's metadata is crash-safe.
+    #[allow(dead_code)] // Public API for future use
+    pub fn create_segment_file(&self, segment_id: u64) -> CoreResult<PathBuf> {
+        let segments_dir = self.segments_dir();
+        let segment_path = segments_dir.join(format!("seg-{segment_id:06}.dat"));
+
+        // Create the file
+        File::create(&segment_path)?;
+
+        // Fsync segments directory to ensure creation is durable
+        self.sync_segments_directory()?;
+
+        Ok(segment_path)
     }
 }
 

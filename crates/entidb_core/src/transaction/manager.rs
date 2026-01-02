@@ -39,7 +39,8 @@ pub struct TransactionManager {
     /// Write lock - only one writer at a time.
     write_lock: Mutex<()>,
     /// Active transactions.
-    active_txns: RwLock<Vec<TransactionId>>,
+    /// Uses Arc so cleanup callbacks can reference it after borrow ends.
+    active_txns: Arc<RwLock<Vec<TransactionId>>>,
 }
 
 impl TransactionManager {
@@ -52,7 +53,7 @@ impl TransactionManager {
             next_seq: AtomicU64::new(1),
             committed_seq: AtomicU64::new(0),
             write_lock: Mutex::new(()),
-            active_txns: RwLock::new(Vec::new()),
+            active_txns: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -71,22 +72,40 @@ impl TransactionManager {
             next_seq: AtomicU64::new(next_seq),
             committed_seq: AtomicU64::new(committed_seq),
             write_lock: Mutex::new(()),
-            active_txns: RwLock::new(Vec::new()),
+            active_txns: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
     /// Begins a new read-only transaction.
     ///
     /// The transaction gets a snapshot of the current committed state.
+    /// Read-only transactions do NOT write to WAL and are not tracked
+    /// in the active transaction list - they are purely local snapshots.
+    ///
     /// For write transactions, use `begin_write()` instead.
     pub fn begin(&self) -> CoreResult<Transaction> {
+        // Read-only transactions only need a snapshot, no WAL or tracking
         let txid = TransactionId::new(self.next_txid.fetch_add(1, Ordering::SeqCst));
         let snapshot_seq = SequenceNumber::new(self.committed_seq.load(Ordering::SeqCst));
 
-        // Write BEGIN record to WAL
+        // No WAL write - read-only transactions don't affect durability
+        // No active_txns tracking - read-only transactions don't need cleanup
+
+        Ok(Transaction::new(txid, snapshot_seq))
+    }
+
+    /// Internal helper to begin a write transaction with WAL and tracking.
+    ///
+    /// This writes a BEGIN record to WAL and tracks the transaction.
+    /// Used by `begin_write()`.
+    fn begin_tracked(&self) -> CoreResult<Transaction> {
+        let txid = TransactionId::new(self.next_txid.fetch_add(1, Ordering::SeqCst));
+        let snapshot_seq = SequenceNumber::new(self.committed_seq.load(Ordering::SeqCst));
+
+        // Write BEGIN record to WAL for durability
         self.wal.append(&WalRecord::Begin { txid })?;
 
-        // Track active transaction
+        // Track active transaction for cleanup
         self.active_txns.write().push(txid);
 
         Ok(Transaction::new(txid, snapshot_seq))
@@ -98,7 +117,8 @@ impl TransactionManager {
     /// transaction's lifetime. Only one write transaction can exist at a time.
     ///
     /// The lock is automatically released when the transaction is committed,
-    /// aborted, or dropped.
+    /// aborted, or dropped. If dropped without commit/abort, the transaction
+    /// is automatically removed from the active transaction list via RAII.
     ///
     /// # Example
     ///
@@ -112,10 +132,16 @@ impl TransactionManager {
         // Acquire exclusive write lock - this blocks if another writer exists
         let guard = self.write_lock.lock();
 
-        // Create the underlying transaction
-        let txn = self.begin()?;
+        // Create the underlying transaction with WAL and tracking
+        let txn = self.begin_tracked()?;
 
-        Ok(WriteTransaction::new(txn, guard))
+        // Create cleanup callback that removes from active_txns on drop
+        let active_txns = Arc::clone(&self.active_txns);
+        let cleanup = Box::new(move |id: TransactionId| {
+            active_txns.write().retain(|&tid| tid != id);
+        });
+
+        Ok(WriteTransaction::new(txn, guard, cleanup))
     }
 
     /// Commits a transaction.
@@ -350,6 +376,9 @@ impl TransactionManager {
     /// the changes are durable and visible to new transactions.
     /// The write lock is released after this call.
     pub fn commit_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<SequenceNumber> {
+        // Mark as finalized to prevent cleanup callback from running on drop
+        // (commit_inner will remove from active_txns)
+        wtxn.mark_finalized();
         // WriteTransaction already holds the write lock, so we don't acquire it again
         self.commit_inner(wtxn.inner_mut())
     }
@@ -358,6 +387,9 @@ impl TransactionManager {
     ///
     /// All pending writes are discarded. The write lock is released after this call.
     pub fn abort_write(&self, wtxn: &mut WriteTransaction<'_>) -> CoreResult<()> {
+        // Mark as finalized to prevent cleanup callback from running on drop
+        // (abort will remove from active_txns)
+        wtxn.mark_finalized();
         self.abort(wtxn.inner_mut())
     }
 
@@ -438,7 +470,21 @@ mod tests {
         let tm = create_manager();
         let txn = tm.begin().unwrap();
         assert!(txn.is_active());
+        // Read-only transactions are not tracked in active_txns
+        // (they don't write to WAL and don't need cleanup)
+        assert_eq!(tm.active_count(), 0);
+    }
+
+    #[test]
+    fn begin_write_creates_tracked_transaction() {
+        let tm = create_manager();
+        let wtxn = tm.begin_write().unwrap();
+        assert!(wtxn.is_active());
+        // Write transactions ARE tracked in active_txns
         assert_eq!(tm.active_count(), 1);
+        drop(wtxn);
+        // After drop, cleanup callback removes from active_txns
+        assert_eq!(tm.active_count(), 0);
     }
 
     #[test]

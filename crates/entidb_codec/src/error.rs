@@ -59,6 +59,15 @@ pub enum CodecError {
     /// Integer overflow during decoding.
     #[error("integer overflow")]
     IntegerOverflow,
+
+    /// Claimed size too large (potential DoS via untrusted input).
+    #[error("claimed size {claimed} exceeds maximum allowed {max_allowed}")]
+    SizeLimitExceeded {
+        /// The size claimed by the input.
+        claimed: u64,
+        /// The maximum allowed size.
+        max_allowed: u64,
+    },
 }
 
 impl CodecError {

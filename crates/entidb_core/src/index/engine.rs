@@ -407,6 +407,83 @@ impl IndexEngine {
         Ok(())
     }
 
+    /// Updates indexes based on transaction writes.
+    ///
+    /// This method is called atomically during commit to maintain index consistency.
+    /// For each write operation:
+    /// - Put: extract key from payload and insert into relevant indexes
+    /// - Delete: remove entity from all indexes on that collection
+    ///
+    /// # Arguments
+    ///
+    /// * `writes` - Iterator of (collection_id, entity_id, payload, is_delete) tuples
+    /// * `old_payloads` - Optional map of (collection_id, entity_id) -> old_payload for updates
+    ///
+    /// This ensures index state is always derivable from segments and atomic with commit.
+    pub fn update_from_writes<'a, I>(
+        &self,
+        writes: I,
+        old_payloads: &std::collections::HashMap<(CollectionId, EntityId), Option<Vec<u8>>>,
+    ) -> CoreResult<()>
+    where
+        I: Iterator<Item = (CollectionId, EntityId, Option<&'a [u8]>)>,
+    {
+        let defs = self.definitions.read();
+        let mut hash_indexes = self.hash_indexes.write();
+        let mut btree_indexes = self.btree_indexes.write();
+        let mut stats = self.stats.write();
+
+        for (collection_id, entity_id, new_payload) in writes {
+            // Find all indexes on this collection
+            for def in defs.values() {
+                if def.collection_id != collection_id {
+                    continue;
+                }
+
+                // Remove old key if entity existed before
+                if let Some(Some(old_payload)) = old_payloads.get(&(collection_id, entity_id)) {
+                    if let Some(old_key) = self.extract_key_from_cbor(old_payload, &def.field_path)
+                    {
+                        match def.kind {
+                            IndexKind::Hash => {
+                                if let Some(index) = hash_indexes.get_mut(&def.id) {
+                                    let _ = index.remove(&old_key, entity_id);
+                                }
+                            }
+                            IndexKind::BTree => {
+                                if let Some(index) = btree_indexes.get_mut(&def.id) {
+                                    let _ = index.remove(&old_key, entity_id);
+                                }
+                            }
+                        }
+                        stats.updates += 1;
+                    }
+                }
+
+                // Insert new key if this is a put (not delete)
+                if let Some(payload) = new_payload {
+                    if let Some(key) = self.extract_key_from_cbor(payload, &def.field_path) {
+                        match def.kind {
+                            IndexKind::Hash => {
+                                if let Some(index) = hash_indexes.get_mut(&def.id) {
+                                    index.insert(key, entity_id)?;
+                                }
+                            }
+                            IndexKind::BTree => {
+                                if let Some(index) = btree_indexes.get_mut(&def.id) {
+                                    index.insert(key, entity_id)?;
+                                }
+                            }
+                        }
+                        stats.updates += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Performs equality lookup on an index.
     pub fn lookup_eq(
         &self,

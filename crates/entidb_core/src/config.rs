@@ -17,7 +17,23 @@ pub struct Config {
     /// Maximum size of a single segment file before sealing.
     pub max_segment_size: u64,
 
-    /// How often to automatically checkpoint (0 = never).
+    /// **CURRENTLY UNUSED**: Intended checkpoint interval.
+    ///
+    /// This field exists for API forward-compatibility but is not yet implemented.
+    /// Automatic checkpointing requires a background scheduler which is planned
+    /// for a future release.
+    ///
+    /// **For now, call `Database::checkpoint()` manually** when you want to:
+    /// - Truncate the WAL to reclaim disk space
+    /// - Speed up recovery by reducing WAL replay time
+    /// - Create a consistent snapshot point
+    ///
+    /// Setting this to a non-zero value has no effect in the current version.
+    ///
+    /// # Future Plans
+    ///
+    /// When implemented, this will trigger automatic checkpoints at the specified
+    /// interval. Use `Duration::ZERO` to disable automatic checkpoints (default).
     pub checkpoint_interval: Duration,
 
     /// Whether to sync WAL on every commit (safer but slower).

@@ -126,7 +126,12 @@ impl BackupManager {
 
     /// Creates a backup from the segment manager.
     ///
-    /// This creates a point-in-time snapshot of all entities.
+    /// This creates a point-in-time snapshot of all entities at the given
+    /// sequence number. Only entities with sequence <= current_sequence are
+    /// included, ensuring a consistent snapshot.
+    ///
+    /// For each (collection_id, entity_id), only the latest version at or
+    /// below the snapshot sequence is included.
     pub fn create_backup(
         &self,
         segment_manager: &SegmentManager,
@@ -135,12 +140,36 @@ impl BackupManager {
         // Get all records
         let all_records = segment_manager.scan_all()?;
 
-        // Filter based on config
+        // Filter to snapshot-consistent state:
+        // 1. Only include records with sequence <= current_sequence
+        // 2. For each (collection_id, entity_id), keep only the latest version
+        use std::collections::HashMap;
+        let mut latest_by_entity: HashMap<(crate::types::CollectionId, [u8; 16]), SegmentRecord> =
+            HashMap::new();
+
+        for record in all_records {
+            // Skip records after the snapshot
+            if record.sequence > current_sequence {
+                continue;
+            }
+
+            let key = (record.collection_id, record.entity_id);
+            latest_by_entity
+                .entry(key)
+                .and_modify(|existing| {
+                    if record.sequence > existing.sequence {
+                        *existing = record.clone();
+                    }
+                })
+                .or_insert(record);
+        }
+
+        // Convert to list and filter tombstones based on config
         let records: Vec<_> = if self.config.include_tombstones {
-            all_records
+            latest_by_entity.into_values().collect()
         } else {
-            all_records
-                .into_iter()
+            latest_by_entity
+                .into_values()
                 .filter(|r| !r.is_tombstone())
                 .collect()
         };

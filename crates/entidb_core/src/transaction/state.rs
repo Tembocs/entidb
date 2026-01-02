@@ -67,6 +67,12 @@ pub enum PendingWrite {
     },
 }
 
+/// Callback for cleaning up a transaction from the active list.
+///
+/// This is called when a `WriteTransaction` is dropped without being
+/// committed or aborted, ensuring proper RAII cleanup.
+pub type CleanupCallback = Box<dyn FnOnce(TransactionId) + Send + Sync>;
+
 /// A write transaction that holds an exclusive write lock.
 ///
 /// This type ensures single-writer semantics by holding the write lock
@@ -74,21 +80,38 @@ pub enum PendingWrite {
 /// can exist at a time.
 ///
 /// The lock is released when the transaction is committed, aborted, or dropped.
+/// If dropped without commit/abort, the transaction is automatically removed
+/// from the active transaction list via RAII cleanup.
 pub struct WriteTransaction<'a> {
     /// The underlying transaction.
     inner: Transaction,
     /// The write lock guard - held for the transaction's lifetime.
     /// Using Option so we can release it on commit/abort.
     _write_guard: Option<MutexGuard<'a, ()>>,
+    /// Cleanup callback for RAII - removes from active_txns on drop.
+    /// None if already committed/aborted.
+    cleanup: Option<CleanupCallback>,
 }
 
 impl<'a> WriteTransaction<'a> {
-    /// Creates a new write transaction with the given lock guard.
-    pub(crate) fn new(inner: Transaction, guard: MutexGuard<'a, ()>) -> Self {
+    /// Creates a new write transaction with the given lock guard and cleanup callback.
+    pub(crate) fn new(
+        inner: Transaction,
+        guard: MutexGuard<'a, ()>,
+        cleanup: CleanupCallback,
+    ) -> Self {
         Self {
             inner,
             _write_guard: Some(guard),
+            cleanup: Some(cleanup),
         }
+    }
+
+    /// Marks the transaction as finalized (committed or aborted).
+    ///
+    /// This prevents the cleanup callback from running on drop.
+    pub(crate) fn mark_finalized(&mut self) {
+        self.cleanup = None;
     }
 
     /// Returns a reference to the inner transaction.
@@ -102,9 +125,10 @@ impl<'a> WriteTransaction<'a> {
     }
 
     /// Consumes self and returns the inner transaction.
-    /// This also releases the write lock.
+    /// This also releases the write lock and prevents cleanup callback.
     pub fn into_inner(mut self) -> Transaction {
         self._write_guard = None;
+        self.cleanup = None;
         std::mem::replace(
             &mut self.inner,
             Transaction::new(TransactionId::new(0), SequenceNumber::new(0)),
@@ -182,6 +206,16 @@ impl<'a> WriteTransaction<'a> {
     ) {
         self.inner
             .record_read(collection_id, entity_id, observed_hash)
+    }
+}
+
+impl Drop for WriteTransaction<'_> {
+    fn drop(&mut self) {
+        // If cleanup callback exists, transaction was not committed/aborted
+        // Run the cleanup to remove from active_txns
+        if let Some(cleanup) = self.cleanup.take() {
+            cleanup(self.inner.id());
+        }
     }
 }
 

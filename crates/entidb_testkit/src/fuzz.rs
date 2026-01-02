@@ -308,6 +308,23 @@ impl FuzzOp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    /// Generate pseudo-random data for fuzzing based on a seed.
+    fn generate_random_data(seed: u64, len: usize) -> Vec<u8> {
+        let mut hasher = DefaultHasher::new();
+        let mut result = Vec::with_capacity(len);
+        let mut state = seed;
+
+        for _ in 0..len {
+            state.hash(&mut hasher);
+            state = hasher.finish();
+            hasher = DefaultHasher::new();
+            result.push((state & 0xFF) as u8);
+        }
+
+        result
+    }
 
     #[test]
     fn test_fuzz_cbor_decode_empty() {
@@ -349,4 +366,75 @@ mod tests {
         let ops = FuzzOp::parse_sequence(&data);
         assert!(!ops.is_empty());
     }
+
+    // Extended randomized fuzz tests for CI
+
+    #[test]
+    fn fuzz_cbor_decode_random_iterations() {
+        // Run 1000 iterations with random data
+        for seed in 0..1000u64 {
+            let len = ((seed % 256) + 1) as usize;
+            let data = generate_random_data(seed, len);
+            fuzz_cbor_decode(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_cbor_roundtrip_random_iterations() {
+        for seed in 0..500u64 {
+            let len = ((seed % 64) + 1) as usize;
+            let data = generate_random_data(seed, len);
+            fuzz_cbor_roundtrip(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_entity_id_random_iterations() {
+        for seed in 0..1000u64 {
+            let data = generate_random_data(seed, 32);
+            fuzz_entity_id(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_wal_record_random_iterations() {
+        for seed in 0..500u64 {
+            let len = ((seed % 128) + 1) as usize;
+            let data = generate_random_data(seed, len);
+            fuzz_wal_record(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_segment_record_random_iterations() {
+        for seed in 0..500u64 {
+            let len = ((seed % 256) + 1) as usize;
+            let data = generate_random_data(seed, len);
+            fuzz_segment_record(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_database_operations_random_iterations() {
+        // Fewer iterations since database operations are more expensive
+        for seed in 0..50u64 {
+            let len = ((seed % 512) + 32) as usize;
+            let data = generate_random_data(seed, len);
+            fuzz_database_operations(&data);
+        }
+    }
+
+    #[test]
+    fn fuzz_structured_ops_random_iterations() {
+        // Test structured operation sequences
+        for seed in 0..30u64 {
+            let len = ((seed % 256) + 32) as usize;
+            let data = generate_random_data(seed, len);
+            let ops = FuzzOp::parse_sequence(&data);
+
+            if !ops.is_empty() {
+                let db = Database::open_in_memory().expect("Failed to open in-memory database");
+                FuzzOp::execute_sequence(&ops, &db);
+            }
+        }    }
 }

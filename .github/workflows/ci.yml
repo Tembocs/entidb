@@ -113,3 +113,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo bench -p entidb_bench --no-run
+  # Fuzzing job - runs fuzz harnesses with random inputs
+  # This provides basic fuzz testing coverage without requiring cargo-fuzz
+  fuzz:
+    name: Fuzz Harnesses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Run fuzz tests which exercise the fuzz harnesses with various inputs
+      - name: Run fuzz harness tests
+        run: cargo test -p entidb_testkit fuzz --release
+      # Run additional randomized tests with larger iteration count
+      - name: Extended fuzz iterations
+        run: |
+          cargo test -p entidb_testkit fuzz::tests --release -- --test-threads=1
+        timeout-minutes: 5

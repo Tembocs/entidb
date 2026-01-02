@@ -23,6 +23,17 @@ pub struct CanonicalDecoder<'a> {
     pos: usize,
 }
 
+/// Maximum allowed element count for arrays and maps.
+/// This prevents allocation-based DoS from untrusted input.
+/// 16 million elements is generous for legitimate use cases.
+const MAX_CONTAINER_ELEMENTS: u64 = 16 * 1024 * 1024;
+
+/// Maximum allowed byte/string length.
+/// This prevents allocation-based DoS from untrusted input.
+/// 256 MB should cover any legitimate payload.
+const MAX_BYTES_LENGTH: u64 = 256 * 1024 * 1024;
+
+
 impl<'a> CanonicalDecoder<'a> {
     /// Create a new decoder for the given bytes.
     pub fn new(data: &'a [u8]) -> Self {
@@ -153,7 +164,14 @@ impl<'a> CanonicalDecoder<'a> {
         if additional_info == 31 {
             return Err(CodecError::IndefiniteLengthForbidden);
         }
-        let len = self.decode_unsigned(additional_info)? as usize;
+        let len_u64 = self.decode_unsigned(additional_info)?;
+        if len_u64 > MAX_BYTES_LENGTH {
+            return Err(CodecError::SizeLimitExceeded {
+                claimed: len_u64,
+                max_allowed: MAX_BYTES_LENGTH,
+            });
+        }
+        let len = len_u64 as usize;
         let bytes = self.read_bytes(len)?;
         Ok(Value::Bytes(bytes.to_vec()))
     }
@@ -162,7 +180,14 @@ impl<'a> CanonicalDecoder<'a> {
         if additional_info == 31 {
             return Err(CodecError::IndefiniteLengthForbidden);
         }
-        let len = self.decode_unsigned(additional_info)? as usize;
+        let len_u64 = self.decode_unsigned(additional_info)?;
+        if len_u64 > MAX_BYTES_LENGTH {
+            return Err(CodecError::SizeLimitExceeded {
+                claimed: len_u64,
+                max_allowed: MAX_BYTES_LENGTH,
+            });
+        }
+        let len = len_u64 as usize;
         let bytes = self.read_bytes(len)?;
         let text = std::str::from_utf8(bytes).map_err(|_| CodecError::InvalidUtf8)?;
         Ok(Value::Text(text.to_string()))
@@ -172,7 +197,14 @@ impl<'a> CanonicalDecoder<'a> {
         if additional_info == 31 {
             return Err(CodecError::IndefiniteLengthForbidden);
         }
-        let len = self.decode_unsigned(additional_info)? as usize;
+        let len_u64 = self.decode_unsigned(additional_info)?;
+        if len_u64 > MAX_CONTAINER_ELEMENTS {
+            return Err(CodecError::SizeLimitExceeded {
+                claimed: len_u64,
+                max_allowed: MAX_CONTAINER_ELEMENTS,
+            });
+        }
+        let len = len_u64 as usize;
         let mut items = Vec::with_capacity(len);
         for _ in 0..len {
             items.push(self.decode()?);
@@ -184,7 +216,14 @@ impl<'a> CanonicalDecoder<'a> {
         if additional_info == 31 {
             return Err(CodecError::IndefiniteLengthForbidden);
         }
-        let len = self.decode_unsigned(additional_info)? as usize;
+        let len_u64 = self.decode_unsigned(additional_info)?;
+        if len_u64 > MAX_CONTAINER_ELEMENTS {
+            return Err(CodecError::SizeLimitExceeded {
+                claimed: len_u64,
+                max_allowed: MAX_CONTAINER_ELEMENTS,
+            });
+        }
+        let len = len_u64 as usize;
         let mut pairs = Vec::with_capacity(len);
 
         let mut prev_key_bytes: Option<Vec<u8>> = None;

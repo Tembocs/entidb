@@ -642,6 +642,7 @@ impl Database {
     /// Commits a transaction.
     ///
     /// After successful commit, change events are emitted to all subscribers.
+    /// Index updates are applied atomically with the commit.
     pub fn commit(&self, txn: &mut Transaction) -> CoreResult<SequenceNumber> {
         self.ensure_open()?;
 
@@ -654,8 +655,35 @@ impl Database {
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
             .collect();
 
-        // Commit the transaction
+        // Build old_payloads map for index updates (fetch old values before commit)
+        let old_payloads: std::collections::HashMap<(CollectionId, EntityId), Option<Vec<u8>>> =
+            pending_writes
+                .iter()
+                .map(|(cid, eid, _)| {
+                    let old_val = self
+                        .entity_store
+                        .get_at_snapshot(*cid, *eid, snapshot_seq)
+                        .unwrap_or(None);
+                    ((*cid, *eid), old_val)
+                })
+                .collect();
+
+        // Commit the transaction (WAL + segments)
         let sequence = self.txn_manager.commit(txn)?;
+
+        // Update indexes atomically after commit
+        let writes_for_index = pending_writes.iter().map(|(cid, eid, w)| {
+            let payload: Option<&[u8]> = match w {
+                crate::transaction::PendingWrite::Put { payload, .. } => Some(payload.as_slice()),
+                crate::transaction::PendingWrite::Delete { .. } => None,
+            };
+            (*cid, *eid, payload)
+        });
+        // Index update errors are logged but don't fail the commit (indexes are derivable)
+        if let Err(e) = self.index_engine.update_from_writes(writes_for_index, &old_payloads) {
+            #[cfg(feature = "std")]
+            eprintln!("[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.", e);
+        }
 
         // Record stats
         self.stats.record_transaction_commit();
@@ -673,13 +701,11 @@ impl Database {
                     let is_update = match is_update {
                         Some(known) => known,
                         None => {
-                            // Check if entity existed at the transaction's snapshot
-                            // This lookup is at the snapshot sequence, so it shows
-                            // what existed before any writes in this transaction
-                            self.entity_store
-                                .get_at_snapshot(collection_id, entity_id, snapshot_seq)
-                                .unwrap_or(None)
-                                .is_some()
+                            // Use old_payloads to determine if it was an update
+                            old_payloads
+                                .get(&(collection_id, entity_id))
+                                .map(|v| v.is_some())
+                                .unwrap_or(false)
                         }
                     };
 
@@ -720,6 +746,7 @@ impl Database {
     /// Commits a write transaction.
     ///
     /// After successful commit, change events are emitted to all subscribers.
+    /// Index updates are applied atomically with the commit.
     /// The write lock is released after this call.
     pub fn commit_write(
         &self,
@@ -730,15 +757,43 @@ impl Database {
         // Capture snapshot sequence for existence checks
         let snapshot_seq = wtxn.snapshot_seq();
 
-        // Collect pending writes before commit
+        // Collect pending writes before commit (for change feed and index updates)
         let pending_writes: Vec<_> = wtxn
             .inner()
             .pending_writes()
             .map(|((cid, eid), w)| (*cid, *eid, w.clone()))
             .collect();
 
-        // Commit the transaction
+        // Build old_payloads map for index updates (fetch old values before commit)
+        let old_payloads: std::collections::HashMap<(CollectionId, EntityId), Option<Vec<u8>>> =
+            pending_writes
+                .iter()
+                .map(|(cid, eid, _)| {
+                    let old_val = self
+                        .entity_store
+                        .get_at_snapshot(*cid, *eid, snapshot_seq)
+                        .unwrap_or(None);
+                    ((*cid, *eid), old_val)
+                })
+                .collect();
+
+        // Commit the transaction (WAL + segments)
         let sequence = self.txn_manager.commit_write(wtxn)?;
+
+        // Update indexes atomically after commit
+        // Build writes iterator for index engine
+        let writes_for_index = pending_writes.iter().map(|(cid, eid, w)| {
+            let payload: Option<&[u8]> = match w {
+                crate::transaction::PendingWrite::Put { payload, .. } => Some(payload.as_slice()),
+                crate::transaction::PendingWrite::Delete { .. } => None,
+            };
+            (*cid, *eid, payload)
+        });
+        // Index update errors are logged but don't fail the commit (indexes are derivable)
+        if let Err(e) = self.index_engine.update_from_writes(writes_for_index, &old_payloads) {
+            #[cfg(feature = "std")]
+            eprintln!("[EntiDB WARNING] Index update failed: {}. Indexes may need rebuild.", e);
+        }
 
         // Record stats
         self.stats.record_transaction_commit();
@@ -755,11 +810,11 @@ impl Database {
                     let is_update = match is_update {
                         Some(known) => known,
                         None => {
-                            // Check if entity existed at the transaction's snapshot
-                            self.entity_store
-                                .get_at_snapshot(collection_id, entity_id, snapshot_seq)
-                                .unwrap_or(None)
-                                .is_some()
+                            // Use old_payloads to determine if it was an update
+                            old_payloads
+                                .get(&(collection_id, entity_id))
+                                .map(|v| v.is_some())
+                                .unwrap_or(false)
                         }
                     };
 
@@ -820,20 +875,26 @@ impl Database {
     ///
     /// If the function returns `Ok`, the transaction is committed.
     /// If it returns `Err`, the transaction is aborted.
+    ///
+    /// # Note
+    ///
+    /// This method acquires the exclusive write lock for the duration of the
+    /// transaction to ensure single-writer semantics. For read-only operations,
+    /// use `get()`, `list()`, or other non-transactional methods.
     pub fn transaction<F, T>(&self, f: F) -> CoreResult<T>
     where
         F: FnOnce(&mut Transaction) -> CoreResult<T>,
     {
         self.ensure_open()?;
-        let mut txn = self.begin()?;
-        match f(&mut txn) {
+        // Acquire write lock to ensure single-writer semantics
+        let mut wtxn = self.begin_write()?;
+        match f(wtxn.inner_mut()) {
             Ok(result) => {
-                self.commit(&mut txn)?;
+                self.commit_write(&mut wtxn)?;
                 Ok(result)
             }
             Err(e) => {
-                // Abort will record the abort stat
-                let _ = self.abort(&mut txn);
+                let _ = self.abort_write(&mut wtxn);
                 Err(e)
             }
         }
