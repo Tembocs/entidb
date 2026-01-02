@@ -1,13 +1,22 @@
 //! Backup and restore commands.
+//!
+//! This module provides CLI commands for backing up and restoring EntiDB databases.
+//! It uses the proper Database API rather than directly manipulating storage files,
+//! ensuring correct sequence numbers, manifest handling, and ACID guarantees.
 
-use entidb_core::{BackupConfig, BackupManager, BackupMetadata};
-use entidb_storage::FileBackend;
+use entidb_core::{BackupManager, BackupMetadata, Database};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use tracing::info;
 
 /// Create a backup of the database.
+///
+/// Opens the database properly using `Database::open()` and uses the built-in
+/// `backup()` method to ensure:
+/// - Correct sequence number from transaction manager
+/// - Consistent point-in-time snapshot
+/// - Proper handling of WAL and segments
 pub fn create(
     db_path: &Path,
     output_path: &Path,
@@ -15,47 +24,44 @@ pub fn create(
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Creating backup of {:?}", db_path);
 
-    // Open segments
-    let segment_path = db_path.join("SEGMENTS");
-    if !segment_path.exists() {
-        return Err(format!("Segments not found at {:?}", segment_path).into());
-    }
+    // Open database properly - this handles manifest, WAL recovery, locking, etc.
+    let db = Database::open(db_path)?;
 
-    let segment_backend = FileBackend::open(&segment_path)?;
-    let segment_manager = entidb_core::SegmentManager::new(
-        Box::new(segment_backend),
-        64 * 1024 * 1024, // 64MB max segment size
-    );
-
-    // Create backup
-    let config = BackupConfig {
-        include_tombstones,
-        compress: false,
+    // Create backup using the proper API
+    let backup_data = if include_tombstones {
+        db.backup_with_options(true)?
+    } else {
+        db.backup()?
     };
-    let manager = BackupManager::new(config);
 
-    // Get current sequence (read from WAL if available)
-    let current_seq = entidb_core::SequenceNumber::new(0);
-    let result = manager.create_backup(&segment_manager, current_seq)?;
+    // Get backup metadata for display
+    let manager = BackupManager::with_defaults();
+    let metadata = manager.read_metadata(&backup_data)?;
 
     // Write to output file
     let mut file = fs::File::create(output_path)?;
-    file.write_all(&result.data)?;
+    file.write_all(&backup_data)?;
     file.sync_all()?;
+
+    // Close database gracefully
+    db.close()?;
 
     println!("✓ Backup created successfully");
     println!("  Path: {:?}", output_path);
-    println!("  Size: {} bytes", result.metadata.size);
-    println!("  Records: {}", result.metadata.record_count);
-    println!(
-        "  Timestamp: {}",
-        format_timestamp(result.metadata.timestamp)
-    );
+    println!("  Size: {} bytes", metadata.size);
+    println!("  Records: {}", metadata.record_count);
+    println!("  Sequence: {}", metadata.sequence.as_u64());
+    println!("  Timestamp: {}", format_timestamp(metadata.timestamp));
 
     Ok(())
 }
 
 /// Restore database from a backup.
+///
+/// Uses the proper Database API to restore, ensuring:
+/// - MANIFEST is created correctly
+/// - Entities are imported via proper transactions
+/// - WAL and segments are set up correctly
 pub fn restore(
     db_path: &Path,
     input_path: &Path,
@@ -64,40 +70,48 @@ pub fn restore(
     info!("Restoring database from {:?}", input_path);
 
     // Check if database already exists
-    let segment_path = db_path.join("SEGMENTS");
-    if segment_path.exists() && !force {
-        return Err("Database already exists. Use --force to overwrite.".into());
+    if db_path.exists() && !force {
+        let manifest_path = db_path.join("MANIFEST");
+        let segments_path = db_path.join("SEGMENTS");
+        if manifest_path.exists() || segments_path.exists() {
+            return Err("Database already exists. Use --force to overwrite.".into());
+        }
+    }
+
+    // If force, remove existing database
+    if force && db_path.exists() {
+        fs::remove_dir_all(db_path)?;
     }
 
     // Read backup file
     let mut file = fs::File::open(input_path)?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
+    let mut backup_data = Vec::new();
+    file.read_to_end(&mut backup_data)?;
 
-    // Validate and restore
+    // Validate backup first
     let manager = BackupManager::with_defaults();
-    let result = manager.restore_from_backup(&data)?;
-
-    // Create database directory
-    fs::create_dir_all(db_path)?;
-    fs::create_dir_all(&segment_path)?;
-
-    // Write restored records to new segment file
-    let segment_file = segment_path.join("seg-000001.dat");
-    let mut segment = fs::File::create(&segment_file)?;
-
-    for record in &result.records {
-        let encoded = record.encode()?;
-        segment.write_all(&encoded)?;
+    if !manager.validate_backup(&backup_data)? {
+        return Err("Backup file is invalid or corrupted".into());
     }
-    segment.sync_all()?;
+
+    let metadata = manager.read_metadata(&backup_data)?;
+
+    // Open/create a new database at the target path
+    let db = Database::open(db_path)?;
+
+    // Restore using the proper API
+    let stats = db.restore(&backup_data)?;
+
+    // Close database gracefully
+    db.close()?;
 
     println!("✓ Database restored successfully");
     println!("  Path: {:?}", db_path);
-    println!("  Records restored: {}", result.records.len());
+    println!("  Entities restored: {}", stats.entities_restored);
+    println!("  Tombstones applied: {}", stats.tombstones_applied);
     println!(
         "  From backup created: {}",
-        format_timestamp(result.metadata.timestamp)
+        format_timestamp(metadata.timestamp)
     );
 
     Ok(())

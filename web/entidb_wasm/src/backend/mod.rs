@@ -12,7 +12,6 @@ mod memory;
 mod opfs;
 mod persistent;
 
-#[allow(unused_imports)]
 pub use indexeddb::IndexedDbBackend;
 #[allow(unused_imports)]
 pub use memory::WasmMemoryBackend;

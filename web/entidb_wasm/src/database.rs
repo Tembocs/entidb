@@ -51,19 +51,16 @@ impl From<JsStorageType> for StorageType {
 ///
 /// ## Durability Model
 ///
-/// EntiDB WASM uses a **two-phase durability** model for performance:
+/// EntiDB WASM enforces the invariant **"commit acknowledgment implies durability"**.
+/// All write operations (`put`, `delete`, `commit`) are async and await persistence
+/// before returning success.
 ///
-/// 1. **Fast operations** (`put`, `delete`): Write to in-memory WAL only.
-///    These are fast but NOT durable - data may be lost if the browser crashes
-///    or the tab is closed before `save()` is called.
-///
-/// 2. **Durable operations** (`putDurable`, `deleteDurable`, `save`): Persist
-///    data to OPFS/IndexedDB. These are async and slower, but guarantee that
-///    data survives browser crashes.
+/// For high-performance batching scenarios where you accept non-durable writes,
+/// use the explicit `putFast`/`deleteFast` APIs with `save()`:
 ///
 /// **Choose your approach:**
-/// - For high-throughput batching: Use `put`/`delete`, then call `save()` periodically
-/// - For critical single writes: Use `putDurable`/`deleteDurable`
+/// - **Default (durable)**: Use `put`/`delete` (async) - guarantees persistence
+/// - **Performance mode**: Use `putFast`/`deleteFast` (sync) + explicit `save()`
 ///
 /// ## Example
 ///
@@ -74,13 +71,14 @@ impl From<JsStorageType> for StorageType {
 /// const users = db.collection("users");
 /// const id = EntityId.generate();
 ///
-/// // Option 1: Fast batch writes with explicit save
-/// db.put(users, id, new Uint8Array([1, 2, 3]));
-/// db.put(users, id2, new Uint8Array([4, 5, 6]));
-/// await db.save(); // Persist all changes
+/// // Option 1: Durable writes (default, recommended)
+/// await db.put(users, id, new Uint8Array([1, 2, 3]));
+/// await db.put(users, id2, new Uint8Array([4, 5, 6]));
 ///
-/// // Option 2: Durable single write
-/// await db.putDurable(users, id3, new Uint8Array([7, 8, 9]));
+/// // Option 2: Fast batch writes with explicit save (advanced)
+/// db.putFast(users, id3, new Uint8Array([7, 8, 9]));  // NOT durable yet
+/// db.putFast(users, id4, new Uint8Array([10, 11, 12])); // NOT durable yet
+/// await db.save(); // NOW durable
 ///
 /// db.close();
 /// ```
@@ -368,13 +366,16 @@ impl Database {
         Ok(Collection::new(name.to_string(), collection_id.0))
     }
 
-    /// Stores an entity in a collection.
+    /// Stores an entity in a collection with guaranteed durability.
     ///
     /// If an entity with the same ID already exists, it will be replaced.
     ///
-    /// **Important:** This method does NOT guarantee durability. The data is
-    /// written to the in-memory WAL but not persisted to storage until `save()`
-    /// is called. For durable writes, use `putDurable()` instead.
+    /// This is an async method that writes the entity AND persists to storage
+    /// before returning. This guarantees that data survives browser crashes
+    /// or tab closures.
+    ///
+    /// For high-throughput batching where you accept non-durable writes,
+    /// use `putFast()` followed by explicit `save()`.
     ///
     /// # Arguments
     ///
@@ -382,7 +383,42 @@ impl Database {
     /// * `id` - The entity ID
     /// * `data` - The entity data as bytes (should be CBOR-encoded)
     #[wasm_bindgen]
-    pub fn put(&self, collection: &Collection, id: &EntityId, data: &[u8]) -> Result<(), JsValue> {
+    pub fn put(
+        &self,
+        collection: &Collection,
+        id: &EntityId,
+        data: &[u8],
+    ) -> js_sys::Promise {
+        // Perform the put synchronously first
+        let put_result = self.put_fast_internal(collection, id, data);
+        if let Err(e) = put_result {
+            return js_sys::Promise::reject(&e);
+        }
+
+        // Then save asynchronously to ensure durability
+        self.save()
+    }
+
+    /// Stores an entity WITHOUT durability guarantee (fast path).
+    ///
+    /// **WARNING:** This method does NOT guarantee durability. The data is
+    /// written to the in-memory WAL but not persisted to storage until `save()`
+    /// is called. Data may be lost if the browser crashes or tab closes.
+    ///
+    /// Use this for high-throughput batching, followed by explicit `save()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to store in
+    /// * `id` - The entity ID
+    /// * `data` - The entity data as bytes (should be CBOR-encoded)
+    #[wasm_bindgen(js_name = putFast)]
+    pub fn put_fast(&self, collection: &Collection, id: &EntityId, data: &[u8]) -> Result<(), JsValue> {
+        self.put_fast_internal(collection, id, data)
+    }
+
+    /// Internal fast put implementation.
+    fn put_fast_internal(&self, collection: &Collection, id: &EntityId, data: &[u8]) -> Result<(), JsValue> {
         let db = self.inner.borrow();
         let collection_id = entidb_core::CollectionId(collection.id());
         let entity_id: CoreEntityId = (*id).into();
@@ -396,36 +432,6 @@ impl Database {
 
         *self.dirty.borrow_mut() = true;
         Ok(())
-    }
-
-    /// Stores an entity with guaranteed durability.
-    ///
-    /// This is an async method that writes the entity AND persists to storage
-    /// before returning. Use this when you need to ensure data survives browser
-    /// crashes or tab closures.
-    ///
-    /// This is equivalent to calling `put()` followed by `save()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `collection` - The collection to store in
-    /// * `id` - The entity ID
-    /// * `data` - The entity data as bytes (should be CBOR-encoded)
-    #[wasm_bindgen(js_name = putDurable)]
-    pub fn put_durable(
-        &self,
-        collection: &Collection,
-        id: &EntityId,
-        data: &[u8],
-    ) -> js_sys::Promise {
-        // Perform the put synchronously first
-        let put_result = self.put(collection, id, data);
-        if let Err(e) = put_result {
-            return js_sys::Promise::reject(&e);
-        }
-
-        // Then save asynchronously
-        self.save()
     }
 
     /// Retrieves an entity from a collection.
@@ -446,20 +452,52 @@ impl Database {
             .map_err(|e| JsValue::from_str(&format!("Failed to get entity: {}", e)))
     }
 
-    /// Deletes an entity from a collection.
+    /// Deletes an entity from a collection with guaranteed durability.
     ///
     /// Does nothing if the entity does not exist.
     ///
-    /// **Important:** This method does NOT guarantee durability. The delete is
-    /// written to the in-memory WAL but not persisted to storage until `save()`
-    /// is called. For durable deletes, use `deleteDurable()` instead.
+    /// This is an async method that deletes the entity AND persists to storage
+    /// before returning. This guarantees the deletion survives browser crashes
+    /// or tab closures.
+    ///
+    /// For high-throughput batching where you accept non-durable writes,
+    /// use `deleteFast()` followed by explicit `save()`.
     ///
     /// # Arguments
     ///
     /// * `collection` - The collection to delete from
     /// * `id` - The entity ID
-    #[wasm_bindgen]
-    pub fn delete(&self, collection: &Collection, id: &EntityId) -> Result<(), JsValue> {
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete_entity(&self, collection: &Collection, id: &EntityId) -> js_sys::Promise {
+        // Perform the delete synchronously first
+        let delete_result = self.delete_fast_internal(collection, id);
+        if let Err(e) = delete_result {
+            return js_sys::Promise::reject(&e);
+        }
+
+        // Then save asynchronously to ensure durability
+        self.save()
+    }
+
+    /// Deletes an entity WITHOUT durability guarantee (fast path).
+    ///
+    /// **WARNING:** This method does NOT guarantee durability. The delete is
+    /// written to the in-memory WAL but not persisted to storage until `save()`
+    /// is called. The deletion may be lost if the browser crashes or tab closes.
+    ///
+    /// Use this for high-throughput batching, followed by explicit `save()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection to delete from
+    /// * `id` - The entity ID
+    #[wasm_bindgen(js_name = deleteFast)]
+    pub fn delete_fast(&self, collection: &Collection, id: &EntityId) -> Result<(), JsValue> {
+        self.delete_fast_internal(collection, id)
+    }
+
+    /// Internal fast delete implementation.
+    fn delete_fast_internal(&self, collection: &Collection, id: &EntityId) -> Result<(), JsValue> {
         let db = self.inner.borrow();
         let collection_id = entidb_core::CollectionId(collection.id());
         let entity_id: CoreEntityId = (*id).into();
@@ -472,30 +510,6 @@ impl Database {
 
         *self.dirty.borrow_mut() = true;
         Ok(())
-    }
-
-    /// Deletes an entity with guaranteed durability.
-    ///
-    /// This is an async method that deletes the entity AND persists to storage
-    /// before returning. Use this when you need to ensure the deletion survives
-    /// browser crashes or tab closures.
-    ///
-    /// This is equivalent to calling `delete()` followed by `save()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `collection` - The collection to delete from
-    /// * `id` - The entity ID
-    #[wasm_bindgen(js_name = deleteDurable)]
-    pub fn delete_durable(&self, collection: &Collection, id: &EntityId) -> js_sys::Promise {
-        // Perform the delete synchronously first
-        let delete_result = self.delete(collection, id);
-        if let Err(e) = delete_result {
-            return js_sys::Promise::reject(&e);
-        }
-
-        // Then save asynchronously
-        self.save()
     }
 
     /// Lists all entities in a collection.
@@ -990,7 +1004,17 @@ impl Database {
     /// Looks up entities by key in a hash index.
     ///
     /// Returns an array of EntityIds matching the key.
+    ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy. Use `scan()` with JavaScript filtering instead.
+    /// This API will be removed in a future version.
     #[wasm_bindgen(js_name = hashIndexLookup)]
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead."
+    )]
     pub fn hash_index_lookup(
         &self,
         collection: &Collection,
@@ -999,6 +1023,7 @@ impl Database {
     ) -> Result<Array, JsValue> {
         let db = self.inner.borrow();
         let collection_id = entidb_core::CollectionId(collection.id());
+        #[allow(deprecated)]
         let ids = db
             .hash_index_lookup(collection_id, index_name, key)
             .map_err(|e| JsValue::from_str(&format!("Failed to lookup in hash index: {}", e)))?;
@@ -1014,7 +1039,17 @@ impl Database {
     /// Looks up entities by key in a BTree index.
     ///
     /// Returns an array of EntityIds matching the key.
+    ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy. Use `scan()` with JavaScript filtering instead.
+    /// This API will be removed in a future version.
     #[wasm_bindgen(js_name = btreeIndexLookup)]
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead."
+    )]
     pub fn btree_index_lookup(
         &self,
         collection: &Collection,
@@ -1023,6 +1058,7 @@ impl Database {
     ) -> Result<Array, JsValue> {
         let db = self.inner.borrow();
         let collection_id = entidb_core::CollectionId(collection.id());
+        #[allow(deprecated)]
         let ids = db
             .btree_index_lookup(collection_id, index_name, key)
             .map_err(|e| JsValue::from_str(&format!("Failed to lookup in btree index: {}", e)))?;
@@ -1040,6 +1076,12 @@ impl Database {
     /// Returns all entities whose key is >= minKey and <= maxKey.
     /// Pass null/undefined for unbounded ends.
     ///
+    /// # Deprecation Notice
+    ///
+    /// This API exposes index field names to callers, which violates the
+    /// access-path policy. Use `scan()` with JavaScript filtering instead.
+    /// This API will be removed in a future version.
+    ///
     /// # Arguments
     ///
     /// * `collection` - The collection the index belongs to
@@ -1056,6 +1098,10 @@ impl Database {
     /// const ids = db.btreeIndexRange(users, "age", ageMin, ageMax);
     /// ```
     #[wasm_bindgen(js_name = btreeIndexRange)]
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead."
+    )]
     pub fn btree_index_range(
         &self,
         collection: &Collection,
@@ -1065,6 +1111,7 @@ impl Database {
     ) -> Result<Array, JsValue> {
         let db = self.inner.borrow();
         let collection_id = entidb_core::CollectionId(collection.id());
+        #[allow(deprecated)]
         let ids = db
             .btree_index_range(
                 collection_id,
@@ -1145,12 +1192,22 @@ impl Database {
 ///
 /// Transactions ensure that multiple operations are applied atomically.
 /// Either all operations succeed, or none are applied.
+///
+/// ## Durability Model
+///
+/// By default, `commit()` is **durable** (async) - it persists changes before returning.
+/// For high-performance batching, use `commitFast()` (sync) followed by explicit `save()`.
 #[wasm_bindgen]
 pub struct Transaction {
     database: Rc<RefCell<CoreDatabase>>,
     pending_puts: RefCell<Vec<(u32, CoreEntityId, Vec<u8>)>>,
     pending_deletes: RefCell<Vec<(u32, CoreEntityId)>>,
     committed: RefCell<bool>,
+    dirty_flag: Rc<RefCell<bool>>,
+    wal_backend: Option<std::sync::Arc<std::sync::RwLock<PersistentBackend>>>,
+    segment_backend: Option<std::sync::Arc<std::sync::RwLock<PersistentBackend>>>,
+    db_name: Option<String>,
+    storage_type: StorageType,
 }
 
 #[wasm_bindgen]
@@ -1170,8 +1227,8 @@ impl Transaction {
     }
 
     /// Stages a delete operation in the transaction.
-    #[wasm_bindgen]
-    pub fn delete(&self, collection: &Collection, id: &EntityId) -> Result<(), JsValue> {
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete_staged(&self, collection: &Collection, id: &EntityId) -> Result<(), JsValue> {
         if *self.committed.borrow() {
             return Err(JsValue::from_str("Transaction already committed"));
         }
@@ -1183,11 +1240,8 @@ impl Transaction {
         Ok(())
     }
 
-    /// Commits the transaction.
-    ///
-    /// All staged operations are applied atomically.
-    #[wasm_bindgen]
-    pub fn commit(&self) -> Result<(), JsValue> {
+    /// Internal commit implementation (non-durable).
+    fn commit_internal(&self) -> Result<(), JsValue> {
         if *self.committed.borrow() {
             return Err(JsValue::from_str("Transaction already committed"));
         }
@@ -1211,8 +1265,69 @@ impl Transaction {
         })
         .map_err(|e| JsValue::from_str(&format!("Transaction commit failed: {}", e)))?;
 
+        *self.dirty_flag.borrow_mut() = true;
         *self.committed.borrow_mut() = true;
         Ok(())
+    }
+
+    /// Commits the transaction with guaranteed durability.
+    ///
+    /// All staged operations are applied atomically and persisted to storage
+    /// before returning. This guarantees that committed data survives browser
+    /// crashes or tab closures.
+    ///
+    /// For high-performance batching, use `commitFast()` followed by explicit `save()`.
+    #[wasm_bindgen]
+    pub fn commit(&self) -> js_sys::Promise {
+        // Perform the commit synchronously first
+        if let Err(e) = self.commit_internal() {
+            return js_sys::Promise::reject(&e);
+        }
+
+        // Then save asynchronously to ensure durability
+        let wal_backend = self.wal_backend.clone();
+        let segment_backend = self.segment_backend.clone();
+        let db_name = self.db_name.clone();
+        let storage_type = self.storage_type;
+        let db = self.database.clone();
+
+        future_to_promise(async move {
+            // Save backends
+            if let Some(wal) = &wal_backend {
+                if let Ok(mut backend) = wal.write() {
+                    backend.save().await.map_err(|e| {
+                        JsValue::from_str(&format!("Failed to persist WAL: {}", e))
+                    })?;
+                }
+            }
+            if let Some(seg) = &segment_backend {
+                if let Ok(mut backend) = seg.write() {
+                    backend.save().await.map_err(|e| {
+                        JsValue::from_str(&format!("Failed to persist segments: {}", e))
+                    })?;
+                }
+            }
+
+            // Also save manifest
+            if let Some(name) = db_name {
+                let manifest = db.borrow().get_manifest();
+                Database::save_manifest_internal(&name, storage_type, &manifest).await?;
+            }
+
+            Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// Commits the transaction WITHOUT durability guarantee (fast path).
+    ///
+    /// **WARNING:** This method does NOT guarantee durability. Changes are
+    /// written to the in-memory WAL but not persisted to storage until `save()`
+    /// is called on the database. Data may be lost if the browser crashes.
+    ///
+    /// Use this for high-performance batching, followed by explicit `save()`.
+    #[wasm_bindgen(js_name = commitFast)]
+    pub fn commit_fast(&self) -> Result<(), JsValue> {
+        self.commit_internal()
     }
 
     /// Aborts the transaction.

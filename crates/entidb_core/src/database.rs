@@ -272,13 +272,24 @@ impl Database {
             index_engine.register_index(idx_def.clone());
         }
 
-        // Rebuild indexes from segment records using streaming iterator
+        // Rebuild indexes from segment records using streaming iterator.
         // This is memory-efficient: records are processed one at a time.
         // If rebuild fails, indexes are marked as invalid and lookups through
         // them will fail with a hard error until a successful rebuild occurs.
-        if let Ok(record_iter) = segments.iter_all() {
-            // Errors are handled by marking indexes invalid; database still opens
-            let _ = index_engine.rebuild_from_iterator(record_iter);
+        // The database still opens, but index-dependent operations will fail.
+        match segments.iter_all() {
+            Ok(record_iter) => {
+                if let Err(e) = index_engine.rebuild_from_iterator(record_iter) {
+                    // Log warning but allow database to open.
+                    // Indexes are marked invalid and will fail on lookup.
+                    #[cfg(feature = "std")]
+                    eprintln!("[EntiDB WARNING] Index rebuild failed during open: {}. Indexes are marked invalid.", e);
+                }
+            }
+            Err(e) => {
+                #[cfg(feature = "std")]
+                eprintln!("[EntiDB WARNING] Failed to iterate segments for index rebuild: {}. Indexes are marked invalid.", e);
+            }
         }
 
         Ok(Self {
@@ -351,11 +362,20 @@ impl Database {
             index_engine.register_index(idx_def.clone());
         }
 
-        // Rebuild indexes from segment records using streaming iterator
-        // If rebuild fails, indexes are marked as invalid and lookups through
-        // them will fail with a hard error until a successful rebuild occurs.
-        if let Ok(record_iter) = segments.iter_all() {
-            let _ = index_engine.rebuild_from_iterator(record_iter);
+        // Rebuild indexes from segment records using streaming iterator.
+        // If rebuild fails, indexes are marked as invalid and lookups will fail.
+        // This is a test/low-level path, so we log but don't fail open.
+        match segments.iter_all() {
+            Ok(record_iter) => {
+                if let Err(e) = index_engine.rebuild_from_iterator(record_iter) {
+                    #[cfg(feature = "std")]
+                    eprintln!("[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.", e);
+                }
+            }
+            Err(e) => {
+                #[cfg(feature = "std")]
+                eprintln!("[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.", e);
+            }
         }
 
         Ok(Self {
@@ -426,9 +446,20 @@ impl Database {
             index_engine.register_index(idx_def.clone());
         }
 
-        // Rebuild indexes from segment records using streaming iterator
-        if let Ok(record_iter) = segments.iter_all() {
-            let _ = index_engine.rebuild_from_iterator(record_iter);
+        // Rebuild indexes from segment records using streaming iterator.
+        // If rebuild fails, indexes are marked as invalid and lookups will fail.
+        // This path is used by WASM, so we log but don't fail open.
+        match segments.iter_all() {
+            Ok(record_iter) => {
+                if let Err(e) = index_engine.rebuild_from_iterator(record_iter) {
+                    #[cfg(feature = "std")]
+                    eprintln!("[EntiDB WARNING] Index rebuild failed: {}. Indexes are marked invalid.", e);
+                }
+            }
+            Err(e) => {
+                #[cfg(feature = "std")]
+                eprintln!("[EntiDB WARNING] Failed to iterate segments: {}. Indexes are marked invalid.", e);
+            }
         }
 
         Ok(Self {
@@ -1557,13 +1588,14 @@ impl Database {
             (id, def_for_engine)
         };
 
-        // Register and rebuild indexes from current persisted records using streaming.
-        // If rebuild fails, the index is marked as invalid and lookups through
-        // it will fail with a hard error until a successful rebuild occurs.
+        // Register the index first.
         self.index_engine.register_index(def_for_engine);
-        if let Ok(record_iter) = self.segments.iter_all() {
-            let _ = self.index_engine.rebuild_from_iterator(record_iter);
-        }
+
+        // Rebuild index from current persisted records using streaming.
+        // For user-initiated index creation, we MUST return errors - this is
+        // an explicit operation and the user needs to know if it failed.
+        let record_iter = self.segments.iter_all()?;
+        self.index_engine.rebuild_from_iterator(record_iter)?;
 
         Ok(new_id)
     }
@@ -1764,8 +1796,9 @@ impl Database {
     /// replace this with semantic field-based predicates where the engine
     /// automatically selects the best access path.
     ///
-    /// For now, use this API for explicit indexed lookups, but be aware that
-    /// the API may change in future versions.
+    /// **INVARIANT VIOLATION:** Per AGENTS.md section 4.5, "Users MUST NOT
+    /// reference indexes by name during queries." This API will be removed.
+    /// Use `scan()` with host-language filtering instead.
     ///
     /// # Arguments
     ///
@@ -1776,6 +1809,10 @@ impl Database {
     /// # Returns
     ///
     /// A vector of entity IDs that have the given key value.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead. See docs/access_paths.md"
+    )]
     pub fn hash_index_lookup(
         &self,
         collection_id: CollectionId,
@@ -1865,6 +1902,10 @@ impl Database {
     /// replace this with semantic field-based predicates where the engine
     /// automatically selects the best access path.
     ///
+    /// **INVARIANT VIOLATION:** Per AGENTS.md section 4.5, "Users MUST NOT
+    /// reference indexes by name during queries." This API will be removed.
+    /// Use `scan()` with host-language filtering instead.
+    ///
     /// # Arguments
     ///
     /// * `collection_id` - The collection
@@ -1874,6 +1915,10 @@ impl Database {
     /// # Returns
     ///
     /// A vector of entity IDs that have the given key value.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead. See docs/access_paths.md"
+    )]
     pub fn btree_index_lookup(
         &self,
         collection_id: CollectionId,
@@ -1899,6 +1944,10 @@ impl Database {
     /// replace this with semantic field-based predicates where the engine
     /// automatically selects the best access path.
     ///
+    /// **INVARIANT VIOLATION:** Per AGENTS.md section 4.5, "Users MUST NOT
+    /// reference indexes by name during queries." This API will be removed.
+    /// Use `scan()` with host-language filtering instead.
+    ///
     /// # Arguments
     ///
     /// * `collection_id` - The collection
@@ -1909,6 +1958,10 @@ impl Database {
     /// # Returns
     ///
     /// A vector of entity IDs whose keys fall within the range.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Violates access-path invariant. Use scan() + filter() instead. See docs/access_paths.md"
+    )]
     pub fn btree_index_range(
         &self,
         collection_id: CollectionId,

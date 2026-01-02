@@ -1,72 +1,47 @@
-//! IndexedDB storage backend.
+//! Real IndexedDB storage backend.
 //!
-//! This backend serves as a fallback when OPFS is not available.
+//! This module provides a proper IndexedDB-backed byte store that:
+//! - Uses actual IndexedDB (not localStorage)
+//! - Supports large data (limited by browser quotas, typically GBs)
+//! - Provides durable persistence
+//! - Works in all modern browsers
 //!
-//! ## Current Implementation Status
+//! ## Design
 //!
-//! **WARNING:** This is a simplified implementation that uses `localStorage` as
-//! the underlying storage mechanism, NOT actual IndexedDB. This has significant
-//! limitations:
+//! The backend stores data as a single binary blob in an IndexedDB object store.
+//! This matches the byte-store abstraction expected by EntiDB - the backend
+//! doesn't interpret the data, just stores and retrieves bytes.
 //!
-//! - **Size limit:** localStorage is typically limited to 5-10MB per origin
-//! - **Durability:** localStorage is synchronous and blocking, but persisted
-//! - **Binary data:** Data is base64-encoded, adding ~33% overhead
-//! - **No concurrent access:** localStorage is synchronous and single-threaded
+//! ## Usage
 //!
-//! ## When This Is Used
-//!
-//! This fallback is only used when:
-//! 1. OPFS is not available (older browsers, non-secure contexts)
-//! 2. The user explicitly requests IndexedDB storage type
-//!
-//! ## Recommendations
-//!
-//! For production use, prefer OPFS which provides:
-//! - Much larger storage limits
-//! - True file-like semantics
-//! - Better performance
-//!
-//! ## Future Work
-//!
-//! A proper IndexedDB implementation would use the actual IndexedDB API via
-//! `web-sys::IdbFactory`, `IdbDatabase`, etc. with proper async transaction
-//! handling. This is complex due to IndexedDB's callback-based API and would
-//! require significant additional code.
-
-#![allow(dead_code)]
+//! ```ignore
+//! let backend = IndexedDbBackend::open("mydb", "wal").await?;
+//! backend.write_all(&data).await?;
+//! backend.flush_async().await?;
+//! ```
 
 use crate::error::{WasmError, WasmResult};
+use futures_channel::oneshot;
 use std::cell::RefCell;
 use std::rc::Rc;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
-/// Block size for chunking data in IndexedDB.
-const BLOCK_SIZE: usize = 64 * 1024; // 64 KB blocks
+/// Key used to store the data blob in IndexedDB.
+const DATA_KEY: &str = "data";
 
-/// Maximum recommended size for localStorage-based storage (5MB).
-/// Beyond this, browsers may refuse to store data or show quota warnings.
-const MAX_RECOMMENDED_SIZE: usize = 5 * 1024 * 1024;
-
-/// localStorage-based storage backend (IndexedDB fallback).
+/// Real IndexedDB storage backend.
 ///
-/// **WARNING:** Despite the name, this currently uses `localStorage`, not
-/// IndexedDB. See module documentation for details and limitations.
-///
-/// This is a fallback for browsers that don't support OPFS. For production
-/// use, OPFS is strongly recommended.
-///
-/// ## Limitations
-///
-/// - Storage is limited to ~5MB (browser-dependent)
-/// - Data is base64-encoded, adding ~33% overhead
-/// - Not suitable for large databases
+/// This backend stores data as a single binary blob in an IndexedDB object store,
+/// providing a proper byte-store abstraction for EntiDB.
 pub struct IndexedDbBackend {
     /// Database name.
     db_name: String,
-    /// Store name.
+    /// Object store name (acts like a file name).
     store_name: String,
-    /// Cached data.
+    /// Cached data (loaded on open, written on save).
     data: Rc<RefCell<Vec<u8>>>,
-    /// Whether cache is dirty.
+    /// Whether the cache has uncommitted changes.
     dirty: Rc<RefCell<bool>>,
 }
 
@@ -79,14 +54,17 @@ impl IndexedDbBackend {
     /// * `store_name` - Name of the object store (like a file name)
     pub async fn open(db_name: &str, store_name: &str) -> WasmResult<Self> {
         if !Self::is_available() {
-            return Err(WasmError::NotSupported(
-                "IndexedDB/localStorage not available".into(),
-            ));
+            return Err(WasmError::NotSupported("IndexedDB not available".into()));
         }
 
-        // Try to load from localStorage
-        let key = format!("entidb_{}_{}", db_name, store_name);
-        let data = Self::load_from_storage(&key)?;
+        // Open/create the database
+        let db = Self::open_database(db_name, store_name).await?;
+        
+        // Load existing data
+        let data = Self::load_data(&db, store_name).await?;
+        
+        // Close the database connection (we'll reopen on save)
+        db.close();
 
         Ok(Self {
             db_name: db_name.to_string(),
@@ -96,101 +74,214 @@ impl IndexedDbBackend {
         })
     }
 
-    /// Loads data from localStorage.
-    fn load_from_storage(key: &str) -> WasmResult<Vec<u8>> {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                if let Ok(Some(value)) = storage.get_item(key) {
-                    // Decode from base64
-                    if let Ok(decoded) = Self::base64_decode(&value) {
-                        return Ok(decoded);
-                    }
-                }
+    /// Opens the IndexedDB database, creating object stores if needed.
+    async fn open_database(
+        db_name: &str,
+        store_name: &str,
+    ) -> WasmResult<web_sys::IdbDatabase> {
+        let window = web_sys::window()
+            .ok_or_else(|| WasmError::NotSupported("No window object".into()))?;
+        
+        let idb_factory = window
+            .indexed_db()
+            .map_err(|e| WasmError::Storage(format!("IndexedDB access error: {:?}", e)))?
+            .ok_or_else(|| WasmError::NotSupported("IndexedDB not available".into()))?;
+
+        // Use a combined database name to namespace stores
+        let full_db_name = format!("entidb_{}", db_name);
+
+        // Create a channel to receive the result
+        let (tx, rx) = oneshot::channel::<Result<web_sys::IdbDatabase, WasmError>>();
+        let tx = Rc::new(RefCell::new(Some(tx)));
+
+        // Open request - we always use version 1 and create stores on upgrade
+        let open_request = idb_factory
+            .open_with_u32(&full_db_name, 1)
+            .map_err(|e| WasmError::Storage(format!("Failed to open IndexedDB: {:?}", e)))?;
+
+        // Handle upgrade needed (creates object stores)
+        let store_name_clone = store_name.to_string();
+        let upgrade_closure = Closure::once(move |event: web_sys::IdbVersionChangeEvent| {
+            let target = event.target().expect("upgrade event target");
+            let request: web_sys::IdbOpenDbRequest = target.unchecked_into();
+            let db = request.result().expect("upgrade result");
+            let db: web_sys::IdbDatabase = db.unchecked_into();
+
+            // Create object store if it doesn't exist
+            if !db.object_store_names().contains(&store_name_clone) {
+                let _ = db.create_object_store(&store_name_clone);
             }
-        }
-        Ok(Vec::new())
+        });
+        open_request.set_onupgradeneeded(Some(upgrade_closure.as_ref().unchecked_ref()));
+        upgrade_closure.forget();
+
+        // Handle success
+        let tx_success = tx.clone();
+        let success_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("success event target");
+            let request: web_sys::IdbOpenDbRequest = target.unchecked_into();
+            let db = request.result().expect("success result");
+            let db: web_sys::IdbDatabase = db.unchecked_into();
+            
+            if let Some(sender) = tx_success.borrow_mut().take() {
+                let _ = sender.send(Ok(db));
+            }
+        });
+        open_request.set_onsuccess(Some(success_closure.as_ref().unchecked_ref()));
+        success_closure.forget();
+
+        // Handle error
+        let tx_error = tx;
+        let error_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("error event target");
+            let request: web_sys::IdbOpenDbRequest = target.unchecked_into();
+            // error() returns Result<Option<DomException>, JsValue>
+            let msg = match request.error() {
+                Ok(Some(e)) => e.message(),
+                _ => "Unknown IndexedDB error".to_string(),
+            };
+            
+            if let Some(sender) = tx_error.borrow_mut().take() {
+                let _ = sender.send(Err(WasmError::Storage(msg)));
+            }
+        });
+        open_request.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+        error_closure.forget();
+
+        // Wait for result
+        rx.await.map_err(|_| WasmError::Storage("Channel closed".into()))?
     }
 
-    /// Saves data to localStorage.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - localStorage is not available
-    /// - Storage quota is exceeded (typically ~5MB per origin)
-    fn save_to_storage(&self) -> WasmResult<()> {
-        let key = format!("entidb_{}_{}", self.db_name, self.store_name);
+    /// Loads data from IndexedDB.
+    async fn load_data(db: &web_sys::IdbDatabase, store_name: &str) -> WasmResult<Vec<u8>> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<u8>, WasmError>>();
+        let tx = Rc::new(RefCell::new(Some(tx)));
+
+        // Start a readonly transaction
+        let transaction = db
+            .transaction_with_str(store_name)
+            .map_err(|e| WasmError::Storage(format!("Transaction error: {:?}", e)))?;
+        
+        let store = transaction
+            .object_store(store_name)
+            .map_err(|e| WasmError::Storage(format!("Store error: {:?}", e)))?;
+
+        // Get the data
+        let request = store
+            .get(&JsValue::from_str(DATA_KEY))
+            .map_err(|e| WasmError::Storage(format!("Get error: {:?}", e)))?;
+
+        // Handle success
+        let tx_success = tx.clone();
+        let success_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("success target");
+            let request: web_sys::IdbRequest = target.unchecked_into();
+            let result = request.result().ok();
+            
+            let data = if let Some(value) = result {
+                if value.is_undefined() || value.is_null() {
+                    Vec::new()
+                } else {
+                    // Result should be a Uint8Array
+                    let array = js_sys::Uint8Array::new(&value);
+                    array.to_vec()
+                }
+            } else {
+                Vec::new()
+            };
+            
+            if let Some(sender) = tx_success.borrow_mut().take() {
+                let _ = sender.send(Ok(data));
+            }
+        });
+        request.set_onsuccess(Some(success_closure.as_ref().unchecked_ref()));
+        success_closure.forget();
+
+        // Handle error
+        let tx_error = tx;
+        let error_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("error target");
+            let request: web_sys::IdbRequest = target.unchecked_into();
+            let msg = match request.error() {
+                Ok(Some(e)) => e.message(),
+                _ => "Unknown error".to_string(),
+            };
+            
+            if let Some(sender) = tx_error.borrow_mut().take() {
+                let _ = sender.send(Err(WasmError::Storage(msg)));
+            }
+        });
+        request.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+        error_closure.forget();
+
+        rx.await.map_err(|_| WasmError::Storage("Channel closed".into()))?
+    }
+
+    /// Saves data to IndexedDB.
+    async fn save_data(&self) -> WasmResult<()> {
+        let db = Self::open_database(&self.db_name, &self.store_name).await?;
+        
+        let (tx, rx) = oneshot::channel::<Result<(), WasmError>>();
+        let tx = Rc::new(RefCell::new(Some(tx)));
+
+        // Start a readwrite transaction
+        let transaction = db
+            .transaction_with_str_and_mode(&self.store_name, web_sys::IdbTransactionMode::Readwrite)
+            .map_err(|e| WasmError::Storage(format!("Transaction error: {:?}", e)))?;
+        
+        let store = transaction
+            .object_store(&self.store_name)
+            .map_err(|e| WasmError::Storage(format!("Store error: {:?}", e)))?;
+
+        // Convert data to Uint8Array
         let data = self.data.borrow();
+        let array = js_sys::Uint8Array::new_with_length(data.len() as u32);
+        array.copy_from(&data);
 
-        // Warn if data is approaching localStorage limits
-        if data.len() > MAX_RECOMMENDED_SIZE {
-            web_sys::console::warn_1(&format!(
-                "EntiDB: localStorage backend data size ({} bytes) exceeds recommended limit ({}). \
-                 Consider using OPFS for larger databases.",
-                data.len(),
-                MAX_RECOMMENDED_SIZE
-            ).into());
-        }
+        // Put the data
+        let request = store
+            .put_with_key(&array, &JsValue::from_str(DATA_KEY))
+            .map_err(|e| WasmError::Storage(format!("Put error: {:?}", e)))?;
 
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let encoded = Self::base64_encode(&data);
-                storage
-                    .set_item(&key, &encoded)
-                    .map_err(|_| WasmError::Storage(
-                        "Failed to save to localStorage. Storage quota may be exceeded. \
-                         Consider using OPFS storage or reducing database size.".into()
-                    ))?;
+        // Handle success
+        let tx_success = tx.clone();
+        let success_closure = Closure::once(move |_event: web_sys::Event| {
+            if let Some(sender) = tx_success.borrow_mut().take() {
+                let _ = sender.send(Ok(()));
             }
-        }
-        Ok(())
+        });
+        request.set_onsuccess(Some(success_closure.as_ref().unchecked_ref()));
+        success_closure.forget();
+
+        // Handle error
+        let tx_error = tx;
+        let error_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("error target");
+            let request: web_sys::IdbRequest = target.unchecked_into();
+            let msg = match request.error() {
+                Ok(Some(e)) => e.message(),
+                _ => "Unknown error".to_string(),
+            };
+            
+            if let Some(sender) = tx_error.borrow_mut().take() {
+                let _ = sender.send(Err(WasmError::Storage(msg)));
+            }
+        });
+        request.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+        error_closure.forget();
+
+        let result = rx.await.map_err(|_| WasmError::Storage("Channel closed".into()))?;
+        
+        // Close the database
+        db.close();
+        
+        result
     }
 
-    /// Simple base64 encode.
-    fn base64_encode(data: &[u8]) -> String {
-        use js_sys::Uint8Array;
-        let array = Uint8Array::from(data);
-        let blob_parts = js_sys::Array::new();
-        blob_parts.push(&array);
-
-        // Use btoa for simple encoding
-        if let Some(window) = web_sys::window() {
-            if let Ok(str_data) = String::from_utf8(data.to_vec()) {
-                if let Ok(encoded) = window.btoa(&str_data) {
-                    return encoded;
-                }
-            }
-        }
-
-        // Fallback: hex encoding
-        data.iter().map(|b| format!("{:02x}", b)).collect()
-    }
-
-    /// Simple base64 decode.
-    fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
-        if let Some(window) = web_sys::window() {
-            if let Ok(decoded) = window.atob(s) {
-                return Ok(decoded.into_bytes());
-            }
-        }
-
-        // Fallback: hex decoding
-        let mut result = Vec::new();
-        let chars: Vec<char> = s.chars().collect();
-        for chunk in chars.chunks(2) {
-            if chunk.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&chunk.iter().collect::<String>(), 16) {
-                    result.push(byte);
-                }
-            }
-        }
-        Ok(result)
-    }
-
-    /// Checks if localStorage is available.
+    /// Checks if IndexedDB is available.
     pub fn is_available() -> bool {
         if let Some(window) = web_sys::window() {
-            window.local_storage().ok().flatten().is_some()
+            window.indexed_db().ok().flatten().is_some()
         } else {
             false
         }
@@ -233,9 +324,6 @@ impl IndexedDbBackend {
     }
 
     /// Overwrites all data in storage.
-    ///
-    /// This replaces any existing content with the new data.
-    /// Used for snapshot-based persistence where the entire state is written.
     pub async fn write_all(&self, bytes: &[u8]) -> WasmResult<()> {
         let mut data = self.data.borrow_mut();
         data.clear();
@@ -249,52 +337,61 @@ impl IndexedDbBackend {
         self.data.borrow().len() as u64
     }
 
-    /// Flushes data to localStorage.
+    /// Flushes data to IndexedDB.
     pub async fn flush_async(&self) -> WasmResult<()> {
         if *self.dirty.borrow() {
-            self.save_to_storage()?;
+            self.save_data().await?;
             *self.dirty.borrow_mut() = false;
         }
         Ok(())
     }
 
-    /// Closes the database.
-    pub fn close(&self) {
-        // Save on close
-        let _ = self.save_to_storage();
-    }
-
     /// Deletes the database.
     pub async fn delete(db_name: &str) -> WasmResult<()> {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                // Remove all keys that start with this db_name
-                let prefix = format!("entidb_{}_", db_name);
-                let mut keys_to_remove = Vec::new();
+        let window = web_sys::window()
+            .ok_or_else(|| WasmError::NotSupported("No window object".into()))?;
+        
+        let idb_factory = window
+            .indexed_db()
+            .map_err(|e| WasmError::Storage(format!("IndexedDB access error: {:?}", e)))?
+            .ok_or_else(|| WasmError::NotSupported("IndexedDB not available".into()))?;
 
-                // Get length and iterate
-                if let Ok(len) = storage.length() {
-                    for i in 0..len {
-                        if let Ok(Some(key)) = storage.key(i) {
-                            if key.starts_with(&prefix) {
-                                keys_to_remove.push(key);
-                            }
-                        }
-                    }
-                }
+        let full_db_name = format!("entidb_{}", db_name);
 
-                // Remove the keys
-                for key in keys_to_remove {
-                    let _ = storage.remove_item(&key);
-                }
+        let (tx, rx) = oneshot::channel::<Result<(), WasmError>>();
+        let tx = Rc::new(RefCell::new(Some(tx)));
+
+        let delete_request = idb_factory
+            .delete_database(&full_db_name)
+            .map_err(|e| WasmError::Storage(format!("Delete error: {:?}", e)))?;
+
+        // Handle success
+        let tx_success = tx.clone();
+        let success_closure = Closure::once(move |_event: web_sys::Event| {
+            if let Some(sender) = tx_success.borrow_mut().take() {
+                let _ = sender.send(Ok(()));
             }
-        }
-        Ok(())
-    }
-}
+        });
+        delete_request.set_onsuccess(Some(success_closure.as_ref().unchecked_ref()));
+        success_closure.forget();
 
-impl Drop for IndexedDbBackend {
-    fn drop(&mut self) {
-        self.close();
+        // Handle error
+        let tx_error = tx;
+        let error_closure = Closure::once(move |event: web_sys::Event| {
+            let target = event.target().expect("error target");
+            let request: web_sys::IdbOpenDbRequest = target.unchecked_into();
+            let msg = match request.error() {
+                Ok(Some(e)) => e.message(),
+                _ => "Unknown error".to_string(),
+            };
+            
+            if let Some(sender) = tx_error.borrow_mut().take() {
+                let _ = sender.send(Err(WasmError::Storage(msg)));
+            }
+        });
+        delete_request.set_onerror(Some(error_closure.as_ref().unchecked_ref()));
+        error_closure.forget();
+
+        rx.await.map_err(|_| WasmError::Storage("Channel closed".into()))?
     }
 }

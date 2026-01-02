@@ -49,6 +49,7 @@ web-sys = { version = "0.3", features = [
     "IdbFactory",
     "IdbDatabase",
     "IdbObjectStore",
+    "IdbObjectStoreParameters",
     "IdbTransaction",
     "IdbTransactionMode",
     "IdbRequest",
@@ -57,6 +58,10 @@ web-sys = { version = "0.3", features = [
     "IdbKeyRange",
     "IdbCursorWithValue",
     "IdbCursorDirection",
+    # DOMStringList for object_store_names
+    "DomStringList",
+    # DOMException for error handling
+    "DomException",
     # Event handling
     "Event",
     "EventTarget",

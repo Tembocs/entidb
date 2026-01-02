@@ -13,7 +13,7 @@
 //! This is efficient for typical EntiDB use cases where databases are
 //! relatively small (megabytes, not gigabytes).
 
-use crate::backend::{IndexedDbBackend, OpfsBackend, WasmMemoryBackend};
+use crate::backend::{OpfsBackend, IndexedDbBackend, WasmMemoryBackend};
 use crate::error::{WasmError, WasmResult};
 use entidb_storage::{StorageBackend, StorageResult};
 use std::sync::RwLock;
