@@ -3,7 +3,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'entidb_flutter'
-  s.version          = '2.0.0-alpha.2'
+  s.version          = '2.0.0-alpha.3'
   s.summary          = 'EntiDB embedded database for Flutter'
   s.description      = <<-DESC
 Flutter plugin for EntiDB - an embedded entity database with ACID transactions and CBOR storage.
