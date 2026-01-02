@@ -276,7 +276,9 @@ impl Database {
     ) -> Result<(), JsValue> {
         use crate::backend::{IndexedDbBackend, OpfsBackend};
 
-        let bytes = manifest.encode();
+        let bytes = manifest
+            .encode()
+            .map_err(|e| JsValue::from_str(&format!("Failed to encode manifest: {}", e)))?;
 
         match storage_type {
             StorageType::Opfs => {

@@ -359,7 +359,7 @@ impl BackupManager {
 
         // Write records
         for record in records {
-            let encoded = record.encode();
+            let encoded = record.encode()?;
             data.extend_from_slice(&encoded);
         }
 

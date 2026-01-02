@@ -87,7 +87,7 @@ pub fn restore(
     let mut segment = fs::File::create(&segment_file)?;
 
     for record in &result.records {
-        let encoded = record.encode();
+        let encoded = record.encode()?;
         segment.write_all(&encoded)?;
     }
     segment.sync_all()?;

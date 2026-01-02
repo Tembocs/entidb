@@ -44,6 +44,16 @@ const CRC_SIZE: usize = 4;
 /// We read in chunks to minimize I/O syscalls while keeping memory bounded.
 const READ_BUFFER_SIZE: usize = 64 * 1024; // 64 KB
 
+/// Maximum allowed WAL record size during recovery.
+///
+/// This prevents OOM attacks via corrupted length fields. Set to 256 MB which
+/// should be more than sufficient for any legitimate entity payload while still
+/// providing protection against malicious or corrupted data.
+///
+/// This is aligned with `WalRecord::MAX_PAYLOAD_SIZE` but provides an explicit
+/// cap for the decoder to prevent unbounded buffer allocation.
+const MAX_WAL_RECORD_SIZE: usize = 256 * 1024 * 1024; // 256 MB
+
 /// A streaming iterator over WAL records.
 ///
 /// This iterator reads WAL records one-by-one from the storage backend,
@@ -225,6 +235,16 @@ impl<'a> WalRecordIterator<'a> {
 
         // Calculate total record length
         let total_len = HEADER_SIZE + payload_len + CRC_SIZE;
+
+        // Validate record size to prevent OOM on corrupted length fields
+        if total_len > MAX_WAL_RECORD_SIZE {
+            self.finished = true;
+            return Err(CoreError::wal_corruption(format!(
+                "WAL record at offset {record_start_offset} claims size {} bytes which exceeds maximum allowed {} bytes (likely corruption)",
+                total_len,
+                MAX_WAL_RECORD_SIZE
+            )));
+        }
 
         // Check if we have the full record
         if !self.ensure_buffered(total_len)? {

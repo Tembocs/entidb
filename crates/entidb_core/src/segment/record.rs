@@ -68,6 +68,12 @@ impl SegmentRecord {
     /// CRC size.
     const CRC_SIZE: usize = 4;
 
+    /// Maximum payload size that can be safely encoded in a segment record.
+    ///
+    /// This is `u32::MAX - HEADER_SIZE - CRC_SIZE` to ensure the total record
+    /// length fits in a u32.
+    pub const MAX_PAYLOAD_SIZE: usize = (u32::MAX as usize) - Self::HEADER_SIZE - Self::CRC_SIZE;
+
     /// Creates a new put record.
     #[must_use]
     pub fn put(
@@ -108,11 +114,25 @@ impl SegmentRecord {
     }
 
     /// Encodes the record to bytes.
-    pub fn encode(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError::InvalidArgument` if the payload exceeds `MAX_PAYLOAD_SIZE`.
+    pub fn encode(&self) -> CoreResult<Vec<u8>> {
+        // Validate payload size to prevent u32 overflow
+        if self.payload.len() > Self::MAX_PAYLOAD_SIZE {
+            return Err(CoreError::invalid_argument(format!(
+                "segment record payload too large: {} bytes exceeds maximum {}",
+                self.payload.len(),
+                Self::MAX_PAYLOAD_SIZE
+            )));
+        }
+
         let record_len = Self::HEADER_SIZE + self.payload.len() + Self::CRC_SIZE;
         let mut buf = Vec::with_capacity(record_len);
 
-        // Record length (total including this field)
+        // Record length (total including this field) - safe cast after validation
+        #[allow(clippy::cast_possible_truncation)]
         buf.extend_from_slice(&(record_len as u32).to_le_bytes());
 
         // Collection ID
@@ -134,7 +154,7 @@ impl SegmentRecord {
         let crc = compute_crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
 
-        buf
+        Ok(buf)
     }
 
     /// Decodes a record from bytes.
@@ -244,7 +264,7 @@ mod tests {
             SequenceNumber::new(42),
         );
 
-        let encoded = record.encode();
+        let encoded = record.encode().unwrap();
         let decoded = SegmentRecord::decode(&encoded).unwrap();
 
         assert_eq!(record, decoded);
@@ -257,7 +277,7 @@ mod tests {
 
         assert!(record.is_tombstone());
 
-        let encoded = record.encode();
+        let encoded = record.encode().unwrap();
         let decoded = SegmentRecord::decode(&encoded).unwrap();
 
         assert_eq!(record, decoded);
@@ -273,7 +293,7 @@ mod tests {
             SequenceNumber::new(1),
         );
 
-        let mut encoded = record.encode();
+        let mut encoded = record.encode().unwrap();
         // Corrupt a byte
         encoded[10] ^= 0xFF;
 
@@ -290,6 +310,6 @@ mod tests {
             SequenceNumber::new(1),
         );
 
-        assert_eq!(record.encoded_size(), record.encode().len());
+        assert_eq!(record.encoded_size(), record.encode().unwrap().len());
     }
 }

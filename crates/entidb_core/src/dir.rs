@@ -185,7 +185,7 @@ impl DatabaseDir {
         let temp_path = self.path.join(MANIFEST_TEMP);
 
         // Write to temp file
-        let data = manifest.encode();
+        let data = manifest.encode()?;
         let mut file = File::create(&temp_path)?;
         file.write_all(&data)?;
         file.sync_all()?;

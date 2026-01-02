@@ -195,7 +195,7 @@ impl Compactor {
         // Serialize output
         let mut output = Vec::new();
         for record in &compacted {
-            output.extend(record.encode());
+            output.extend(record.encode()?);
         }
 
         Ok((output, stats))

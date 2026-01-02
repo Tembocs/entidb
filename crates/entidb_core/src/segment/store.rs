@@ -460,7 +460,7 @@ impl SegmentManager {
     ///
     /// Returns the (segment_id, offset) where the record was written.
     pub fn append(&self, record: &SegmentRecord) -> CoreResult<(u64, u64)> {
-        let encoded = record.encode();
+        let encoded = record.encode()?;
         let encoded_len = encoded.len();
 
         // Check if we need to seal and rotate
@@ -764,7 +764,7 @@ impl SegmentManager {
                 let backend_guard = Arc::new(RwLock::new(backend));
 
                 for record in &compacted_records {
-                    let encoded = record.encode();
+                    let encoded = record.encode()?;
                     total_size += encoded.len() as u64;
                     backend_guard.write().append(&encoded)?;
                 }
@@ -1185,7 +1185,11 @@ impl Iterator for SegmentRecordIterator {
                     // Read record length
                     let len_bytes = match backend.read_at(self.current_offset, 4) {
                         Ok(bytes) => bytes,
-                        Err(e) => return Some(Err(CoreError::Storage(e))),
+                        Err(e) => {
+                            // Mark exhausted to prevent infinite retry on I/O error
+                            self.exhausted = true;
+                            return Some(Err(CoreError::Storage(e)));
+                        }
                     };
 
                     let record_len = u32::from_le_bytes([
@@ -1203,16 +1207,31 @@ impl Iterator for SegmentRecordIterator {
                         // Read and decode the full record
                         let data = match backend.read_at(self.current_offset, record_len) {
                             Ok(bytes) => bytes,
-                            Err(e) => return Some(Err(CoreError::Storage(e))),
+                            Err(e) => {
+                                // Mark exhausted to prevent infinite retry on I/O error
+                                self.exhausted = true;
+                                return Some(Err(CoreError::Storage(e)));
+                            }
                         };
 
-                        let record = match SegmentRecord::decode(&data) {
-                            Ok(r) => r,
-                            Err(e) => return Some(Err(e)),
-                        };
-
-                        self.current_offset += record_len as u64;
-                        Some(record)
+                        match SegmentRecord::decode(&data) {
+                            Ok(r) => {
+                                self.current_offset += record_len as u64;
+                                Some(r)
+                            }
+                            Err(e) => {
+                                // Segment corruption detected - mark exhausted to prevent
+                                // infinite retry on the same corrupt record. Callers must
+                                // handle this as a fatal error for this iterator.
+                                self.exhausted = true;
+                                return Some(Err(CoreError::segment_corruption(format!(
+                                    "corrupt record in segment {} at offset {}: {}",
+                                    self.backends[self.current_segment].0,
+                                    self.current_offset,
+                                    e
+                                ))));
+                            }
+                        }
                     }
                 }
             };

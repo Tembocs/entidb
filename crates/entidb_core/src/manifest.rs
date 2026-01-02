@@ -109,8 +109,31 @@ impl Manifest {
         &self.indexes
     }
 
+    /// Maximum number of collections allowed in a manifest.
+    pub const MAX_COLLECTIONS: usize = u32::MAX as usize;
+
+    /// Maximum number of indexes allowed in a manifest.
+    pub const MAX_INDEXES: usize = u32::MAX as usize;
+
+    /// Maximum length of a collection name in bytes.
+    pub const MAX_COLLECTION_NAME_LEN: usize = u16::MAX as usize;
+
+    /// Maximum number of field path elements in an index.
+    pub const MAX_FIELD_PATH_LEN: usize = u16::MAX as usize;
+
+    /// Maximum length of a field name in bytes.
+    pub const MAX_FIELD_NAME_LEN: usize = u16::MAX as usize;
+
     /// Encodes the manifest to bytes (deterministic).
-    pub fn encode(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError::InvalidArgument` if any value exceeds encoding limits:
+    /// - More than `u32::MAX` collections or indexes
+    /// - Collection names longer than `u16::MAX` bytes
+    /// - Index field paths with more than `u16::MAX` elements
+    /// - Field names longer than `u16::MAX` bytes
+    pub fn encode(&self) -> CoreResult<Vec<u8>> {
         let mut buf = Vec::new();
 
         // Magic
@@ -126,14 +149,27 @@ impl Manifest {
         // Next collection ID
         buf.extend_from_slice(&self.next_collection_id.to_le_bytes());
 
-        // Collection count
-        let count = u32::try_from(self.collections.len()).unwrap_or(u32::MAX);
+        // Collection count (validated)
+        let count = u32::try_from(self.collections.len()).map_err(|_| {
+            CoreError::invalid_argument(format!(
+                "manifest has too many collections: {} exceeds maximum {}",
+                self.collections.len(),
+                Self::MAX_COLLECTIONS
+            ))
+        })?;
         buf.extend_from_slice(&count.to_le_bytes());
 
         // Collections (BTreeMap ensures deterministic order)
         for (name, &id) in &self.collections {
             let name_bytes = name.as_bytes();
-            let name_len = u16::try_from(name_bytes.len()).unwrap_or(u16::MAX);
+            let name_len = u16::try_from(name_bytes.len()).map_err(|_| {
+                CoreError::invalid_argument(format!(
+                    "collection name '{}' is too long: {} bytes exceeds maximum {}",
+                    name,
+                    name_bytes.len(),
+                    Self::MAX_COLLECTION_NAME_LEN
+                ))
+            })?;
             buf.extend_from_slice(&name_len.to_le_bytes());
             buf.extend_from_slice(name_bytes);
             buf.extend_from_slice(&id.to_le_bytes());
@@ -142,8 +178,14 @@ impl Manifest {
         // Next index ID
         buf.extend_from_slice(&self.next_index_id.to_le_bytes());
 
-        // Index count
-        let idx_count = u32::try_from(self.indexes.len()).unwrap_or(u32::MAX);
+        // Index count (validated)
+        let idx_count = u32::try_from(self.indexes.len()).map_err(|_| {
+            CoreError::invalid_argument(format!(
+                "manifest has too many indexes: {} exceeds maximum {}",
+                self.indexes.len(),
+                Self::MAX_INDEXES
+            ))
+        })?;
         buf.extend_from_slice(&idx_count.to_le_bytes());
 
         // Indexes (sorted by ID for determinism)
@@ -155,13 +197,28 @@ impl Manifest {
             buf.extend_from_slice(&def.id.to_le_bytes());
             // Collection ID (4 bytes)
             buf.extend_from_slice(&def.collection_id.as_u32().to_le_bytes());
-            // Field path count (2 bytes)
-            let path_count = u16::try_from(def.field_path.len()).unwrap_or(u16::MAX);
+            // Field path count (validated, 2 bytes)
+            let path_count = u16::try_from(def.field_path.len()).map_err(|_| {
+                CoreError::invalid_argument(format!(
+                    "index {} has too many field path elements: {} exceeds maximum {}",
+                    def.id,
+                    def.field_path.len(),
+                    Self::MAX_FIELD_PATH_LEN
+                ))
+            })?;
             buf.extend_from_slice(&path_count.to_le_bytes());
             // Field path elements
             for field in &def.field_path {
                 let field_bytes = field.as_bytes();
-                let field_len = u16::try_from(field_bytes.len()).unwrap_or(u16::MAX);
+                let field_len = u16::try_from(field_bytes.len()).map_err(|_| {
+                    CoreError::invalid_argument(format!(
+                        "index {} field name '{}' is too long: {} bytes exceeds maximum {}",
+                        def.id,
+                        field,
+                        field_bytes.len(),
+                        Self::MAX_FIELD_NAME_LEN
+                    ))
+                })?;
                 buf.extend_from_slice(&field_len.to_le_bytes());
                 buf.extend_from_slice(field_bytes);
             }
@@ -181,7 +238,7 @@ impl Manifest {
             buf.push(0);
         }
 
-        buf
+        Ok(buf)
     }
 
     /// Decodes a manifest from bytes.
@@ -465,7 +522,7 @@ mod tests {
         manifest.get_or_create_collection("products");
         manifest.last_checkpoint = Some(SequenceNumber::new(42));
 
-        let encoded = manifest.encode();
+        let encoded = manifest.encode().unwrap();
         let decoded = Manifest::decode(&encoded).unwrap();
 
         assert_eq!(decoded.format_version, manifest.format_version);
@@ -499,7 +556,7 @@ mod tests {
         };
         manifest.add_index(def2);
 
-        let encoded = manifest.encode();
+        let encoded = manifest.encode().unwrap();
         let decoded = Manifest::decode(&encoded).unwrap();
 
         assert_eq!(decoded.indexes.len(), 2);
@@ -514,7 +571,7 @@ mod tests {
     #[test]
     fn decode_empty_manifest() {
         let manifest = Manifest::default();
-        let encoded = manifest.encode();
+        let encoded = manifest.encode().unwrap();
         let decoded = Manifest::decode(&encoded).unwrap();
         assert!(decoded.collections.is_empty());
         assert!(decoded.last_checkpoint.is_none());
@@ -598,8 +655,8 @@ mod tests {
             created_at_seq: SequenceNumber::new(0),
         });
 
-        let enc1 = m1.encode();
-        let enc2 = m1.encode();
+        let enc1 = m1.encode().unwrap();
+        let enc2 = m1.encode().unwrap();
         assert_eq!(enc1, enc2, "same manifest should encode identically");
 
         // Test 2: Two manifests with identical logical state encode identically
@@ -654,8 +711,8 @@ mod tests {
         m4.next_index_id = 6;
         m4.last_checkpoint = Some(SequenceNumber::new(100));
 
-        let enc3 = m3.encode();
-        let enc4 = m4.encode();
+        let enc3 = m3.encode().unwrap();
+        let enc4 = m4.encode().unwrap();
         assert_eq!(
             enc3, enc4,
             "manifests with same logical state must produce identical bytes"
@@ -663,7 +720,7 @@ mod tests {
 
         // Test 3: Verify the encoding is stable across decode/re-encode
         let decoded = Manifest::decode(&enc3).unwrap();
-        let enc5 = decoded.encode();
+        let enc5 = decoded.encode().unwrap();
         assert_eq!(
             enc3, enc5,
             "decode then re-encode must produce identical bytes"
