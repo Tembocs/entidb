@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-alpha.3] - 2026-01-03
+
+### Changed
+
+- Rebuilt all native libraries with Rust 1.92.0
+- Improved compatibility with entidb_flutter plugin
+
+### Fixed
+
+- Minor stability improvements in FFI bindings
+
 ## [2.0.0-alpha.2] - 2025-12-25
 
 ### Changed

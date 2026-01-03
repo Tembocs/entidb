@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.0-alpha.3
+
+Fresh native library builds for all platforms.
+
+### Changed
+
+- Rebuilt all native libraries with Rust 1.92.0 (stable)
+- Windows: x86_64 (745 KB)
+- Linux: x86_64 (821 KB)
+- Android: arm64-v8a, armeabi-v7a, x86_64
+- macOS: Universal binary arm64 + x86_64 (1.5 MB)
+- iOS: XCFramework with device (arm64) and simulator (arm64 + x86_64)
+
+### Fixed
+
+- Cleaned up iOS XCFramework structure
+- Ensured all libraries are fresh builds
+
+---
+
 ## 2.0.0-alpha.2
 
 Full platform support release.
